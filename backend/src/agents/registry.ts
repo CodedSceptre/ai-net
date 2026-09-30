@@ -19,6 +19,16 @@ export interface AgentRegistryConfig {
 
 }
 
+/**
+ * Agent startup and registration manager.
+ *
+ * Instantiates all built-in agents (Research, Risk, Coding, Design, Report)
+ * and handles their self-registration and heartbeat lifecycle on startup.
+ *
+ * This class is distinct from the {@link AgentRegistry} interface in
+ * `types/agent.ts`, which is the look-up interface used by the coordinator
+ * to resolve agents by type.
+ */
 export class AgentStartupRegistry {
   private readonly agents: Array<{
     instance: any;
@@ -28,7 +38,15 @@ export class AgentStartupRegistry {
   constructor(private config: AgentRegistryConfig = {}) {}
 
   /**
-   * Initialize all agents and optionally register them.
+   * Instantiates all built-in agents and optionally registers each one with
+   * the backend API and starts their heartbeat loops.
+   *
+   * When `config.autoRegister` is `true` (the default), every agent calls its
+   * own `register()` and `startHeartbeat()` methods. Registration failures for
+   * individual agents are logged but do not abort the overall startup.
+   *
+   * @returns A promise that resolves once all registration attempts have
+   *   settled (regardless of individual outcomes).
    */
   async initialize(): Promise<void> {
     const apiBaseUrl = this.config.apiBaseUrl ?? 'http://127.0.0.1:3001';
@@ -67,7 +85,13 @@ export class AgentStartupRegistry {
   }
 
   /**
-   * Stop heartbeats for all agents.
+   * Stops the heartbeat loop for every registered agent.
+   *
+   * Errors thrown by individual agents' `stopHeartbeat()` methods are
+   * silently swallowed to ensure all agents receive the shutdown signal.
+   *
+   * @returns A promise that resolves once all stop-heartbeat calls have
+   *   settled.
    */
   async shutdown(): Promise<void> {
     for (const { instance } of this.agents) {
@@ -80,7 +104,10 @@ export class AgentStartupRegistry {
   }
 
   /**
-   * Get all registered agents.
+   * Returns a snapshot of all agents currently managed by this registry.
+   *
+   * @returns Array of objects containing each agent's `capability` string,
+   *   its resolved `agentId`, and the underlying `instance`.
    */
   getAgents() {
     return this.agents.map(({ instance, capability }) => ({
@@ -91,7 +118,11 @@ export class AgentStartupRegistry {
   }
 
   /**
-   * Get agent by capability.
+   * Looks up the agent instance that handles a specific capability.
+   *
+   * @param capability - Capability string to search for (e.g. `"research"`, `"coding"`).
+   * @returns The matching agent instance, or `undefined` if no agent with
+   *   that capability has been registered.
    */
   getAgentByCapability(capability: string) {
     const agent = this.agents.find(a => a.capability === capability);
@@ -99,7 +130,13 @@ export class AgentStartupRegistry {
   }
 
   /**
-   * Perform health checks on all agents.
+   * Performs a health check against every registered agent.
+   *
+   * If an agent exposes a `healthCheck()` method, it is awaited and its
+   * boolean result is recorded. Agents without a health-check method are
+   * assumed healthy (`true`). Exceptions are caught and recorded as `false`.
+   *
+   * @returns A promise resolving to a map of `capability → healthy` booleans.
    */
   async healthCheck(): Promise<Record<string, boolean>> {
     const results: Record<string, boolean> = {};
@@ -125,7 +162,14 @@ export class AgentStartupRegistry {
 export const globalAgentRegistry = new AgentStartupRegistry();
 
 /**
- * Initialize all agents - call this on app startup.
+ * Convenience function to initialise all agents at application startup.
+ *
+ * If a custom `config` is supplied, a fresh {@link AgentStartupRegistry} is
+ * created for it; otherwise the module-level singleton
+ * (`globalAgentRegistry`) is used.
+ *
+ * @param config - Optional configuration overrides for the registry.
+ * @returns A promise that resolves once agent initialisation is complete.
  */
 export async function initializeAgents(config?: AgentRegistryConfig): Promise<void> {
   const registry = config ? new AgentStartupRegistry(config) : globalAgentRegistry;

@@ -21,6 +21,14 @@ export interface AgentRegistryResult {
  * background poll and window focus listener. `loading` is only true on the first
  * load — subsequent refreshes (auto or manual) update `agents` in place so the
  * table never remounts and the skeleton never flashes.
+ *
+ * @param options - Optional configuration for the hook.
+ * @param options.refreshInterval - Milliseconds between background polls (default 30 000 ms).
+ * @returns An object containing:
+ *   - `agents` — normalized array of {@link AgentRecord} from the registry.
+ *   - `loading` — `true` only on the initial load.
+ *   - `error` — error message, or `null` when no error has occurred.
+ *   - `refetch` — imperative callback to trigger an immediate refresh.
  */
 export function useAgentRegistry(options: AgentRegistryOptions = {}): AgentRegistryResult {
   const refreshInterval = options.refreshInterval ?? REFRESH_INTERVAL

@@ -13,7 +13,8 @@
     "test": "npm --prefix backend test && npm --prefix frontend test",
     "test:coverage": "npm --prefix backend run test:coverage && npm --prefix frontend run test:coverage",
     "test:e2e": "jest --config tests/e2e/jest.config.js --runInBand",
-    "test:e2e:coverage": "jest --config tests/e2e/jest.config.js --runInBand --coverage"
+    "test:e2e:coverage": "jest --config tests/e2e/jest.config.js --runInBand --coverage",
+    "docs:generate": "npm --prefix backend run docs:generate && npm --prefix frontend run docs:generate"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "12.3.0",

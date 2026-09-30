@@ -12,7 +12,8 @@
     "test:e2e": "jest --config ../tests/e2e/jest.config.js --runInBand --forceExit",
     "db:migrate": "ts-node src/db/cli.ts migrate",
     "db:rollback": "ts-node src/db/cli.ts rollback",
-    "db:seed": "ts-node src/db/cli.ts seed"
+    "db:seed": "ts-node src/db/cli.ts seed",
+    "docs:generate": "typedoc --options typedoc.json"
   },
   "license": "MIT",
   "dependencies": {
@@ -48,7 +49,8 @@
     "supertest": "^7.0.0",
     "ts-jest": "29.1.4",
     "ts-node": "10.9.2",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "typedoc": "0.27.9"
   },
   "allowScripts": {
     "better-sqlite3@11.10.0": true
