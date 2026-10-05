@@ -88,7 +88,7 @@ jobs:
 
       - name: Upload backend unit test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-backend-unit-${{ github.run_id }}-${{ github.run_attempt }}
           path: backend/test-results-unit.json
@@ -139,7 +139,7 @@ jobs:
 
       - name: Upload frontend unit test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-frontend-unit-${{ github.run_id }}-${{ github.run_attempt }}
           path: frontend/test-results-unit.json
@@ -169,7 +169,7 @@ jobs:
         working-directory: frontend
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install dependencies
         run: npm ci
@@ -181,7 +181,7 @@ jobs:
 
       - name: Upload accessibility HTML report
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-accessibility-report
           path: frontend/playwright-report/
@@ -624,10 +624,10 @@ jobs:
       issues: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -657,7 +657,7 @@ jobs:
 
       - name: Upload flaky test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: flaky-test-reports-${{ github.run_id }}
           path: |
@@ -668,7 +668,7 @@ jobs:
 
       - name: Auto-create issue for newly detected flaky tests
         if: steps.flaky_backend.outcome == 'failure' || steps.flaky_frontend.outcome == 'failure'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
