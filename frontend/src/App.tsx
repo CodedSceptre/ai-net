@@ -1,6 +1,7 @@
 import React, { Suspense, lazy } from 'react'
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import { I18nextProvider } from 'react-i18next'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import i18n from './i18n'
 import { WalletProvider } from './context/WalletContext'
 import { ToastProvider } from './context/ToastContext'
@@ -11,9 +12,31 @@ import LandingPage from './pages/LandingPage'
 import ErrorBoundary from './components/common/ErrorBoundary'
 import { ProtectedRoute } from './components/auth/ProtectedRoute'
 import { CommandPalette } from './components/common/CommandPalette'
+import RouteLoader from './components/common/RouteLoader'
 import { useCommandPalette } from './hooks/useCommandPalette'
 import OnboardingModal from './components/onboarding/OnboardingModal'
 import './components/common/Toast.css'
+const PaymentsPage = lazy(() => import('./pages/PaymentsPage'))
+const DashboardPage = lazy(() =>
+  import('./pages/dashboard').then((module) => ({ default: module.DashboardPage })),
+)
+const WalletPage = lazy(() => import('./pages/WalletPage'))
+const AgentsPage = lazy(() => import('./pages/AgentsPage'))
+const NewTaskPage = lazy(() => import('./pages/tasks/NewTaskPage'))
+const TaskHistoryPage = lazy(() => import('./pages/tasks/TaskHistoryPage'))
+const TaskDetailPage = lazy(() => import('./pages/TaskDetailPage'))
+const RendererDemoPage = lazy(() => import('./pages/RendererDemoPage'))
+
+const RouteLoadingFallback = () => <RouteLoader />
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: true,
+      retry: 1,
+    },
+  },
+})
 
 // Lazy-loaded page components
 const AgentDetailPage = lazy(() => import('./pages/AgentDetailPage'))
@@ -47,6 +70,14 @@ const RoutedContent: React.FC = () => {
                     element={
                       <ProtectedRoute>
                         <WalletPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/payments"
+                    element={
+                      <ProtectedRoute>
+                        <PaymentsPage />
                       </ProtectedRoute>
                     }
                   />
@@ -117,15 +148,17 @@ const App: React.FC = () => {
   return (
     <I18nextProvider i18n={i18n}>
       <ErrorBoundary>
-        <ThemeProvider>
-          <WalletProvider>
-            <ToastProvider>
-              <Router>
-                <RoutedContent />
-              </Router>
-            </ToastProvider>
-          </WalletProvider>
-        </ThemeProvider>
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider>
+            <WalletProvider>
+              <ToastProvider>
+                <Router>
+                  <RoutedContent />
+                </Router>
+              </ToastProvider>
+            </WalletProvider>
+          </ThemeProvider>
+        </QueryClientProvider>
       </ErrorBoundary>
     </I18nextProvider>
   )
