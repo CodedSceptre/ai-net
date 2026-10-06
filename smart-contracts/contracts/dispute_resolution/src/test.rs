@@ -1,11 +1,9 @@
-//! # Dispute Resolution Unit Tests
-
-extern crate std;
+#![cfg(test)]
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Events as _},
-    Address, BytesN, Env, Symbol, Vec,
+    testutils::{Address as _, Ledger},
+    BytesN, Env, String,
 };
 
 // Timestamp constants for deadline arithmetic:
@@ -23,19 +21,17 @@ const APPEAL_DEADLINE: u64 = 604_800;
 fn setup() -> (Env, DisputeResolutionContractClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
-    let id = env.register(DisputeResolutionContract, ());
+    let id = env.register_contract(None, DisputeResolutionContract);
     let client = DisputeResolutionContractClient::new(&env, &id);
     (env, client)
 }
 
-fn setup_with_admin() -> (Env, DisputeResolutionContractClient<'static>, Address) {
-    let env = Env::default();
-    env.mock_all_auths();
-    let id = env.register(DisputeResolutionContract, ());
-    let client = DisputeResolutionContractClient::new(&env, &id);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-    (env, client, admin)
+fn five_arbiters(env: &Env) -> Vec<Address> {
+    let mut v = Vec::new(env);
+    for _ in 0..5 {
+        v.push_back(Address::generate(env));
+    }
+    v
 }
 
 fn setup_with_jurors(
@@ -88,42 +84,47 @@ fn set_timestamp(env: &Env, ts: u64) {
 // ────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn initialize_sets_admin() {
+fn test_initialize_ok() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
-    assert!(env.storage().instance().has(&DataKey::Admin));
 }
 
 #[test]
-fn file_dispute_success() {
-    let (env, client, _admin, _jurors) = setup_with_jurors();
-    let filer = Address::generate(&env);
-    let dispute_id = Symbol::new(&env, "disp1");
-
-    client.file_dispute(&filer, &Symbol::new(&env, "agent1"), &dispute_id);
-    let dispute = client.get_dispute(&dispute_id);
-    assert!(dispute.is_some());
-    let dispute = dispute.unwrap();
-    assert_eq!(dispute.status, DisputeStatus::Filed);
-    assert_eq!(dispute.agent_id, Symbol::new(&env, "agent1"));
-}
-
-#[test]
-fn file_dispute_no_jurors_fails() {
+fn test_initialize_twice_fails() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
-    let filer = Address::generate(&env);
+    assert!(client.try_initialize(&admin).is_err());
+}
 
-    assert_eq!(
-        client.try_file_dispute(
-            &filer,
-            &Symbol::new(&env, "agent1"),
-            &Symbol::new(&env, "disp_bad")
-        ),
-        Err(Ok(Error::NoJurorsAvailable))
+// ─── raise_dispute ────────────────────────────────────────────────────────────
+
+#[test]
+fn test_raise_dispute_returns_id() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_arbiters(&five_arbiters(&env));
+
+    let submitter = Address::generate(&env);
+    let now = 1_000_000u64;
+    env.ledger().set_timestamp(now);
+    fund_task(
+        &env,
+        &client,
+        &submitter,
+        &symbol_short!("task1"),
+        now,
     );
+
+    let id = client.raise_dispute(
+        &submitter,
+        &symbol_short!("task1"),
+        &zero_hash(&env),
+        &String::from_str(&env, "not delivered"),
+    );
+    assert_eq!(id, 1u64);
 }
 
 #[test]
@@ -136,113 +137,275 @@ fn submit_evidence_success() {
     let hash = make_hash(&env, 42);
     client.submit_evidence(&dispute_id, &filer, &hash);
 
-    assert_eq!(client.get_evidence_count(&dispute_id), 1);
-}
-
-#[test]
-fn cast_vote_success() {
-    let (env, client, _admin, jurors) = setup_with_jurors();
-    let filer = Address::generate(&env);
-    let dispute_id = Symbol::new(&env, "disp1");
-    client.file_dispute(&filer, &Symbol::new(&env, "agent1"), &dispute_id);
-
-    let juror = jurors.get(0).unwrap();
-    client.cast_vote(&dispute_id, &juror, &VoteSide::Client);
-
-    let dispute = client.get_dispute(&dispute_id).unwrap();
-    assert_eq!(dispute.status, DisputeStatus::Voting);
-}
-
-#[test]
-fn cast_vote_non_juror_fails() {
-    let (env, client, _admin, _jurors) = setup_with_jurors();
-    let filer = Address::generate(&env);
-    let dispute_id = Symbol::new(&env, "disp1");
-    client.file_dispute(&filer, &Symbol::new(&env, "agent1"), &dispute_id);
-
-    let outsider = Address::generate(&env);
-    assert_eq!(
-        client.try_cast_vote(&dispute_id, &outsider, &VoteSide::Client),
-        Err(Ok(Error::NotJuror))
+    let result = client.try_raise_dispute(
+        &submitter,
+        &symbol_short!("task1"),
+        &zero_hash(&env),
+        &String::from_str(&env, "late"),
     );
+    assert!(result.is_err());
 }
 
 #[test]
-fn cast_vote_duplicate_fails() {
-    let (env, client, _admin, jurors) = setup_with_jurors();
-    let filer = Address::generate(&env);
-    let dispute_id = Symbol::new(&env, "disp1");
-    client.file_dispute(&filer, &Symbol::new(&env, "agent1"), &dispute_id);
+fn test_raise_dispute_no_arbiters_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    // no arbiters set
 
-    let juror = jurors.get(0).unwrap();
-    client.cast_vote(&dispute_id, &juror, &VoteSide::Client);
-
-    assert_eq!(
-        client.try_cast_vote(&dispute_id, &juror, &VoteSide::Agent),
-        Err(Ok(Error::JurorAlreadyVoted))
+    let now = 1_000_000u64;
+    env.ledger().set_timestamp(now);
+    let submitter = Address::generate(&env);
+    fund_task(
+        &env,
+        &client,
+        &submitter,
+        &symbol_short!("task1"),
+        now,
     );
+
+    let result = client.try_raise_dispute(
+        &submitter,
+        &symbol_short!("task1"),
+        &zero_hash(&env),
+        &String::from_str(&env, "reason"),
+    );
+    assert!(result.is_err());
 }
 
 #[test]
-fn resolve_dispute_after_voting() {
-    let (env, client, _admin, jurors) = setup_with_jurors();
-    env.ledger().set_max_entry_ttl(100_000_000);
+fn test_undisputed_escrow_releases_to_agent_after_raise_window() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let submitter = Address::generate(&env);
+    let completed_at = 1_000_000u64;
+    env.ledger().set_timestamp(completed_at);
+    let (asset, agent) = fund_task(
+        &env,
+        &client,
+        &submitter,
+        &symbol_short!("ordinary"),
+        completed_at,
+    );
 
-    let filer = Address::generate(&env);
-    let dispute_id = Symbol::new(&env, "disp1");
-    client.file_dispute(&filer, &Symbol::new(&env, "agent1"), &dispute_id);
+    assert!(client
+        .try_settle_undisputed_task(&symbol_short!("ordinary"))
+        .is_err());
+    env.ledger()
+        .set_timestamp(completed_at + RAISE_WINDOW_SECS);
+    client.settle_undisputed_task(&symbol_short!("ordinary"));
 
-    // Cast votes: 3 for client, 2 for agent
-    client.cast_vote(&dispute_id, &jurors.get(0).unwrap(), &VoteSide::Client);
-    client.cast_vote(&dispute_id, &jurors.get(1).unwrap(), &VoteSide::Client);
-    client.cast_vote(&dispute_id, &jurors.get(2).unwrap(), &VoteSide::Client);
-    client.cast_vote(&dispute_id, &jurors.get(3).unwrap(), &VoteSide::Agent);
-    client.cast_vote(&dispute_id, &jurors.get(4).unwrap(), &VoteSide::Agent);
+    let token = token::Client::new(&env, &asset);
+    assert_eq!(token.balance(&agent), 10_000_000);
+    assert!(client
+        .try_settle_undisputed_task(&symbol_short!("ordinary"))
+        .is_err());
+}
+
+// ─── vote_on_dispute ──────────────────────────────────────────────────────────
+
+#[test]
+fn test_arbiter_votes_recorded() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let arbiters = five_arbiters(&env);
+    client.set_arbiters(&arbiters);
+
+    let now = 1_000_000u64;
+    env.ledger().set_timestamp(now);
+    let submitter = Address::generate(&env);
+    fund_task(&env, &client, &submitter, &symbol_short!("t1"), now);
+
+    let id = client.raise_dispute(
+        &submitter,
+        &symbol_short!("t1"),
+        &zero_hash(&env),
+        &String::from_str(&env, "reason"),
+    );
+
+    client.vote_on_dispute(&arbiters.get(0).unwrap(), &id, &Vote::Approve);
+    client.vote_on_dispute(&arbiters.get(1).unwrap(), &id, &Vote::Approve);
+    client.vote_on_dispute(&arbiters.get(2).unwrap(), &id, &Vote::Reject);
+
+    let rec = client.get_dispute(&id).unwrap();
+    assert_eq!(rec.approve_votes, 2);
+    assert_eq!(rec.reject_votes, 1);
+}
+
+#[test]
+fn test_non_arbiter_cannot_vote() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_arbiters(&five_arbiters(&env));
+
+    let now = 1_000_000u64;
+    env.ledger().set_timestamp(now);
+    let submitter = Address::generate(&env);
+    fund_task(&env, &client, &submitter, &symbol_short!("t1"), now);
+    let id = client.raise_dispute(
+        &submitter,
+        &symbol_short!("t1"),
+        &zero_hash(&env),
+        &String::from_str(&env, "reason"),
+    );
+
+    let stranger = Address::generate(&env);
+    assert!(client.try_vote_on_dispute(&stranger, &id, &Vote::Approve).is_err());
+}
 
     // Advance timestamp past voting deadline
     set_timestamp(&env, VOTING_DEADLINE + 1);
 
-    client.resolve_dispute(&dispute_id);
-
-    let dispute = client.get_dispute(&dispute_id).unwrap();
-    assert_eq!(dispute.status, DisputeStatus::Resolved);
-    assert_eq!(dispute.resolution, Some(0)); // Client wins
+    client.vote_on_dispute(&arbiters.get(0).unwrap(), &id, &Vote::Approve);
+    assert!(client.try_vote_on_dispute(&arbiters.get(0).unwrap(), &id, &Vote::Reject).is_err());
 }
 
 #[test]
-fn appeal_dispute_success() {
-    let (env, client, _admin, jurors) = setup_with_jurors();
-    env.ledger().set_max_entry_ttl(100_000_000);
+fn test_task_cannot_be_disputed_twice() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_arbiters(&five_arbiters(&env));
 
-    let filer = Address::generate(&env);
-    let dispute_id = Symbol::new(&env, "disp1");
-    client.file_dispute(&filer, &Symbol::new(&env, "agent1"), &dispute_id);
+    let completed_at = 1_000_000u64;
+    env.ledger().set_timestamp(completed_at);
+    let submitter = Address::generate(&env);
+    fund_task(&env, &client, &submitter, &symbol_short!("onecase"), completed_at);
+    client.raise_dispute(
+        &submitter,
+        &symbol_short!("onecase"),
+        &zero_hash(&env),
+        &String::from_str(&env, "reason"),
+    );
+    assert!(client
+        .try_raise_dispute(
+            &submitter,
+            &symbol_short!("onecase"),
+            &zero_hash(&env),
+            &String::from_str(&env, "second dispute"),
+        )
+        .is_err());
+}
 
-    client.cast_vote(&dispute_id, &jurors.get(0).unwrap(), &VoteSide::Agent);
+#[test]
+fn test_cannot_vote_after_deadline() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let arbiters = five_arbiters(&env);
+    client.set_arbiters(&arbiters);
+
+    let start = 1_000_000u64;
+    env.ledger().set_timestamp(start);
+    let submitter = Address::generate(&env);
+    fund_task(&env, &client, &submitter, &symbol_short!("t1"), start);
+    let id = client.raise_dispute(
+        &submitter,
+        &symbol_short!("t1"),
+        &zero_hash(&env),
+        &String::from_str(&env, "reason"),
+    );
+
+    // Advance past 72-hour voting deadline
+    env.ledger().set_timestamp(start + VOTING_PERIOD_SECS + 1);
+    assert!(client.try_vote_on_dispute(&arbiters.get(0).unwrap(), &id, &Vote::Approve).is_err());
+}
+
+// ─── resolve_dispute ──────────────────────────────────────────────────────────
 
     // Advance past voting deadline
     set_timestamp(&env, VOTING_DEADLINE + 1);
 
-    client.resolve_dispute(&dispute_id);
+    // 3 approve, 2 reject
+    client.vote_on_dispute(&arbiters.get(0).unwrap(), &id, &Vote::Approve);
+    client.vote_on_dispute(&arbiters.get(1).unwrap(), &id, &Vote::Approve);
+    client.vote_on_dispute(&arbiters.get(2).unwrap(), &id, &Vote::Approve);
+    client.vote_on_dispute(&arbiters.get(3).unwrap(), &id, &Vote::Reject);
+    client.vote_on_dispute(&arbiters.get(4).unwrap(), &id, &Vote::Reject);
 
-    let appellant = Address::generate(&env);
-    client.appeal_dispute(&dispute_id, &appellant);
+    env.ledger().set_timestamp(start + VOTING_PERIOD_SECS + 1);
+    let resolution = client.resolve_dispute(&id);
+    assert_eq!(resolution, Resolution::Approve);
 
-    let dispute = client.get_dispute(&dispute_id).unwrap();
-    assert_eq!(dispute.status, DisputeStatus::Appealed);
-    assert!(dispute.appealed);
+    let rec = client.get_dispute(&id).unwrap();
+    assert_eq!(rec.status, DisputeStatus::Resolved);
+    assert_eq!(rec.resolution, Some(Resolution::Approve));
+    let token = token::Client::new(&env, &asset);
+    assert_eq!(token.balance(&agent), 10_000_000);
 }
 
 #[test]
-fn appeal_after_window_fails() {
-    let (env, client, _admin, jurors) = setup_with_jurors();
-    env.ledger().set_max_entry_ttl(100_000_000);
+fn test_resolve_reject_below_threshold() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let arbiters = five_arbiters(&env);
+    client.set_arbiters(&arbiters);
 
-    let filer = Address::generate(&env);
-    let dispute_id = Symbol::new(&env, "disp1");
-    client.file_dispute(&filer, &Symbol::new(&env, "agent1"), &dispute_id);
+    let start = 1_000_000u64;
+    env.ledger().set_timestamp(start);
+    let submitter = Address::generate(&env);
+    let (asset, _) = fund_task(&env, &client, &submitter, &symbol_short!("t1"), start);
+    let id = client.raise_dispute(
+        &submitter,
+        &symbol_short!("t1"),
+        &zero_hash(&env),
+        &String::from_str(&env, "reason"),
+    );
 
-    client.cast_vote(&dispute_id, &jurors.get(0).unwrap(), &VoteSide::Agent);
+    // Only 2 approve votes — below 3-of-5 threshold
+    client.vote_on_dispute(&arbiters.get(0).unwrap(), &id, &Vote::Approve);
+    client.vote_on_dispute(&arbiters.get(1).unwrap(), &id, &Vote::Approve);
+
+    env.ledger().set_timestamp(start + VOTING_PERIOD_SECS + 1);
+    let resolution = client.resolve_dispute(&id);
+    assert_eq!(resolution, Resolution::Reject);
+    let token = token::Client::new(&env, &asset);
+    assert_eq!(token.balance(&submitter), 20_000_000);
+}
+
+#[test]
+fn test_resolve_before_deadline_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_arbiters(&five_arbiters(&env));
+
+    let now = 1_000_000u64;
+    env.ledger().set_timestamp(now);
+    let submitter = Address::generate(&env);
+    fund_task(&env, &client, &submitter, &symbol_short!("t1"), now);
+    let id = client.raise_dispute(
+        &submitter,
+        &symbol_short!("t1"),
+        &zero_hash(&env),
+        &String::from_str(&env, "reason"),
+    );
+
+    // Still within voting period
+    assert!(client.try_resolve_dispute(&id).is_err());
+}
+
+#[test]
+fn test_resolve_twice_fails() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_arbiters(&five_arbiters(&env));
+
+    let start = 1_000_000u64;
+    env.ledger().set_timestamp(start);
+    let submitter = Address::generate(&env);
+    fund_task(&env, &client, &submitter, &symbol_short!("t1"), start);
+    let id = client.raise_dispute(
+        &submitter,
+        &symbol_short!("t1"),
+        &zero_hash(&env),
+        &String::from_str(&env, "reason"),
+    );
 
     // Advance past voting deadline to resolve
     set_timestamp(&env, VOTING_DEADLINE + 1);
@@ -258,20 +421,18 @@ fn appeal_after_window_fails() {
     );
 }
 
-#[test]
-fn pause_blocks_filing() {
-    let (env, client, _admin) = setup_with_admin();
-    client.pause(&true);
+// ─── is_arbiter helper ────────────────────────────────────────────────────────
 
-    let filer = Address::generate(&env);
-    assert_eq!(
-        client.try_file_dispute(
-            &filer,
-            &Symbol::new(&env, "agent1"),
-            &Symbol::new(&env, "disp_pause")
-        ),
-        Err(Ok(Error::ContractPaused))
-    );
+#[test]
+fn test_is_arbiter() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    let arbiters = five_arbiters(&env);
+    client.set_arbiters(&arbiters);
+
+    assert!(client.is_arbiter(&arbiters.get(0).unwrap()));
+    assert!(!client.is_arbiter(&Address::generate(&env)));
 }
 
 // ────────────────────────────────────────────────────────────────────────────
