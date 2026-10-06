@@ -8,8 +8,8 @@
   gap: 12px;
   padding: 20px;
   border-radius: var(--radius-xl, 16px);
-  border: 1px solid var(--border-color, #e2e8f0);
-  background: var(--surface-glass-subtle, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border-color, var(--border-strong));
+  background: var(--surface-glass-subtle, color-mix(in srgb, var(--text-primary) 3%, transparent));
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
   min-width: 0;
   overflow: hidden;
@@ -33,12 +33,12 @@
   width: 40px;
   height: 40px;
   border-radius: var(--radius-lg, 10px);
-  border: 1px solid var(--border-color, #e2e8f0);
-  background: var(--surface-glass-subtle, rgba(148, 163, 184, 0.08));
+  border: 1px solid var(--border-color, var(--border-strong));
+  background: var(--surface-glass-subtle, color-mix(in srgb, var(--text-muted) 8%, transparent));
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--accent, #3b82f6);
+  color: var(--accent, var(--accent-info));
 }
 
 .nameBlock {
@@ -120,9 +120,9 @@
 
 /* research = blue */
 .pill--blue {
-  background: rgba(96, 165, 250, 0.15);
-  color: #60a5fa;
-  border-color: rgba(96, 165, 250, 0.3);
+  background: color-mix(in srgb, var(--accent-info) 15%, transparent);
+  color: var(--accent-info);
+  border-color: color-mix(in srgb, var(--accent-info) 30%, transparent);
 }
 
 /* risk / audit = orange */
@@ -134,23 +134,23 @@
 
 /* coding = green */
 .pill--green {
-  background: rgba(52, 211, 153, 0.15);
-  color: #10b981;
-  border-color: rgba(52, 211, 153, 0.3);
+  background: color-mix(in srgb, var(--status-success) 15%, transparent);
+  color: var(--status-success-text);
+  border-color: color-mix(in srgb, var(--status-success) 30%, transparent);
 }
 
 /* design = purple */
 .pill--purple {
-  background: rgba(192, 132, 252, 0.15);
-  color: #a78bfa;
-  border-color: rgba(192, 132, 252, 0.3);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent-text);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 /* report = red */
 .pill--red {
-  background: rgba(248, 113, 113, 0.15);
-  color: #f87171;
-  border-color: rgba(248, 113, 113, 0.3);
+  background: color-mix(in srgb, var(--status-danger) 15%, transparent);
+  color: var(--status-danger-text);
+  border-color: color-mix(in srgb, var(--status-danger) 30%, transparent);
 }
 
 /* yellow kept for legacy compatibility */
@@ -161,14 +161,14 @@
 }
 
 .pill--default {
-  background: rgba(148, 163, 184, 0.12);
-  color: var(--text-muted, #64748b);
-  border-color: rgba(148, 163, 184, 0.2);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  color: var(--text-muted, var(--text-secondary));
+  border-color: color-mix(in srgb, var(--text-muted) 20%, transparent);
 }
 
 .noCaps {
   font-size: 0.8rem;
-  color: var(--text-muted, #64748b);
+  color: var(--text-muted, var(--text-secondary));
   font-style: italic;
 }
 
@@ -220,18 +220,18 @@
 }
 
 .starFilled {
-  color: #f59e0b;
-  fill: #f59e0b;
+  color: var(--status-warning-text);
+  fill: var(--status-warning-text);
 }
 
 .starEmpty {
-  color: var(--border-color, #e2e8f0);
+  color: var(--border-color, var(--text-muted));
   fill: none;
 }
 
 .reputationValue {
   font-size: 0.78rem;
-  color: var(--text-muted, #64748b);
+  color: var(--text-muted, var(--text-secondary));
   margin-left: 4px;
   font-variant-numeric: tabular-nums;
 }
@@ -242,8 +242,8 @@
   padding: 10px;
   border-radius: var(--radius-lg, 10px);
   border: none;
-  background: var(--accent, #3b82f6);
-  color: #fff;
+  background: var(--accent, var(--accent-info));
+  color: var(--text-inverse);
   font-size: 0.9rem;
   font-weight: 700;
   cursor: pointer;

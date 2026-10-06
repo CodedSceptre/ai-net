@@ -79,7 +79,7 @@ const Navbar: React.FC = () => {
 
   return (
     <>
-      <header className="sticky top-0 z-40 flex items-center justify-between px-4 sm:px-8 h-[60px] bg-background-primary/75 backdrop-blur-2xl border-b border-border-subtle/80 shadow-[0_1px_0_rgba(255,255,255,0.02)]">
+      <header className="sticky top-0 z-40 flex items-center justify-between px-4 sm:px-8 h-[60px] bg-background-primary/75 backdrop-blur-2xl border-b border-border-subtle/80">
         {/* Left: Hamburger + Logo + Marketing Links */}
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-1.5">
@@ -292,7 +292,7 @@ const Navbar: React.FC = () => {
               transition={{ type: 'spring', damping: 30, stiffness: 320 }}
             >
               <div className="flex items-center gap-2.5 px-3 pb-4 mb-3 border-b border-border-subtle/60">
-                <div className="w-[26px] h-[26px] rounded-[6px] bg-gradient-primary flex items-center justify-center font-bold text-white text-[13px] shadow-info-glow">
+                <div className="w-[26px] h-[26px] rounded-[6px] bg-gradient-primary flex items-center justify-center font-bold text-inverse text-[13px] shadow-info-glow">
                   a
                 </div>
                 <div className="flex flex-col">

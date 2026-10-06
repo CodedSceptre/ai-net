@@ -1,11 +1,12 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useContext, useMemo, useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { oneLight, vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { ResearchReportResult } from '../../types/agent';
 import { getMarkdown } from '../../utils/agentUtils';
+import ThemeContext from '../../context/ThemeContext';
 import CopyButton from '../common/CopyButton';
 import CollapsibleSection from '../common/CollapsibleSection';
 
@@ -22,6 +23,7 @@ interface Heading {
 
 const ResearchReportRenderer: React.FC<Props> = ({ result }) => {
   const { t } = useTranslation();
+  const { effectiveTheme } = useContext(ThemeContext);
   const markdown = getMarkdown(result);
   const [headings, setHeadings] = useState<Heading[]>([]);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -113,7 +115,7 @@ const ResearchReportRenderer: React.FC<Props> = ({ result }) => {
       id="research-markdown"
       data-testid="research-markdown"
       style={{
-        color: 'var(--surface-primary)',
+        color: 'var(--text-primary)',
         lineHeight: '1.7',
         fontSize: '1rem',
       }}
@@ -132,8 +134,8 @@ const ResearchReportRenderer: React.FC<Props> = ({ result }) => {
                     margin: '16px 0',
                     borderRadius: '8px',
                     overflow: 'hidden',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                    backgroundColor: '#1e1e1e',
+                    border: '1px solid var(--border-muted)',
+                    backgroundColor: 'var(--surface-primary)',
                   }}
                   data-testid="code-block"
                 >
@@ -143,18 +145,18 @@ const ResearchReportRenderer: React.FC<Props> = ({ result }) => {
                       justifyContent: 'space-between',
                       alignItems: 'center',
                       padding: '6px 12px',
-                      background: 'rgba(255, 255, 255, 0.04)',
-                      borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+                      background: 'var(--surface-hover-subtle)',
+                      borderBottom: '1px solid var(--border-muted)',
                     }}
                   >
-                    <span style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: '#94a3b8' }}>
+                    <span style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text-muted)' }}>
                       {match[1]}
                     </span>
                     <CopyButton text={codeString} label="Copy" />
                   </div>
                   <SyntaxHighlighter
                     language={match[1]}
-                    style={vscDarkPlus}
+                    style={effectiveTheme === 'dark' ? vscDarkPlus : oneLight}
                     customStyle={{ margin: 0, padding: '16px', fontSize: '0.85rem' }}
                   >
                     {codeString}
@@ -166,7 +168,7 @@ const ResearchReportRenderer: React.FC<Props> = ({ result }) => {
               <code
                 className={className}
                 style={{
-                  background: 'rgba(255, 255, 255, 0.1)',
+                  background: 'var(--surface-hover)',
                   padding: '2px 6px',
                   borderRadius: '4px',
                   fontFamily: 'monospace',
@@ -185,7 +187,7 @@ const ResearchReportRenderer: React.FC<Props> = ({ result }) => {
                 target="_blank"
                 rel="noopener noreferrer"
                 data-testid="external-link"
-                style={{ color: 'var(--accent-cyan, #38bdf8)', textDecoration: 'underline' }}
+                style={{ color: 'var(--accent-cyan)', textDecoration: 'underline' }}
               >
                 {children}
               </a>
@@ -198,7 +200,7 @@ const ResearchReportRenderer: React.FC<Props> = ({ result }) => {
                   style={{
                     width: '100%',
                     borderCollapse: 'collapse',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    border: '1px solid var(--border-muted)',
                     borderRadius: '8px',
                     overflow: 'hidden',
                   }}
@@ -212,7 +214,7 @@ const ResearchReportRenderer: React.FC<Props> = ({ result }) => {
             return (
               <tr
                 style={{
-                  borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+                  borderBottom: '1px solid var(--border-muted)',
                 }}
                 className="markdown-tr"
                 {...props}
@@ -226,8 +228,8 @@ const ResearchReportRenderer: React.FC<Props> = ({ result }) => {
               <th
                 style={{
                   padding: '10px 14px',
-                  background: 'rgba(255, 255, 255, 0.08)',
-                  color: 'var(--text-primary, #f5f7fa)',
+                  background: 'var(--surface-hover)',
+                  color: 'var(--text-primary)',
                   fontWeight: 600,
                   textAlign: 'left',
                 }}
@@ -241,7 +243,7 @@ const ResearchReportRenderer: React.FC<Props> = ({ result }) => {
               <td
                 style={{
                   padding: '10px 14px',
-                  color: 'var(--text-primary, #f5f7fa)',
+                  color: 'var(--text-primary)',
                   fontSize: '0.9rem',
                 }}
               >

@@ -57,8 +57,8 @@ const CodingRenderer: React.FC<Props> = ({ result }) => {
     position: 'relative',
     borderRadius: '8px',
     overflow: 'hidden',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    backgroundColor: '#1e1e1e',
+    border: '1px solid var(--border-muted)',
+    backgroundColor: 'var(--surface-primary)',
   };
 
   const headerStyle: React.CSSProperties = {
@@ -66,8 +66,8 @@ const CodingRenderer: React.FC<Props> = ({ result }) => {
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: '8px 16px',
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+    backgroundColor: 'var(--surface-hover-subtle)',
+    borderBottom: '1px solid var(--border-muted)',
   };
 
   return (

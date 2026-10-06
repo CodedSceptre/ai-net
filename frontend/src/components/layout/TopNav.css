@@ -60,7 +60,7 @@
 }
 
 .sidebar-toggle:active {
-  background: var(--bg-surface-alt, #e2e8f0);
+  background: var(--bg-surface-alt);
   transform: scale(0.94);
 }
 
@@ -88,6 +88,30 @@
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.theme-toggle:hover {
+  background: var(--bg-surface-alt);
+  border-color: var(--border-color);
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--accent-info);
+  outline-offset: 2px;
 }
 
 .notification-wrapper {
@@ -119,9 +143,9 @@
 }
 
 .notification-bell-btn:active {
-  background: var(--bg-secondary, #1a1f2e);
-  border-color: var(--border-color, #2a3040);
-  color: var(--text-primary, #f5f7fa);
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
+  color: var(--text-primary);
   transform: translateY(0) scale(0.94);
 }
 
@@ -171,7 +195,7 @@
 .wallet-chip.connected {
   background: var(--status-success-surface-muted);
   border-color: var(--status-success-border);
-  color: var(--status-success-strong);
+  color: var(--status-success-text);
 }
 
 .wallet-chip.disconnected {
@@ -197,7 +221,7 @@
 }
 
 .disconnect-btn:active {
-  background: #b91c1c;
+  background: var(--status-danger-strong);
   transform: scale(0.96);
 }
 
@@ -237,8 +261,8 @@
 }
 
 .language-option:active {
-  background: var(--bg-secondary, #f1f5f9);
-  color: var(--text-primary, #1a202c);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
   transform: scale(0.96);
 }
 

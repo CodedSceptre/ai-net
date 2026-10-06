@@ -89,7 +89,7 @@ export const TaskDetailTimeline: React.FC<TaskDetailTimelineProps> = ({ nodes, o
               )}
 
               {/* Timeline dot */}
-              <span className={`absolute -left-[35px] top-1.5 flex items-center justify-center w-6 h-6 rounded-full ring-4 ring-[#0f172a] border transition-colors duration-300 ${statusColor} ${isPulsing ? 'animate-pulse' : ''}`}>
+              <span className={`absolute -left-[35px] top-1.5 flex items-center justify-center w-6 h-6 rounded-full ring-4 ring-[var(--surface-canvas)] border transition-colors duration-300 ${statusColor} ${isPulsing ? 'animate-pulse' : ''}`}>
                 <StatusIcon size={12} className={isPulsing ? 'animate-spin' : ''} />
               </span>
 
@@ -138,7 +138,7 @@ export const TaskDetailTimeline: React.FC<TaskDetailTimelineProps> = ({ nodes, o
                 {isExpanded && (
                   <div className="mt-3 border-t border-slate-700/50 pt-3">
                     {hasOutput ? (
-                      <div className="bg-[#0b0f19] p-3 rounded-lg border border-slate-800">
+                      <div className="bg-background-primary p-3 rounded-lg border border-border">
                         <pre className="text-xs font-mono text-slate-300 whitespace-pre-wrap break-words">
                           {outputs[node.nodeId]}
                         </pre>

@@ -58,7 +58,7 @@
 }
 
 .retryButton:active {
-  background: rgba(239, 68, 68, 0.4);
+  background: color-mix(in srgb, var(--status-danger) 40%, transparent);
   transform: scale(0.96);
 }
 

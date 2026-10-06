@@ -128,19 +128,16 @@ const TopNav: React.FC<TopNavProps> = ({
       <div className="nav-right">
         <NotificationBell />
 
-        {/* Theme toggle: cycles light -> dark -> system */}
         <button
           className="theme-toggle"
-          onClick={() => {
-            const next: Record<string, 'light' | 'dark' | 'system'> = { light: 'dark', dark: 'system', system: 'light' }
-            setMode(next[mode])
-          }}
+          onClick={() => setMode(effectiveTheme === 'dark' ? 'light' : 'dark')}
+          type="button"
           role="switch"
-          aria-label={mode === 'light' ? 'Switch to dark or system theme' : mode === 'dark' ? 'Switch to system or light theme' : 'Switch to light or dark theme'}
-          aria-checked={mode === 'dark' ? 'true' : mode === 'light' ? 'false' : 'mixed'}
-          title={`Theme: ${mode}`}
+          aria-label={`Switch to ${effectiveTheme === 'dark' ? 'light' : 'dark'} theme`}
+          aria-checked={effectiveTheme === 'dark'}
+          title={`Switch to ${effectiveTheme === 'dark' ? 'light' : 'dark'} theme`}
         >
-          {mode === 'light' ? <Sun size={16} /> : mode === 'dark' ? <Moon size={16} /> : <Monitor size={16} />}
+          {effectiveTheme === 'dark' ? <Moon size={16} /> : <Sun size={16} />}
         </button>
 
         <div
