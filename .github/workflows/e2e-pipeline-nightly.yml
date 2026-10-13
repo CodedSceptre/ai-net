@@ -39,10 +39,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
@@ -90,7 +90,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-pipeline-results-${{ github.run_id }}
           path: |
@@ -101,7 +101,7 @@ jobs:
       # ── Page maintainers on breakage ──────────────────────────────────────
       - name: Open / update breakage issue on failure
         if: failure()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const label = 'e2e-pipeline-failure';
@@ -143,7 +143,7 @@ jobs:
 
       - name: Close breakage issue on recovery
         if: success()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const title = 'E2E Pipeline Tests failing (nightly)';
