@@ -1,0 +1,166 @@
+# monitoring/alert-rules.yml
+#
+# Prometheus alerting rules for ai-net.
+# Grouped by severity: P1 (page immediately), P2 (notify on-call), P3 (low urgency).
+#
+# Routing:
+#   P1 → PagerDuty (immediate escalation)
+#   P2 → Slack #incidents
+#   P3 → Slack #ops-alerts
+#
+# See docs/operations/RUNBOOKS.md for investigation procedures per alert.
+
+groups:
+  # ── P1: Full-outage / immediate action required ──────────────────────────────
+  - name: p1_critical
+    rules:
+      - alert: ApiDown
+        # All backend API instances are unreachable for > 1 minute.
+        expr: up{job="ai-net-backend"} == 0
+        for: 1m
+        labels:
+          severity: P1
+          service: backend-api
+          team: platform
+        annotations:
+          summary: "P1 · ai-net API is DOWN"
+          description: >
+            All backend API instances have been unreachable for more than 1 minute.
+            Coordinator tasks cannot be submitted or monitored.
+          runbook_url: "https://github.com/LockedTerminal/ai-net/blob/main/docs/operations/RUNBOOKS.md#api-down"
+          grafana_url: "http://grafana:3000/d/ai-net/ai-net-overview"
+
+      - alert: PaymentFailureRateHigh
+        # More than 5% of payment operations are failing.
+        expr: >
+          (
+            rate(payment_operations_total{status="failed"}[5m])
+            /
+            rate(payment_operations_total[5m])
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: P1
+          service: payment-layer
+          team: platform
+        annotations:
+          summary: "P1 · Payment failure rate exceeds 5%"
+          description: >
+            {{ $value | humanizePercentage }} of payment operations are failing
+            over the last 5 minutes. Stellar escrow may be breaking.
+          runbook_url: "https://github.com/LockedTerminal/ai-net/blob/main/docs/operations/RUNBOOKS.md#payment-failure-rate"
+          grafana_url: "http://grafana:3000/d/ai-net/payments"
+
+      - alert: AllAgentsOffline
+        # No registered agents are reporting a heartbeat.
+        expr: sum(agent_heartbeat_up) == 0
+        for: 2m
+        labels:
+          severity: P1
+          service: agent-registry
+          team: platform
+        annotations:
+          summary: "P1 · All agents are offline"
+          description: >
+            No agents have sent a heartbeat in the last 2 minutes.
+            Task decomposition will fail for all new tasks.
+          runbook_url: "https://github.com/LockedTerminal/ai-net/blob/main/docs/operations/RUNBOOKS.md#all-agents-offline"
+          grafana_url: "http://grafana:3000/d/ai-net/agents"
+
+  # ── P2: Degraded-service / notify on-call ────────────────────────────────────
+  - name: p2_warning
+    rules:
+      - alert: DBPoolExhausted
+        # The SQLite / DB connection pool has been fully saturated for > 1 min.
+        expr: db_pool_available_connections == 0
+        for: 1m
+        labels:
+          severity: P2
+          service: database
+          team: platform
+        annotations:
+          summary: "P2 · Database connection pool exhausted"
+          description: >
+            All DB pool connections are in use. New queries will queue or fail.
+          runbook_url: "https://github.com/LockedTerminal/ai-net/blob/main/docs/operations/RUNBOOKS.md#db-pool-exhausted"
+          grafana_url: "http://grafana:3000/d/ai-net/database"
+
+      - alert: TaskDLQDepthHigh
+        # Dead-letter queue depth exceeds 10 (unprocessable tasks accumulating).
+        expr: task_dlq_depth > 10
+        for: 5m
+        labels:
+          severity: P2
+          service: task-queue
+          team: platform
+        annotations:
+          summary: "P2 · Task DLQ depth is {{ $value }} (threshold: 10)"
+          description: >
+            More than 10 tasks are sitting in the dead-letter queue, indicating
+            repeated coordinator failures or payload validation errors.
+          runbook_url: "https://github.com/LockedTerminal/ai-net/blob/main/docs/operations/RUNBOOKS.md#task-dlq"
+          grafana_url: "http://grafana:3000/d/ai-net/tasks"
+
+      - alert: P99LatencyHigh
+        # 99th-percentile API response time exceeds 2 seconds.
+        expr: >
+          histogram_quantile(
+            0.99,
+            rate(http_request_duration_seconds_bucket{job="ai-net-backend"}[5m])
+          ) > 2
+        for: 5m
+        labels:
+          severity: P2
+          service: backend-api
+          team: platform
+        annotations:
+          summary: "P2 · p99 API latency is {{ $value | humanizeDuration }} (SLO: 2 s)"
+          description: >
+            99th-percentile API latency has been above 2 seconds for 5 minutes.
+            Check for slow DB queries, rate-limiting, or downstream agent hangs.
+          runbook_url: "https://github.com/LockedTerminal/ai-net/blob/main/docs/operations/RUNBOOKS.md#high-latency"
+          grafana_url: "http://grafana:3000/d/ai-net/latency"
+
+  # ── P3: Low-urgency / ops noise ───────────────────────────────────────────────
+  - name: p3_informational
+    rules:
+      - alert: DiskUsageHigh
+        # Host disk usage above 80%.
+        expr: >
+          (
+            (node_filesystem_size_bytes - node_filesystem_free_bytes)
+            / node_filesystem_size_bytes
+          ) > 0.80
+        for: 10m
+        labels:
+          severity: P3
+          service: infrastructure
+          team: platform
+        annotations:
+          summary: "P3 · Disk usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+          description: >
+            Disk utilisation has been above 80% for 10 minutes.
+            Consider pruning old logs or artifacts.
+          runbook_url: "https://github.com/LockedTerminal/ai-net/blob/main/docs/operations/RUNBOOKS.md#disk-usage"
+          grafana_url: "http://grafana:3000/d/ai-net/infra"
+
+      - alert: CacheMissRateHigh
+        # Registry cache miss rate above 50% — cold-cache or eviction pressure.
+        expr: >
+          (
+            rate(registry_cache_misses_total[5m])
+            /
+            (rate(registry_cache_hits_total[5m]) + rate(registry_cache_misses_total[5m]))
+          ) > 0.50
+        for: 10m
+        labels:
+          severity: P3
+          service: registry-cache
+          team: platform
+        annotations:
+          summary: "P3 · Registry cache miss rate is {{ $value | humanizePercentage }}"
+          description: >
+            More than half of agent-registry lookups are missing the cache.
+            The GET /api/agents endpoint may be slower than expected.
+          runbook_url: "https://github.com/LockedTerminal/ai-net/blob/main/docs/operations/RUNBOOKS.md#cache-miss-rate"
+          grafana_url: "http://grafana:3000/d/ai-net/cache"
