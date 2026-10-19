@@ -69,6 +69,66 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # ── Testnet health check ────────────────────────────────────────────
+      # Pings Horizon, Friendbot, and the Soroban RPC before running the farm.
+      # If fewer than 2 of 3 endpoints are reachable, abort the workflow early
+      # — this is a testnet outage, not a code regression.
+      - name: Testnet health check
+        run: |
+          echo "Checking Stellar testnet health…"
+          HORIZON_OK=false
+          FRIENDBOT_OK=false
+          RPC_OK=false
+
+          # Check Horizon (retry 3 times with 5s backoff)
+          for i in 1 2 3; do
+            if curl -sf --max-time 15 "https://horizon-testnet.stellar.org/" > /dev/null 2>&1; then
+              HORIZON_OK=true
+              break
+            fi
+            echo "Horizon attempt $i failed — retrying in 5s…"
+            sleep 5
+          done
+
+          # Check Friendbot (retry 3 times with 5s backoff)
+          for i in 1 2 3; do
+            if curl -sf --max-time 15 "https://friendbot.stellar.org/" > /dev/null 2>&1; then
+              FRIENDBOT_OK=true
+              break
+            fi
+            echo "Friendbot attempt $i failed — retrying in 5s…"
+            sleep 5
+          done
+
+          # Check Soroban RPC (retry 3 times with 5s backoff)
+          for i in 1 2 3; do
+            if curl -sf --max-time 15 -X POST "https://soroban-testnet.stellar.org/" \
+                 -H "Content-Type: application/json" \
+                 -d '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}' > /dev/null 2>&1; then
+              RPC_OK=true
+              break
+            fi
+            echo "RPC attempt $i failed — retrying in 5s…"
+            sleep 5
+          done
+
+          echo "Horizon:  $HORIZON_OK"
+          echo "Friendbot: $FRIENDBOT_OK"
+          echo "RPC:      $RPC_OK"
+
+          # Require at least 2 of 3 endpoints to be reachable
+          REACHABLE=0
+          [ "$HORIZON_OK" = "true" ] && REACHABLE=$((REACHABLE + 1))
+          [ "$FRIENDBOT_OK" = "true" ] && REACHABLE=$((REACHABLE + 1))
+          [ "$RPC_OK" = "true" ] && REACHABLE=$((REACHABLE + 1))
+
+          if [ "$REACHABLE" -lt 2 ]; then
+            echo "::error::Stellar testnet health check FAILED — only $REACHABLE/3 endpoints reachable. Aborting (testnet outage, not a code regression)."
+            exit 1
+          fi
+
+          echo "✅ Testnet is healthy ($REACHABLE/3 endpoints reachable) — proceeding with farm."
+
       # ── Guard: only run when secrets are configured ────────────────────
       - name: Verify farm secrets present
         id: secrets
@@ -97,6 +157,35 @@ jobs:
       - name: Skip notice
         if: env.configured != 'true'
         run: echo "Testnet farm secret not configured — skipping nightly farm."
+
+      # ── Flaky test detection ──────────────────────────────────────────────
+      # Run the flaky test detector across farm run results. The farm's Jest
+      # output is captured as JSON and cross-referenced across retry attempts
+      # to detect tests that passed on retry (flaky).
+      - name: Detect flaky tests
+        if: always() && env.configured == 'true'
+        run: |
+          mkdir -p ../test-results
+          # Copy farm report for flaky analysis if available
+          [ -f testnet-farm-output/testnet-farm-report.json ] && \
+            cp testnet-farm-output/testnet-farm-report.json ../test-results/test-results-farm-${{ github.run_id }}.json
+
+          cd .. && node scripts/detect-flaky-tests.js \
+            --results-dir ./test-results \
+            --output flaky-tests-report.json \
+            --window-days 7 || true
+        continue-on-error: true
+
+      - name: Upload flaky tests report
+        if: always() && env.configured == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-tests-report-${{ github.run_id }}
+          path: |
+            flaky-tests-report.json
+            flaky-tests-history.json
+          if-no-files-found: warn
+          retention-days: 30
 
       # ── Publish the report artifact ──────────────────────────────────────
       - name: Upload farm report artifact
