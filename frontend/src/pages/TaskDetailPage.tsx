@@ -5,6 +5,7 @@ import { useParams } from 'react-router-dom';
 import { useTaskMonitor } from '../hooks/useTaskMonitor';
 import { TaskDetailTimeline } from '../components/dashboard/TaskDetailTimeline';
 import { PaymentTimeline } from '../components/dashboard/PaymentTimeline';
+import { PipelineStepIndicator } from '../components/tasks/PipelineStepIndicator';
 import { Skeleton, SkeletonText } from '../components/common/Skeleton';
 import { AlertCircle, CheckCircle2, Play, RefreshCw } from 'lucide-react';
 
@@ -352,6 +353,16 @@ const TaskDetailPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Pipeline Step Indicator */}
+      {nodes.length > 0 && (
+        <div className="glass-panel">
+          <PipelineStepIndicator
+            nodes={nodes}
+            pipelineStart={task?.createdAt}
+          />
+        </div>
+      )}
 
       {/* Combined Panels */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">

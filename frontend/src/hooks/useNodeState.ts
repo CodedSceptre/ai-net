@@ -3,32 +3,49 @@ import type { DAGNode, DAGEvent, NodeStatus } from '../types/api';
 
 export const useNodeState = (_taskId: string) => {
   const [nodes, setNodes] = useState<DAGNode[]>([]);
+  /** ISO timestamp of the first node_started event – used by PipelineStepIndicator. */
+  const [pipelineStartedAt, setPipelineStartedAt] = useState<string | undefined>(undefined);
 
   const updateNodeFromEvent = useCallback((event: DAGEvent) => {
     if (!event.nodeId) return;
 
     setNodes(prev => {
       switch (event.type) {
-        case 'node_started':
-          return prev.map(n => 
-            n.nodeId === event.nodeId ? { ...n, status: 'running' } : n
+        case 'node_started': {
+          // Track the first started event as the pipeline start time
+          setPipelineStartedAt(s => s ?? event.timestamp);
+          return prev.map(n =>
+            n.nodeId === event.nodeId
+              ? { ...n, status: 'running', startedAt: event.timestamp }
+              : n,
           );
+        }
 
-        case 'node_completed':
+        case 'node_completed': {
           const payload = event.payload as any;
-          return prev.map(n => 
-            n.nodeId === event.nodeId 
-              ? { ...n, status: 'completed', result: payload } 
-              : n
+          return prev.map(n =>
+            n.nodeId === event.nodeId
+              ? {
+                  ...n,
+                  status: 'completed',
+                  result: {
+                    ...(typeof payload === 'object' && payload !== null ? payload : {}),
+                    completedAt: event.timestamp,
+                    startedAt: (n as any).startedAt ?? undefined,
+                  },
+                }
+              : n,
           );
+        }
 
-        case 'node_failed':
+        case 'node_failed': {
           const errMessage = (event.payload as any)?.error || 'Node execution failed';
-          return prev.map(n => 
-            n.nodeId === event.nodeId 
-              ? { ...n, status: 'failed', error: errMessage } 
-              : n
+          return prev.map(n =>
+            n.nodeId === event.nodeId
+              ? { ...n, status: 'failed', error: errMessage }
+              : n,
           );
+        }
 
         default:
           return prev;
@@ -55,6 +72,13 @@ export const useNodeState = (_taskId: string) => {
 
   const initializeNodes = useCallback((initialNodes: DAGNode[]) => {
     setNodes(initialNodes);
+    // If any node is already running or completed, seed the pipeline start time
+    const firstActive = initialNodes.find(
+      n => n.status === 'running' || n.status === 'completed',
+    );
+    if (firstActive) {
+      setPipelineStartedAt(s => s ?? new Date().toISOString());
+    }
   }, []);
 
   const getNodeById = useCallback((nodeId: string): DAGNode | undefined => {
@@ -63,6 +87,7 @@ export const useNodeState = (_taskId: string) => {
 
   return {
     nodes,
+    pipelineStartedAt,
     updateNodeFromEvent,
     getNodeStatus,
     getCompletedNodes,
