@@ -1,0 +1,238 @@
+name: Load Tests
+
+on:
+  schedule:
+    # Run every day at 03:00 UTC (off-peak) to catch regressions early.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      run_cold_start:
+        description: 'Also run the cold-start cache scenario'
+        type: boolean
+        required: false
+        default: false
+      baseline_p99_ms:
+        description: 'p99 baseline in ms for regression check (0 = skip)'
+        type: string
+        required: false
+        default: '0'
+
+concurrency:
+  group: load-tests-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  load-test-agent-discovery:
+    name: k6-agent-discovery-1000rps
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # ── Start the backend under test ──────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Start backend server
+        run: |
+          # Start in test mode (in-memory DB, no Stellar calls)
+          NODE_ENV=test \
+          PORT=3000 \
+          SQLITE_DB=:memory: \
+          npm run dev &
+          # Wait for the health endpoint to be ready (up to 30 s)
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health > /dev/null; then
+              echo "Backend is ready"
+              break
+            fi
+            sleep 1
+          done
+        working-directory: backend
+
+      # ── Install k6 ────────────────────────────────────────────────────────
+      - name: Install k6
+        run: |
+          curl -fsSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/k6-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update -qq
+          sudo apt-get install -y k6
+
+      # ── Run warm-cache load test ───────────────────────────────────────────
+      - name: Run warm-cache load test (1000 RPS)
+        id: warm_cache
+        run: |
+          k6 run \
+            --env BASE_URL=http://localhost:3000 \
+            --env BASELINE_P99_MS=${{ github.event.inputs.baseline_p99_ms || '0' }} \
+            --out json=warm-cache-results.json \
+            --summary-trend-stats="p(50),p(95),p(99),max" \
+            tests/load/scenarios/get-agents.js \
+          2>&1 | tee warm-cache-output.txt
+        continue-on-error: true
+
+      # ── (Optional) Run cold-start load test ──────────────────────────────
+      - name: Run cold-start load test (1000 RPS)
+        id: cold_start
+        if: ${{ github.event.inputs.run_cold_start == 'true' }}
+        run: |
+          k6 run \
+            --env BASE_URL=http://localhost:3000 \
+            --env RUN_COLD_START=true \
+            --env K6_SCENARIO_NAME=cold-start \
+            --out json=cold-start-results.json \
+            --summary-trend-stats="p(50),p(95),p(99),max" \
+            tests/load/scenarios/get-agents.js \
+          2>&1 | tee cold-start-output.txt
+        continue-on-error: true
+
+      # ── Generate HTML / Markdown report ───────────────────────────────────
+      - name: Generate load test report
+        if: always()
+        run: |
+          node -e "
+            const fs = require('fs');
+
+            function extractMetrics(jsonFile) {
+              if (!fs.existsSync(jsonFile)) return null;
+              const lines = fs.readFileSync(jsonFile, 'utf8').split('\n').filter(Boolean);
+              const metrics = {};
+              for (const line of lines) {
+                try {
+                  const entry = JSON.parse(line);
+                  if (entry.type === 'Point' && entry.metric) {
+                    if (!metrics[entry.metric]) metrics[entry.metric] = [];
+                    metrics[entry.metric].push(entry.data.value);
+                  }
+                } catch {}
+              }
+              return metrics;
+            }
+
+            function percentile(arr, p) {
+              if (!arr || !arr.length) return 0;
+              const sorted = [...arr].sort((a, b) => a - b);
+              const idx = Math.ceil((p / 100) * sorted.length) - 1;
+              return sorted[Math.max(0, idx)].toFixed(2);
+            }
+
+            const warm = extractMetrics('warm-cache-results.json');
+            const cold = extractMetrics('cold-start-results.json');
+
+            let md = '## Load Test Report – GET /api/agents @ 1000 RPS\n\n';
+
+            function scenarioSection(title, metrics) {
+              if (!metrics) return '';
+              const dur = metrics['http_req_duration'] || [];
+              const failed = metrics['http_req_failed'] || [];
+              const failRate = failed.length
+                ? (failed.reduce((a, b) => a + b, 0) / failed.length * 100).toFixed(3)
+                : '0.000';
+
+              let s = \`### \${title}\n\n\`;
+              s += '| Metric | Value | SLO |\n|---|---|---|\n';
+              s += \`| p50 latency | \${percentile(dur, 50)} ms | — |\n\`;
+              s += \`| p95 latency | \${percentile(dur, 95)} ms | < 200 ms |\n\`;
+              s += \`| p99 latency | \${percentile(dur, 99)} ms | < 500 ms |\n\`;
+              s += \`| Error rate | \${failRate}% | < 0.1% |\n\`;
+
+              const p95 = parseFloat(percentile(dur, 95));
+              const p99 = parseFloat(percentile(dur, 99));
+              const errR = parseFloat(failRate);
+
+              s += '\n**SLO result:** ';
+              if (p95 < 200 && p99 < 500 && errR < 0.1) {
+                s += '✅ All SLOs met\n\n';
+              } else {
+                s += '❌ One or more SLOs breached\n\n';
+              }
+              return s;
+            }
+
+            md += scenarioSection('Warm Cache', warm);
+            if (cold) md += scenarioSection('Cold Start', cold);
+
+            fs.writeFileSync('load-test-report.md', md);
+            console.log(md);
+          "
+
+      - name: Post report to job summary
+        if: always()
+        run: cat load-test-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Baseline regression check ──────────────────────────────────────────
+      - name: Check p99 regression vs baseline
+        if: always() && github.event.inputs.baseline_p99_ms != '0' && github.event.inputs.baseline_p99_ms != ''
+        run: |
+          node -e "
+            const fs = require('fs');
+            const baseline = parseFloat('${{ github.event.inputs.baseline_p99_ms }}');
+            const threshold = baseline * 1.20;  // allow 20% regression
+
+            const lines = fs.readFileSync('warm-cache-results.json', 'utf8')
+              .split('\n').filter(Boolean);
+            const durations = [];
+            for (const line of lines) {
+              try {
+                const e = JSON.parse(line);
+                if (e.type === 'Point' && e.metric === 'http_req_duration') {
+                  durations.push(e.data.value);
+                }
+              } catch {}
+            }
+
+            if (!durations.length) {
+              console.log('No duration metrics found; skipping baseline check.');
+              process.exit(0);
+            }
+
+            const sorted = [...durations].sort((a, b) => a - b);
+            const idx = Math.ceil(0.99 * sorted.length) - 1;
+            const p99 = sorted[idx];
+
+            console.log('baseline_p99=' + baseline + 'ms  current_p99=' + p99.toFixed(2) + 'ms  threshold=' + threshold.toFixed(2) + 'ms');
+
+            if (p99 > threshold) {
+              console.error('❌ p99 latency regressed by > 20% vs baseline!');
+              process.exit(1);
+            } else {
+              console.log('✅ p99 within 20% of baseline.');
+            }
+          "
+
+      # ── Upload artifacts ───────────────────────────────────────────────────
+      - name: Upload load test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-results-${{ github.run_id }}
+          path: |
+            warm-cache-results.json
+            cold-start-results.json
+            warm-cache-output.txt
+            cold-start-output.txt
+            load-test-report.md
+          retention-days: 30
+
+      # ── Fail the job if k6 itself reported threshold violations ───────────
+      - name: Assert warm-cache thresholds passed
+        if: steps.warm_cache.outcome == 'failure'
+        run: |
+          echo "❌ k6 reported threshold violations in the warm-cache scenario."
+          echo "See the load-test-results artifact for the full report."
+          exit 1
