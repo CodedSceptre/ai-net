@@ -194,16 +194,21 @@ tasks per 24 h). Exceeding it returns:
 ## 7. Idempotency
 
 Mutating endpoints (`POST /api/tasks`, `POST /api/agents/register`) support the
-`Idempotency-Key` header. Supply a client-generated UUID v4:
+`Idempotency-Key` header. Supply a client-generated **UUID v4**:
 
 ```http
 Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000
 ```
 
-- If the server receives the same key with the **same payload** within 24 h it
-  returns the cached response from the first request.
-- If the same key arrives with a **different payload** it returns `409 Conflict`.
-- Missing the header means no idempotency protection (safe to omit on reads).
+| Scenario | Behaviour |
+|---|---|
+| First request | Processed normally; response cached for 24 h, scoped to the submitting wallet |
+| Same key + same payload within 24 h | Original response replayed (HTTP `200` or `201`), `X-Idempotency-Replay: true` header set |
+| Same key + **different payload** within 24 h | `409 Conflict` with code `IDEMPOTENCY_PAYLOAD_MISMATCH` |
+| Key present but **not valid UUID v4** | `422 Unprocessable Entity` with code `INVALID_IDEMPOTENCY_KEY` |
+| Key absent | No idempotency protection; safe to omit on reads |
+
+Keys expire after **24 hours**. After expiry the same key value may be reused and will be treated as a new first request. Idempotency is scoped to the submitting wallet address — the same UUID supplied by two different wallets creates two independent entries.
 
 ---
 
@@ -1116,6 +1121,31 @@ data: {"taskId":"task_ab12cd34ef56","status":"completed","percentage":100}
 ```json
 { "error": "Task not found" }
 ```
+
+---
+
+#### `WS /ws` (agent-status stream)
+
+Upgrades to a WebSocket connection that broadcasts agent health changes in
+real time. The connection is read-only and requires no authentication.
+
+**Request**
+```bash
+websocat "ws://localhost:3001/ws"
+```
+
+**Server messages** share the standard envelope
+(`{ event, payload, timestamp, correlationId? }`):
+
+| Event | Description |
+|---|---|
+| `agents:snapshot` | Sent immediately on connect with `{ agents: [{ id, capabilities, status, lastSeenAt }] }` so the client can hydrate without a REST call. |
+| `agent:status` | An agent's health changed. Payload: `{ agentId, name, capability, oldStatus, newStatus, lastHeartbeat }`. |
+| `{"type":"ping"}` | Heartbeat every 30 s. Clients reply with `{"type":"pong"}` or the connection is closed after `WS_PONG_TIMEOUT_MS`. |
+
+Concurrent connections are capped per client IP
+(`WS_MAX_CONNECTIONS_PER_CLIENT`, default 5); excess upgrades are rejected
+with HTTP `429`.
 
 ---
 

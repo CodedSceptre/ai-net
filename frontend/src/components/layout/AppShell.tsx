@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { AnimatePresence } from 'framer-motion'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { useWallet } from '../../context/WalletContext'
+import { useAgentStatusSocket } from '../../hooks/useAgentStatusSocket'
 import Sidebar from './Sidebar'
 import TopNav from './TopNav'
 import MobileDrawer from './MobileDrawer'
@@ -61,6 +62,9 @@ const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const location = useLocation()
   const navigate = useNavigate()
   const drawerRef = useRef<HTMLDivElement>(null)
+
+  // Agent-status real-time updates — connection state fed to TopNav indicator.
+  const { connectionState: wsConnectionState } = useAgentStatusSocket()
 
   // Re-read when the identity changes, so connecting a wallet adopts that
   // wallet's saved preference instead of carrying over the anonymous one.
@@ -138,6 +142,7 @@ const AppShell: React.FC<AppShellProps> = ({ children }) => {
         sidebarCollapsed={sidebarCollapsed}
         isMobile={isMobile}
         isDrawerOpen={isDrawerOpen}
+        wsConnectionState={wsConnectionState}
       />
 
       {!isMobile && (

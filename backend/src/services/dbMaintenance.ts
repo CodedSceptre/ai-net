@@ -26,7 +26,7 @@
 import path from "path";
 import fs from "fs";
 import { createLogger } from "../utils/logger";
-import type { Database } from "better-sqlite3";
+import type Database from "better-sqlite3";
 
 const logger = createLogger({ component: "db-maintenance" });
 

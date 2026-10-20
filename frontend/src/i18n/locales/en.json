@@ -417,5 +417,16 @@
   "palette.action.copyAddressFailed": "Could not copy the wallet address",
   "palette.action.toggleTheme": "Toggle theme",
   "palette.action.toggleThemeHint": "Currently {{mode}}",
-  "palette.task.noPrompt": "No prompt"
+  "palette.task.noPrompt": "No prompt",
+
+  "ws.status.connecting": "Connecting",
+  "ws.status.connected": "Connected",
+  "ws.status.reconnecting": "Reconnecting",
+  "ws.status.disconnected": "Disconnected",
+  "ws.status.error": "Error",
+  "ws.status.fallback": "Offline mode",
+  "agent.status.online": "Online",
+  "agent.status.offline": "Offline",
+  "agent.status.busy": "Busy",
+  "agent.status.error": "Error"
 }

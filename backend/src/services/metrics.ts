@@ -829,18 +829,24 @@ export class MetricsService {
 
     const lines: string[] = [];
 
-    // ── 1. http_requests_total{method,path,status} ───────────────────────────
-    lines.push("# HELP http_requests_total Total number of HTTP requests by method, path and status");
-    lines.push("# TYPE http_requests_total counter");
+    // ── 0. ainet_up gauge ─────────────────────────────────────────────────────
+    lines.push("# HELP ainet_up Whether the ai-net backend is running");
+    lines.push("# TYPE ainet_up gauge");
+    lines.push("ainet_up 1");
+    lines.push("");
+
+    // ── 1. ainet_http_requests_total{method,path,status} ─────────────────────
+    lines.push("# HELP ainet_http_requests_total Total number of HTTP requests by method, path and status");
+    lines.push("# TYPE ainet_http_requests_total counter");
     if (httpCountByLabel.size === 0) {
-      lines.push('http_requests_total{method="GET",path="/",status="200"} 0');
+      lines.push('ainet_http_requests_total{method="GET",path="/",status="200"} 0');
     } else {
       for (const [key, count] of httpCountByLabel.entries()) {
         const parts = key.split("::");
         const method = parts[0] ?? "UNKNOWN";
         const path = parts[1] ?? "/";
         const status = parts[2] ?? "0";
-        lines.push(`http_requests_total{method="${method}",path="${path}",status="${status}"} ${count}`);
+        lines.push(`ainet_http_requests_total{method="${method}",path="${path}",status="${status}"} ${count}`);
       }
     }
 
@@ -851,7 +857,7 @@ export class MetricsService {
     for (const ms of httpDurationsMs) {
       observeHistogram(durHist, ms / 1000); // convert ms to seconds
     }
-    lines.push(renderHistogram("http_request_duration_seconds", "HTTP request latency in seconds", durHist));
+    lines.push(renderHistogram("ainet_http_request_duration_seconds", "HTTP request latency in seconds", durHist));
 
     // ── 3. tasks_submitted_total ──────────────────────────────────────────────
     lines.push("");
@@ -939,6 +945,25 @@ export class MetricsService {
       veniceLatencyHistogram: this.veniceLatencyHistogram,
       veniceCircuitBreakerState: this.veniceCircuitBreakerState,
     }));
+
+    // ── Process gauges ────────────────────────────────────────────────────────
+    const mem = process.memoryUsage();
+    lines.push("");
+    lines.push("# HELP ainet_process_uptime_seconds Process uptime in seconds");
+    lines.push("# TYPE ainet_process_uptime_seconds gauge");
+    lines.push(`ainet_process_uptime_seconds ${process.uptime()}`);
+    lines.push("# HELP ainet_process_memory_rss_bytes Resident Set Size in bytes");
+    lines.push("# TYPE ainet_process_memory_rss_bytes gauge");
+    lines.push(`ainet_process_memory_rss_bytes ${mem.rss}`);
+    lines.push("# HELP ainet_process_memory_heap_total_bytes Total heap size in bytes");
+    lines.push("# TYPE ainet_process_memory_heap_total_bytes gauge");
+    lines.push(`ainet_process_memory_heap_total_bytes ${mem.heapTotal}`);
+    lines.push("# HELP ainet_process_memory_heap_used_bytes Used heap size in bytes");
+    lines.push("# TYPE ainet_process_memory_heap_used_bytes gauge");
+    lines.push(`ainet_process_memory_heap_used_bytes ${mem.heapUsed}`);
+    lines.push("# HELP ainet_process_memory_external_bytes External memory in bytes");
+    lines.push("# TYPE ainet_process_memory_external_bytes gauge");
+    lines.push(`ainet_process_memory_external_bytes ${mem.external}`);
 
     return lines.join("\n") + "\n";
   }

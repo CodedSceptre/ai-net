@@ -417,5 +417,16 @@
   "palette.action.copyAddressFailed": "无法复制钱包地址",
   "palette.action.toggleTheme": "切换主题",
   "palette.action.toggleThemeHint": "当前：{{mode}}",
-  "palette.task.noPrompt": "无提示词"
+  "palette.task.noPrompt": "无提示词",
+
+  "ws.status.connecting": "连接中",
+  "ws.status.connected": "已连接",
+  "ws.status.reconnecting": "重新连接中",
+  "ws.status.disconnected": "已断开",
+  "ws.status.error": "错误",
+  "ws.status.fallback": "离线模式",
+  "agent.status.online": "在线",
+  "agent.status.offline": "离线",
+  "agent.status.busy": "忙碌",
+  "agent.status.error": "错误"
 }

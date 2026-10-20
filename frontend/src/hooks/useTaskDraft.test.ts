@@ -6,6 +6,7 @@ import {
   TASK_DRAFT_STORAGE_KEY,
   type TaskDraft,
 } from './useTaskDraft';
+import type { AgentPreference } from '../services/taskService';
 
 const draft: TaskDraft = {
   prompt: 'Build a testing suite',
@@ -54,7 +55,7 @@ describe('useTaskDraft persistence', () => {
   it('filters out unknown agent preference values from a stored draft', () => {
     saveTaskDraft({
       ...draft,
-      agentPreferences: ['research', 'not-a-real-agent'],
+      agentPreferences: ['research', 'not-a-real-agent' as unknown as AgentPreference],
     });
     expect(loadTaskDraft()?.agentPreferences).toEqual(['research']);
   });

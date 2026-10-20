@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { AlertTriangle, CheckCircle, Info, XCircle } from 'lucide-react';
 import './Toast.css';
 import type { Toast } from '../../context/ToastContext';
 
@@ -21,7 +22,20 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
     <div className="toast-container" aria-live="polite" aria-atomic="true">
       {toasts.map((toast) => (
         <div key={toast.id} className={`toast toast--${toast.type}`} role="alert" aria-live="polite">
+          <span className="toast__icon">{icons[toast.type]}</span>
           <span className="toast__message">{toast.message}</span>
+          {toast.action && (
+            <button
+              type="button"
+              className="toast__action"
+              onClick={() => {
+                toast.action?.onClick();
+                onDismiss(toast.id);
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
           <button type="button" className="toast__dismiss" onClick={() => onDismiss(toast.id)} aria-label={t('a11y.dismissNotification')}>
             ×
           </button>

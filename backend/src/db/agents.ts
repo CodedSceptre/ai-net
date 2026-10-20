@@ -350,12 +350,19 @@ export function createAgentDb(db: Database.Database): AgentDb {
     },
 
     markStaleAgents(staleThresholdSeconds: number = 90): number {
+      // Staleness can be recorded in either representation: the epoch column
+      // (last_seen_at, written by upsert) or the ISO timestamp (lastSeenAt).
+      // Check both so raw-SQL fixtures that backdate only one of them are
+      // still detected. datetime() normalises ISO-8601 ("T"/"Z") for comparison.
       const result = db.prepare(`
         UPDATE agents
         SET status = 'offline'
         WHERE status = 'online'
-          AND last_seen_at < ?
-      `).run(Math.floor(Date.now() / 1000) - staleThresholdSeconds);
+          AND (
+            (last_seen_at > 0 AND last_seen_at < ?)
+            OR datetime(lastSeenAt) < datetime('now', '-' || ? || ' seconds')
+          )
+      `).run(Math.floor(Date.now() / 1000) - staleThresholdSeconds, staleThresholdSeconds);
       return result.changes;
     },
 

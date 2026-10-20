@@ -20,7 +20,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { LayoutGrid, List, Users, Plus } from 'lucide-react'
+import { LayoutGrid, List, Plus } from 'lucide-react'
 
 import { useAgentRegistry } from '../hooks/useAgentRegistry'
 import { AgentTable } from '../components/agents/AgentTable'

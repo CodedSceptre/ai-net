@@ -167,7 +167,7 @@ function createBaseLogger(destination?: DestinationStream, redactPaths: readonly
         return { level: label };
       },
     },
-    msgKey: "message",
+    messageKey: "message",
     timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
     // Auto-inject traceId / spanId from the active AsyncLocalStorage trace
     // context (Issue #407) so every log line in a traced flow carries the

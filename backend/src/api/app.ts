@@ -31,9 +31,11 @@ import {
   getStreamConnectionCount,
   type TaskStreamOptions,
 } from "./routes/stream";
+import { attachAgentStatusStream } from "./routes/agentStatusStream";
 import type { DAGNode } from "../types/task";
 import type { AgentRegistry } from "../types/agent";
 import { agentsRouter } from "./routes/agents";
+import { createAgentDb, getAgentDb } from "../db/agents";
 import { healthRouter } from "./routes/health";
 import { metricsRouter } from "./routes/metrics";
 import { createStatsRouter } from "./routes/stats";
@@ -158,11 +160,6 @@ export function createApp(opts: AppOptions = {}): {
   }
 
   // ── API docs (Swagger UI) ──────────────────────────────────────────────────
-  app.use(
-    "/docs",
-    swaggerUi.serve,
-    swaggerUi.setup(openapiSpec, swaggerUiOptions),
-  );
   app.get("/docs/swagger.json", (_req: Request, res: Response) => {
     res.json(getOpenapiJson());
   });
@@ -170,6 +167,11 @@ export function createApp(opts: AppOptions = {}): {
     res.setHeader("Content-Type", "application/yaml");
     res.send(getOpenapiYaml());
   });
+  app.use(
+    "/docs",
+    swaggerUi.serve,
+    swaggerUi.setup(openapiSpec, swaggerUiOptions),
+  );
   app.get("/openapi.json", (_req: Request, res: Response) => {
     res.json(openapiSpec);
   });
@@ -236,6 +238,27 @@ export function createApp(opts: AppOptions = {}): {
 
   // ── WebSocket task stream ──────────────────────────────────────────────────
   const eventStore: EventStore = opts.eventStore ?? createEventStore();
+  // ── Agent-status broadcast stream (ws://<host>/ws) ─────────────────────────
+  // Attached BEFORE the task stream: the task-stream upgrade handler destroys
+  // sockets for paths it doesn't own, so /ws must be claimed first.
+  const detachAgentStatusStream = attachAgentStatusStream(httpServer, {
+    eventBus,
+    heartbeatIntervalMs: config.WS_HEARTBEAT_INTERVAL_MS,
+    pongTimeoutMs: config.WS_PONG_TIMEOUT_MS,
+    getAgentSnapshot: () => {
+      try {
+        return createAgentDb(getAgentDb()).list().map((agent) => ({
+          id: agent.id,
+          capabilities: agent.capabilities,
+          status: agent.status,
+          lastSeenAt: agent.lastSeenAt,
+        }));
+      } catch {
+        return [];
+      }
+    },
+  });
+
   const detachStream = attachTaskStream({
     httpServer,
     eventStore,
@@ -257,6 +280,7 @@ export function createApp(opts: AppOptions = {}): {
     jobWorker.stop(opts.jobWorkerStopTimeoutMs ?? 10_000).finally(() => {
       heartbeatService.stop();
       metricsService.setWebSocketProbe(null);
+      detachAgentStatusStream();
       detachStream();
       if (httpServer.listening) {
         httpServer.close(callback);

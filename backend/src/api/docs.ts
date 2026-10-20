@@ -295,11 +295,10 @@ List endpoints support standardized query parameters:
         },
         AgentHeartbeatResponse: {
           type: "object",
-          required: ["status", "agentId", "timestamp"],
+          required: ["status", "lastSeenAt"],
           properties: {
             status: { type: "string", example: "ok" },
-            agentId: { type: "string", example: "agent_crypto_analyst_01" },
-            timestamp: { type: "string", format: "date-time", example: "2026-08-25T17:30:00.000Z" },
+            lastSeenAt: { type: "string", format: "date-time", example: "2026-08-25T17:30:00.000Z" },
           },
         },
         HealthStatus: {
@@ -463,14 +462,32 @@ List endpoints support standardized query parameters:
             timestamp: { type: "string", format: "date-time", example: "2026-08-25T17:01:00.000Z" },
           },
         },
+        ErrorPayload: {
+          description:
+            "Error detail. Structured handlers emit an object with message, code, correlationId and details; some legacy handlers emit a plain string message.",
+          oneOf: [
+            { type: "string", example: "Task not found" },
+            {
+              type: "object",
+              required: ["message"],
+              properties: {
+                message: { type: "string", example: "Task not found: task_123" },
+                code: { type: "string", example: "NOT_FOUND" },
+                correlationId: {
+                  type: "string",
+                  example: "3d00cb11-fa1b-4449-89ab-65278761da51",
+                },
+                details: { type: "object" },
+                timestamp: { type: "string", format: "date-time" },
+              },
+            },
+          ],
+        },
         ErrorResponse: {
           type: "object",
           required: ["error"],
           properties: {
-            error: {
-              type: "string",
-              example: "Invalid request payload or parameters",
-            },
+            error: { $ref: '#/components/schemas/ErrorPayload' },
             code: {
               type: "string",
               example: "INVALID_REQUEST",
@@ -502,28 +519,28 @@ List endpoints support standardized query parameters:
           type: "object",
           required: ["error"],
           properties: {
-            error: { type: "string", example: "Missing or invalid walletpublickey authentication header" },
+            error: { $ref: '#/components/schemas/ErrorPayload' },
           },
         },
         ForbiddenError: {
           type: "object",
           required: ["error"],
           properties: {
-            error: { type: "string", example: "You do not have permission to access or modify this resource" },
+            error: { $ref: '#/components/schemas/ErrorPayload' },
           },
         },
         NotFoundError: {
           type: "object",
           required: ["error"],
           properties: {
-            error: { type: "string", example: "Task not found" },
+            error: { $ref: '#/components/schemas/ErrorPayload' },
           },
         },
         RateLimitError: {
           type: "object",
           required: ["error"],
           properties: {
-            error: { type: "string", example: "Too many requests. Please try again later." },
+            error: { $ref: '#/components/schemas/ErrorPayload' },
             retryAfter: { type: "integer", example: 60 },
           },
         },
@@ -531,14 +548,14 @@ List endpoints support standardized query parameters:
           type: "object",
           required: ["error"],
           properties: {
-            error: { type: "string", example: "An unexpected internal server error occurred" },
+            error: { $ref: '#/components/schemas/ErrorPayload' },
           },
         },
         ServiceUnavailableError: {
           type: "object",
           required: ["error"],
           properties: {
-            error: { type: "string", example: "Service dependencies are unavailable" },
+            error: { $ref: '#/components/schemas/ErrorPayload' },
           },
         },
         AuthTokensResponse: {

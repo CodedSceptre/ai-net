@@ -8,6 +8,10 @@ import { cacheMiddleware } from "../middleware/cache";
 import { invalidateAgentsCache } from "../../cache/invalidation";
 import { ttlForRoute } from "../../config";
 import { authMiddleware } from "../middleware/auth";
+import {
+  calculateReputationBreakdown,
+  computeReputationDelta,
+} from "../../services/qualityScorer";
 
 const AgentCursorListSchema = z.object({
   cursor: z.string().optional(),
@@ -33,6 +37,18 @@ const RegisterAgentSchema = z.object({
   endpoint: z.string().url(),
   stellarPublicKey: z.string().regex(STELLAR_PUBLIC_KEY_REGEX, "Invalid Stellar public key format"),
 });
+
+/** Sybil resistance cap: agents registerable per Stellar account (Issue #497). */
+const MAX_AGENTS_PER_STELLAR_ACCOUNT = 2;
+
+/** Body for POST /api/agents/:id/task-result (Issue #497). */
+const TaskResultSchema = z
+  .object({
+    outcome: z.enum(["success", "failure"]),
+    qualityScore: z.number().min(0).max(100).optional(),
+    latencyMs: z.number().min(0).optional(),
+  })
+  .strict();
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 3_000;
 const HORIZON_URL = process.env.STELLAR_HORIZON_URL || "https://horizon-testnet.stellar.org";
@@ -165,7 +181,104 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
       if (!agent) {
         return next(agentNotFound(req.params.id));
       }
-      res.json(agent);
+      res.json({
+        ...agent,
+        reputation: calculateReputationBreakdown({
+          reputationScore: agent.reputationScore,
+          tasksCompleted: agent.tasksCompleted,
+          tasksFailed: agent.tasksFailed,
+          bondAmountXLM: agent.bondAmountXLM,
+        }),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * @openapi
+   * /api/agents/{id}/task-result:
+   *   post:
+   *     summary: Report a task outcome and update agent reputation
+   *     description: >
+   *       Applies the Issue #497 reputation update rules: success raises the
+   *       score based on quality and latency with a bounded bond multiplier;
+   *       failure applies a fixed penalty. Response includes the full
+   *       reputation breakdown after the update.
+   *     tags: [Agents]
+   *     security: []
+   *     operationId: recordAgentTaskResult
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema: { type: string }
+   *         example: "agent_crypto_analyst_01"
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [outcome]
+   *             properties:
+   *               outcome:
+   *                 type: string
+   *                 enum: [success, failure]
+   *               qualityScore:
+   *                 type: number
+   *                 minimum: 0
+   *                 maximum: 100
+   *               latencyMs:
+   *                 type: number
+   *                 minimum: 0
+   *     responses:
+   *       200:
+   *         description: Reputation updated
+   *       404:
+   *         description: Agent not found
+   */
+  // POST /api/agents/:id/task-result
+  router.post("/:id/task-result", (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      const parse = TaskResultSchema.safeParse(req.body);
+      if (!parse.success) {
+        throw new ValidationError(
+          "Invalid task result data",
+          { issues: parse.error.flatten() },
+          res.locals.correlationId as string | undefined,
+        );
+      }
+
+      const db = getDb();
+      const agent = db.findById(req.params.id);
+      if (!agent) {
+        return next(agentNotFound(req.params.id));
+      }
+
+      const { outcome, qualityScore, latencyMs } = parse.data;
+      const delta = computeReputationDelta({
+        outcome,
+        qualityScore,
+        latencyMs,
+        bondAmountXLM: agent.bondAmountXLM ?? 0,
+        currentReputation: agent.reputationScore,
+      });
+      db.updateReputationWithStats(req.params.id, delta, outcome);
+
+      const updated = db.findById(req.params.id);
+      const reputationScore = updated?.reputationScore ?? agent.reputationScore;
+      res.json({
+        agentId: req.params.id,
+        reputationDelta: delta,
+        reputationScore,
+        reputation: calculateReputationBreakdown({
+          reputationScore,
+          tasksCompleted: updated?.tasksCompleted,
+          tasksFailed: updated?.tasksFailed,
+          bondAmountXLM: updated?.bondAmountXLM,
+        }),
+      });
     } catch (error) {
       next(error);
     }
@@ -242,6 +355,10 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
    *     responses:
    *       201:
    *         description: Agent registered successfully
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/Agent'
    *       400:
    *         description: Validation error or Stellar account verification failure
    *       429:
@@ -285,6 +402,15 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
       }
 
       const db = getDb();
+
+      // Sybil resistance — cap agents per Stellar account (Issue #497)
+      if (db.countByStellarKey(data.stellarPublicKey) >= MAX_AGENTS_PER_STELLAR_ACCOUNT) {
+        res.status(400).json({
+          error: `Agent limit per Stellar account reached (max ${MAX_AGENTS_PER_STELLAR_ACCOUNT} agents per key)`,
+        });
+        return;
+      }
+
       const agent = {
         id: data.agentId,
         capabilities: data.capabilities,

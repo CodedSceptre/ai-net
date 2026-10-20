@@ -1,6 +1,16 @@
 import React, { useState, useMemo } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
 import { useParams } from 'react-router-dom';
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  Handle,
+  Position,
+  MarkerType,
+  type Edge,
+  type Node,
+} from 'reactflow';
 
 import { useTaskMonitor } from '../hooks/useTaskMonitor';
 import { TaskDetailTimeline } from '../components/dashboard/TaskDetailTimeline';
@@ -30,6 +40,7 @@ const CustomNode: React.FC<{ id: string; data: { label: string; status: string }
   );
 };
 
+const nodeTypes = { custom: CustomNode };
 
 /**
  * Context-aware skeleton that mirrors the task detail layout (header, DAG
@@ -88,6 +99,7 @@ const TaskDetailPage: React.FC = () => {
   const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const { task, loading, error, wsStatus, nodes, payments, outputs, refetch } = useTaskMonitor(id);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   // Check if any node is failed
   const failedNode = useMemo(() => {
@@ -120,6 +132,7 @@ const TaskDetailPage: React.FC = () => {
       }
 
       const cleanLabel = node.nodeId.replace('node_', '').replace('node-', '');
+      const isSelected = selectedNodeId === node.nodeId;
 
       return {
         id: node.nodeId,
@@ -136,7 +149,7 @@ const TaskDetailPage: React.FC = () => {
           backgroundColor: background,
           borderColor: borderColor,
           color: color,
-          boxShadow: boxShadow,
+          boxShadow: isSelected ? '0 0 0 2px var(--accent-secondary)' : boxShadow,
           minWidth: '160px',
           height: '92px',
           textAlign: 'center',
@@ -146,7 +159,7 @@ const TaskDetailPage: React.FC = () => {
         },
       };
     });
-  }, [nodes]);
+  }, [nodes, selectedNodeId]);
 
   // Construct React Flow edges dynamically based on dependency state
   const flowEdges = useMemo<Edge[]>(() => {
