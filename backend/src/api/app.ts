@@ -54,6 +54,7 @@ import { requestLogger } from "./middleware/requestLogger";
 import { versioningMiddleware } from "./middleware/versioning";
 import { getOpenapiJson, getOpenapiYaml, openapiSpec, swaggerUiOptions } from "./docs";
 import { createAdminQueueRouter } from "./routes/admin";
+import { createAdminStatsRouter } from "./routes/adminStats";
 import { createV1TasksRouter } from "./routes/v1/tasks";
 import { createV2TasksRouter } from "./routes/v2/tasks";
 import { createAuthRouter } from "./routes/auth";
@@ -211,6 +212,9 @@ export function createApp(opts: AppOptions = {}): {
   // ── Admin Queue routes ─────────────────────────────────────────────────────
   app.use("/api/admin/queue", adminLimiter.middleware, createAdminQueueRouter(jobQueue));
   app.use("/api/admin", adminLimiter.middleware, createAdminQueueRouter(jobQueue));
+
+  // ── Admin Stats routes (#406) ───────────────────────────────────────────────
+  app.use("/api/admin/stats", adminLimiter.middleware, createAdminStatsRouter());
 
   // ── Feature-flag admin routes (#425) ───────────────────────────────────────
   app.use("/api/admin/flags", createFlagsRouter());
