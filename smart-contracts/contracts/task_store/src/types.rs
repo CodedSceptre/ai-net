@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Symbol, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, String, Symbol, Vec};
 
 pub const DEFAULT_TTL_DAYS: u32 = 14;
 pub const MAX_TTL_DAYS: u32 = 30;
@@ -6,9 +6,15 @@ pub const MAX_COMPRESSED_DAG_BYTES: u32 = 4 * 1024;
 pub const LEDGERS_PER_DAY: u32 = 17_280;
 
 /// Schema version stamped on every task lifecycle event payload (see
-/// `docs/TASK_LIFECYCLE_EVENTS.md`). Bump only for a breaking payload
+/// `docs/TASK_STORE_EVENTS.md`). Bump only for a breaking payload
 /// change; additive fields do not require a bump.
 pub const TASK_LIFECYCLE_EVENT_VERSION: u32 = 1;
+
+/// Schema version stamped on every task configuration event payload
+/// (`CoordinatorSetEvent`, `OracleManagerSetEvent`, `ContractUpgradedEvent`).
+/// Bump only for a breaking payload change; additive fields do not require
+/// a bump.
+pub const TASK_CONFIG_EVENT_VERSION: u32 = 1;
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,18 +114,40 @@ pub struct TaskFinalizedEvent {
 
 /// Emitted when the admin sets a new OracleManager address.
 #[contracttype]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OracleManagerSetEvent {
+    /// Schema version of this event payload.
+    pub version: u32,
     /// The new OracleManager contract address; `None` means it was cleared.
     pub oracle_manager: Option<Address>,
 }
 
 /// Emitted when the admin sets or rotates the coordinator address.
 #[contracttype]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoordinatorSetEvent {
+    /// Schema version of this event payload.
+    pub version: u32,
     /// The new coordinator address.
     pub coordinator: Address,
+}
+
+/// Emitted when the contract is upgraded via `upgrade`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractUpgradedEvent {
+    /// Schema version of this event payload.
+    pub version: u32,
+    /// The contract version before the upgrade.
+    pub old_version: String,
+    /// The new contract version after the upgrade.
+    pub new_version: String,
+    /// The new WASM hash deployed.
+    pub new_wasm_hash: BytesN<32>,
+    /// The admin address that authorized the upgrade.
+    pub admin: Address,
+    /// The ledger sequence at which the upgrade was applied.
+    pub ledger_sequence: u32,
 }
 
 #[contracterror]
