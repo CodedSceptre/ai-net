@@ -13,6 +13,7 @@
     "test:coverage": "jest --coverage --runInBand --forceExit",
     "test:e2e": "jest --config ../tests/e2e/jest.config.js --runInBand --forceExit",
     "test:performance": "tsx tests/performance/run.ts",
+    "benchmark:indexes": "tsx scripts/benchmark-indexes.ts",
     "db:migrate": "ts-node src/db/cli.ts migrate",
     "db:rollback": "ts-node src/db/cli.ts rollback",
     "db:seed": "ts-node src/db/cli.ts seed",

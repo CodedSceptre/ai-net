@@ -21,14 +21,20 @@ const logger = createLogger({ component: "payment-db" });
 
 let _pool: SqlitePool | null = null;
 
+/** Register better-sqlite3's optional error hook; older builds lack `.on`. */
+function attachErrorHandler(db: Database.Database): void {
+  const handle = (db as unknown as {
+    on?: (event: string, fn: (error: Error) => void) => unknown;
+  }).on;
+  if (typeof handle !== "function") return;
+  handle.call(db, "error", (error: Error) => {
+    logger.error({ err: error }, "payment database error");
+  });
+}
+
 /** Create the payments schema. Runs once, on the pool's writer connection. */
 function applyPaymentSchema(db: Database.Database): void {
-  (db as unknown as { on: (event: string, fn: (error: Error) => void) => void }).on(
-    "error",
-    (error: Error) => {
-      logger.error({ err: error }, "payment database error");
-    },
-  );
+  attachErrorHandler(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS payments (
       taskId       TEXT NOT NULL,
@@ -52,12 +58,6 @@ export function getPaymentPool(dbPath?: string): SqlitePool {
       max: 4,
       acquireTimeoutMs: 5_000,
       onCreate: (db) => {
-        (db as unknown as { on: (event: string, fn: (error: Error) => void) => void }).on(
-          "error",
-          (error: Error) => {
-            logger.error({ err: error }, "payment database error");
-          },
-        );
         applyPaymentSchema(db);
         migrateToLatest(db, MIGRATIONS_DIR);
       },

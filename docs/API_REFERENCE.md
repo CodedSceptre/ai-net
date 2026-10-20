@@ -69,11 +69,14 @@ walletpublickey: GBZXN7PIRZGNMHGA728XZVOG2GUFIDLAZ6AF2I2MD2OCYTAF2K1K4AAA
 ### 2.3 Admin API Key
 
 Admin endpoints require an `X-Admin-API-Key` header or a Bearer token whose
-subject matches the configured admin key:
+subject matches the configured key (`ADMIN_API_KEY`):
 
 ```http
 X-Admin-API-Key: <admin_api_key>
 ```
+
+Missing, invalid, or unconfigured admin credentials always return
+`403 Forbidden`. The server never reveals whether admin access is enabled.
 
 ### 2.4 Unauthenticated Endpoints
 
@@ -1017,6 +1020,45 @@ curl -s "http://localhost:3000/api/tasks?page=1&pageSize=5&status=completed" \
 
 ---
 
+#### `GET /api/tasks/estimate`
+
+Returns a pre-submission cost estimate for one or more specialist agents. The
+endpoint is available on both v1 and v2; v2 wraps the estimate in a `data`
+envelope. Agent selections may be sent as a comma-separated `agents` value or
+as repeated `agentHints` values.
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `agents` | `string` | One of `agents` / `agentHints` | Comma-separated agents: `research`, `risk`, `coding`, `design`, `report` |
+| `agentHints` | `string` | One of `agents` / `agentHints` | Repeatable agent selection, e.g. `?agentHints=research&agentHints=report` |
+
+**Request**
+```bash
+curl -s "http://localhost:3000/api/tasks/estimate?agents=research,coding"
+```
+
+**Response `200 OK`**
+```json
+{
+  "currency": "XLM",
+  "breakdown": [
+    { "agent": "research", "costXLM": 0.5 },
+    { "agent": "coding", "costXLM": 0.8 }
+  ],
+  "subtotalXLM": 1.3,
+  "platformFeeXLM": 0.065,
+  "platformFeeRate": 0.05,
+  "estimatedCostXLM": 1.365
+}
+```
+
+An empty selection or an unknown agent name returns `400 Bad Request` with an
+`INVALID_AGENTS` error code.
+
+---
+
 #### `GET /api/tasks/:id`
 
 Returns full task details including the DAG, per-node results, and execution
@@ -1275,8 +1317,186 @@ curl -s http://localhost:3000/api/reconciliation/report
 
 ### 9.7 Admin (`/api/admin`)
 
-All admin endpoints require `X-Admin-API-Key` or a Bearer admin token unless
-otherwise noted. Unauthenticated requests return `401 Unauthorized`.
+All admin endpoints require `X-Admin-API-Key` or
+`Authorization: Bearer <admin_key>` unless otherwise noted. Missing, invalid,
+or unconfigured keys return `403 Forbidden`.
+
+---
+
+#### `GET /api/admin/stats`
+
+Platform-wide metrics used by the admin console.
+
+**Request**
+```bash
+curl -s http://localhost:3000/api/admin/stats \
+  -H "X-Admin-API-Key: <admin_key>"
+```
+
+**Response `200 OK`**
+```json
+{
+  "generatedAt": "2026-10-20T12:00:00.000Z",
+  "agents": { "total": 12, "online": 9, "offline": 3, "banned": 1 },
+  "tasks": {
+    "total": 348,
+    "queued": 4,
+    "running": 2,
+    "completed": 320,
+    "failed": 12,
+    "cancelled": 10,
+    "last24h": 45
+  },
+  "xlm": { "released": 1250.75, "locked": 25.5, "total": 1276.25 }
+}
+```
+
+**Response `403 Forbidden`**
+```json
+{ "error": "Forbidden" }
+```
+
+---
+
+#### `GET /api/admin/tasks`
+
+Lists every task on the platform, newest first, with filters and pagination.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `status` | `string` | `queued`, `running`, `completed`, `failed`, or `cancelled` |
+| `wallet` | `string` | Filter by `walletPublicKey` (alias: `walletAddress`) |
+| `from` | ISO-8601 | Only tasks created at or after this timestamp |
+| `to` | ISO-8601 | Only tasks created at or before this timestamp |
+| `limit` | `integer` | Page size, 1–100 (default `20`) |
+| `offset` | `integer` | Rows to skip (default `0`) |
+
+**Request**
+```bash
+curl -s "http://localhost:3000/api/admin/tasks?status=failed&limit=25" \
+  -H "X-Admin-API-Key: <admin_key>"
+```
+
+**Response `200 OK`**
+```json
+{
+  "tasks": [
+    {
+      "id": "task_ab12cd34ef56",
+      "prompt": "Research the XLM market",
+      "walletPublicKey": "G...",
+      "status": "failed",
+      "createdAt": "2026-10-20T10:00:00.000Z",
+      "updatedAt": "2026-10-20T10:01:00.000Z"
+    }
+  ],
+  "total": 1,
+  "limit": 25,
+  "offset": 0
+}
+```
+
+**Response `400 Bad Request`**
+```json
+{ "error": "INVALID_QUERY", "details": { "fieldErrors": { "status": ["..."] } } }
+```
+
+---
+
+#### `DELETE /api/admin/tasks/:id`
+
+Force-cancels any task regardless of wallet ownership. Cancels the queued job
+and refunds locked payments where possible.
+
+**Request**
+```bash
+curl -s -X DELETE http://localhost:3000/api/admin/tasks/task_ab12cd34ef56 \
+  -H "X-Admin-API-Key: <admin_key>"
+```
+
+**Response `200 OK`**
+```json
+{
+  "taskId": "task_ab12cd34ef56",
+  "status": "cancelled",
+  "refundTxHashes": ["a1b2c3..."],
+  "task": { /* full task object */ }
+}
+```
+
+**Response `409 Conflict`** — task already completed, failed, or cancelled.
+**Response `404 Not Found`** — unknown task id.
+
+---
+
+#### `POST /api/admin/agents/:id/ban`
+
+Bans an agent and marks it offline. Banned agents are excluded from all new
+task assignments (including dispatch fallbacks) until unbanned.
+
+**Request**
+```bash
+curl -s -X POST http://localhost:3000/api/admin/agents/agent_research_01/ban \
+  -H "X-Admin-API-Key: <admin_key>" \
+  -H "Content-Type: application/json" \
+  -d '{ "reason": "Repeated invalid outputs" }'
+```
+
+The body is optional; when supplied, `reason` is limited to 500 characters.
+
+**Response `200 OK`**
+```json
+{ "banned": true, "agent": { "id": "agent_research_01", "status": "offline", "bannedAt": "..." } }
+```
+
+**Response `404 Not Found`**
+```json
+{ "error": "AGENT_NOT_FOUND" }
+```
+
+#### `POST /api/admin/agents/:id/unban`
+
+Lifts a ban (idempotent). The agent stays offline until its next heartbeat.
+
+**Response `200 OK`**
+```json
+{ "banned": false, "agent": { "id": "agent_research_01", "bannedAt": null } }
+```
+
+---
+
+#### `GET /api/admin/logs`
+
+Returns the most recent `error`/`fatal` log entries from the in-memory ring
+buffer (max 200), newest first.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `limit` | `integer` | 1–500 entries (default `100`) |
+| `level` | `string` | Optional filter: `error` or `fatal` |
+
+**Request**
+```bash
+curl -s "http://localhost:3000/api/admin/logs?limit=50&level=error" \
+  -H "X-Admin-API-Key: <admin_key>"
+```
+
+**Response `200 OK`**
+```json
+{
+  "entries": [
+    {
+      "level": "error",
+      "message": "admin operation failed",
+      "timestamp": "2026-10-20T12:00:00.000Z",
+      "requestId": "req_123",
+      "traceId": "trace_abc",
+      "error": { "name": "Error", "message": "boom", "stack": "Error: boom..." }
+    }
+  ],
+  "total": 1
+}
+```
 
 ---
 

@@ -5,6 +5,13 @@ import { CheckCircle2, AlertCircle, Coins, Bot, Bell, ChevronRight } from 'lucid
 import type { AppNotification, NotificationType } from '../../types/notification';
 import { formatRelativeTime } from '../../utils/time';
 
+export const NOTIFICATION_TITLE_MAX_LENGTH = 40;
+
+export function truncateNotificationTitle(title: string, maxLength = NOTIFICATION_TITLE_MAX_LENGTH): string {
+  if (title.length <= maxLength) return title;
+  return `${title.slice(0, maxLength)}...`;
+}
+
 interface NotificationItemProps {
   notification: AppNotification;
   onMarkAsRead: (id: string) => void;
@@ -77,7 +84,9 @@ export const NotificationItem: React.FC<NotificationItemProps> = ({
 
       <div className="notification-content">
         <div className="notification-header-row">
-          <span className="notification-title">{notification.title}</span>
+          <span className="notification-title" title={notification.title}>
+            {truncateNotificationTitle(notification.title)}
+          </span>
           <span className="notification-time">
             {formatRelativeTime(notification.timestamp)}
           </span>

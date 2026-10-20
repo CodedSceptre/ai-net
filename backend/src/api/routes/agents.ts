@@ -411,6 +411,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
         return;
       }
 
+      const existing = db.findById(data.agentId);
       const agent = {
         id: data.agentId,
         capabilities: data.capabilities,
@@ -419,7 +420,9 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
         stellarPublicKey: data.stellarPublicKey,
         reputationScore: 0,
         lastSeenAt: new Date().toISOString(),
-        status: "online" as const,
+        // A banned agent stays banned across re-registration (#33).
+        status: existing?.bannedAt ? ("offline" as const) : ("online" as const),
+        bannedAt: existing?.bannedAt ?? null,
       };
 
       db.upsert(agent);
@@ -478,6 +481,13 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
       const agent = db.findById(req.params.id);
       if (!agent) {
         return next(agentNotFound(req.params.id));
+      }
+      if (agent.bannedAt) {
+        res.status(403).json({
+          error: "AGENT_BANNED",
+          message: "This agent has been banned by an administrator.",
+        });
+        return;
       }
 
       db.updateLastSeen(req.params.id);

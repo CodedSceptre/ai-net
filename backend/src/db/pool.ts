@@ -43,6 +43,20 @@ export interface PoolOptions {
   healthCheck?: boolean;
   /** Applied to every new connection, e.g. to create tables. */
   onCreate?: (db: Database.Database) => void;
+  /**
+   * Log statements at or above this duration (ms). Defaults to
+   * `SLOW_QUERY_LOG_THRESHOLD_MS` or 100ms. `0` logs every statement;
+   * a negative value disables instrumentation.
+   */
+  slowQueryThresholdMs?: number;
+  /** Test/observability hook overriding the default warn logger. */
+  onSlowQuery?: (info: SlowQueryInfo) => void;
+}
+
+/** Timing information for a statement that crossed the slow-query threshold. */
+export interface SlowQueryInfo {
+  sql: string;
+  durationMs: number;
 }
 
 /** Point-in-time view of pool utilisation. */
@@ -103,6 +117,53 @@ export interface SqlitePool {
 export const DEFAULT_MIN_CONNECTIONS = 2;
 export const DEFAULT_MAX_CONNECTIONS = 10;
 export const DEFAULT_ACQUIRE_TIMEOUT_MS = 5_000;
+export const DEFAULT_SLOW_QUERY_THRESHOLD_MS = 100;
+
+function resolveSlowQueryThreshold(): number {
+  const raw = process.env.SLOW_QUERY_LOG_THRESHOLD_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_SLOW_QUERY_THRESHOLD_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : DEFAULT_SLOW_QUERY_THRESHOLD_MS;
+}
+
+/**
+ * Wrap `db.prepare` so statement execution time is measured. Only the SQL
+ * text is logged — never bound parameters, which may contain secrets.
+ */
+function instrumentStatements(
+  db: Database.Database,
+  thresholdMs: number,
+  onSlowQuery?: (info: SlowQueryInfo) => void,
+): void {
+  if (thresholdMs < 0) return;
+
+  const originalPrepare = db.prepare.bind(db);
+  (db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+    const statement = originalPrepare(sql);
+    return new Proxy(statement, {
+      get(target, property) {
+        const value = Reflect.get(target, property) as unknown;
+        if (typeof value !== "function") return value;
+        if (!["get", "all", "run", "iterate"].includes(String(property))) {
+          return (value as (...args: unknown[]) => unknown).bind(target);
+        }
+        return (...args: unknown[]) => {
+          const startedAt = performance.now();
+          try {
+            return (value as (...params: unknown[]) => unknown).apply(target, args);
+          } finally {
+            const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
+            if (durationMs >= thresholdMs) {
+              const info: SlowQueryInfo = { sql: sql.slice(0, 1_000), durationMs };
+              if (onSlowQuery) onSlowQuery(info);
+              else logger.warn(info, "slow query");
+            }
+          }
+        };
+      },
+    });
+  };
+}
 
 interface Waiter {
   resolve: (db: Database.Database) => void;
@@ -157,6 +218,8 @@ export function createPool(options: PoolOptions): SqlitePool {
     acquireTimeoutMs = DEFAULT_ACQUIRE_TIMEOUT_MS,
     healthCheck = true,
     onCreate,
+    slowQueryThresholdMs = resolveSlowQueryThreshold(),
+    onSlowQuery,
   } = options;
 
   if (min < 1) throw new RangeError("pool min must be at least 1");
@@ -166,6 +229,7 @@ export function createPool(options: PoolOptions): SqlitePool {
   // before any read-only handle is opened.
   const writer = new Database(filePath);
   applyPragmas(writer, false);
+  instrumentStatements(writer, slowQueryThresholdMs, onSlowQuery);
   onCreate?.(writer);
 
   const idle: Database.Database[] = [];
@@ -186,6 +250,7 @@ export function createPool(options: PoolOptions): SqlitePool {
   function openReader(): Database.Database {
     const db = new Database(filePath, { readonly: true });
     applyPragmas(db, true);
+    instrumentStatements(db, slowQueryThresholdMs, onSlowQuery);
     openReaders += 1;
     return db;
   }

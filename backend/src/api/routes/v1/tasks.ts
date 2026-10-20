@@ -11,6 +11,7 @@ import { validate } from "../../middleware/validate";
 import { rateLimitMiddleware } from "../../middleware/rateLimit";
 import { idempotencyMiddleware } from "../../middleware/idempotency";
 import { currentTraceId } from "../../../services/traceContext";
+import { computeTaskEstimate, parseEstimateAgentsQuery } from "../../../services/taskEstimate";
 import { getConfig } from "../../../config";
 
 import { getGlobalJobQueue, type JobQueue, type JobPriority } from "../../../queue";
@@ -111,6 +112,22 @@ export function createV1TasksRouter(
 
     // v1 response format
     res.json({ tasks, total, page, pageSize });
+  });
+
+  // GET /api/tasks/estimate — must be registered before /:id
+  tasksRouter.get("/estimate", (req: Request, res: Response): void => {
+    const parsed = parseEstimateAgentsQuery(req.query as Record<string, unknown>);
+    if (!parsed.ok) {
+      res.status(400).json({
+        error: {
+          message: parsed.message,
+          code: parsed.code,
+        },
+      });
+      return;
+    }
+
+    res.json(computeTaskEstimate(parsed.agents));
   });
 
   // GET /api/tasks/:id — v1 format
