@@ -277,6 +277,7 @@ npm run test:e2e
 ai-net is an open-source project and **contributions are welcome at every level** — from fixing typos to building new agent types.
 
 - Read our **[CONTRIBUTING.md](CONTRIBUTING.md)** for our SDLC, branching rules, Conventional Commits, and review checklists.
+- New contributors: follow the **[Contributor Onboarding Checklist](docs/CONTRIBUTOR_CHECKLIST.md)** — from clone to first merged PR in checklist format.
 - For AI agent contributors, see **[AGENTS.md](AGENTS.md)** for architectural standards and code invariants.
 
 Looking for a place to start? Check [ISSUES.md](ISSUES.md) or browse [good first issues](../../issues?q=label%3A%22good+first+issue%22).
