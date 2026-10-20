@@ -36,6 +36,7 @@ import type { DAGNode } from "../types/task";
 import type { AgentRegistry } from "../types/agent";
 import { agentsRouter } from "./routes/agents";
 import { createAgentDb, getAgentDb } from "../db/agents";
+import { excludeBannedAgents } from "../services/adminPlatform";
 import { healthRouter } from "./routes/health";
 import { metricsRouter } from "./routes/metrics";
 import { createStatsRouter } from "./routes/stats";
@@ -56,6 +57,7 @@ import { requestLogger } from "./middleware/requestLogger";
 import { versioningMiddleware } from "./middleware/versioning";
 import { getOpenapiJson, getOpenapiYaml, openapiSpec, swaggerUiOptions } from "./docs";
 import { createAdminQueueRouter } from "./routes/admin";
+import { createAdminManagementRouter } from "./routes/adminManagement";
 import { createV1TasksRouter } from "./routes/v1/tasks";
 import { createV2TasksRouter } from "./routes/v2/tasks";
 import { createAuthRouter } from "./routes/auth";
@@ -65,6 +67,8 @@ import { type AuthService } from "../services/auth";
 import { createLogger } from "../utils/logger";
 import { AppError } from "../errors";
 import { getConfig } from "../config";
+
+const dispatchLogger = createLogger({ module: "http-dispatch" });
 
 export interface AppOptions {
   dispatch?: DispatchFn;
@@ -217,6 +221,11 @@ export function createApp(opts: AppOptions = {}): {
   // ── Feature-flag admin routes (#425) ───────────────────────────────────────
   app.use("/api/admin/flags", createFlagsRouter());
 
+  // ── Admin platform management (#33) ───────────────────────────────────────
+  // Mounted after /flags so its catch-all /api/admin mount does not shadow the
+  // feature-flag router. All routes enforce the 403 admin-key contract.
+  app.use("/api/admin", adminLimiter.middleware, createAdminManagementRouter());
+
   // ── Versioning lifecycle endpoint (#426) ───────────────────────────────────
   app.use("/api/versions", createVersionsRouter());
 
@@ -312,7 +321,17 @@ function makeHttpDispatch(registry?: AgentRegistry): DispatchFn {
       throw new AppError(`No agent registered for type: ${node.type}`, 500, "AGENT_NOT_FOUND");
     }
 
-    const agent = [...agents].sort((a, b) => a.cost - b.cost)[0];
+    // Admin-banned agents are excluded from all new task assignments (#33).
+    const eligible = excludeBannedAgents(agents);
+    if (eligible.length === 0) {
+      throw new AppError(
+        `All agents for type ${node.type} are banned`,
+        503,
+        "NO_ELIGIBLE_AGENT",
+      );
+    }
+
+    const agent = [...eligible].sort((a, b) => a.cost - b.cost)[0];
     return httpDispatch(agent, node.nodeId, node, context);
   };
 }

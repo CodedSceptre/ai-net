@@ -127,7 +127,7 @@
   "validation.amountPositive": "金额必须大于 0 — 请输入正数。",
   "validation.insufficientBalance": "您的钱包余额不足以完成此交易。请先充值后重试。",
   "validation.promptRequired": "任务描述为必填项 — 请描述您希望智能体网络执行的操作。",
-  "validation.promptTooLong": "任务描述不能超过 2000 个字符 — 请缩短描述内容。",
+  "validation.promptTooLong": "任务描述不能超过 4000 个字符 — 请缩短描述内容。",
   "validation.promptTooShort": "任务描述至少需要 20 个字符 — 请详细描述您的目标。",
   "validation.minBudget": "最低预算为 0.1 XLM — 请输入更高的金额。",
   "validation.agentRequired": "请至少选择一个专业智能体来处理您的任务。",

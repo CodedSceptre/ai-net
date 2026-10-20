@@ -121,22 +121,26 @@ function readPresentedKey(req: Request): string {
  *
  * Accepts `X-Admin-API-Key: <key>` or `Authorization: Bearer <key>`. Unlike
  * {@link authMiddleware}, this middleware **fails closed**: when
- * `ADMIN_API_KEY` is not configured the endpoint responds 503, so an
+ * `ADMIN_API_KEY` is not configured the endpoint still responds 403, so an
  * unconfigured deployment never exposes admin data anonymously.
+ *
+ * Per the admin API contract, every unauthorized response (missing key,
+ * invalid key, or unconfigured server) is a 403 so callers cannot probe
+ * whether the admin surface exists.
  */
 export function adminAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
   const expected = resolveAdminApiKey();
   if (!expected) {
-    res.status(503).json({
-      error: "Admin API not configured",
-      message: "Set ADMIN_API_KEY to enable admin endpoints.",
+    res.status(403).json({
+      error: "Forbidden",
+      message: "Admin API not configured. Set ADMIN_API_KEY to enable admin endpoints.",
     });
     return;
   }
 
   const presented = readPresentedKey(req);
   if (!presented || !timingSafeEquals(presented, expected)) {
-    res.status(401).json({ error: "Unauthorized" });
+    res.status(403).json({ error: "Forbidden" });
     return;
   }
 

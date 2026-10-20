@@ -1998,6 +1998,181 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RateLimitError"
+  /api/admin/stats:
+    get:
+      summary: Platform metrics for administrators
+      description: >
+        Agent counts, task volume by status, and XLM throughput. Requires the
+        admin API key; missing or invalid keys return 403.
+      tags:
+        - Admin
+      security:
+        - adminApiKey: []
+      responses:
+        "200":
+          description: Platform aggregates
+        "403":
+          description: Missing or invalid admin API key
+  /api/admin/tasks:
+    get:
+      summary: List all tasks with filters
+      description: Supports status, wallet, date-range and pagination filters.
+      tags:
+        - Admin
+      security:
+        - adminApiKey: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum:
+              - queued
+              - running
+              - completed
+              - failed
+              - cancelled
+        - in: query
+          name: wallet
+          schema:
+            type: string
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Paginated task list
+        "400":
+          description: Invalid query
+        "403":
+          description: Missing or invalid admin API key
+  "/api/admin/tasks/{id}":
+    delete:
+      summary: Cancel any task
+      description: Force-cancels a task, cancels its queued job, and refunds locked
+        payments where possible.
+      tags:
+        - Admin
+      security:
+        - adminApiKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task cancelled
+        "403":
+          description: Missing or invalid admin API key
+        "404":
+          description: Task not found
+        "409":
+          description: Task already terminal
+  "/api/admin/agents/{id}/ban":
+    post:
+      summary: Ban an agent
+      description: >
+        Marks an agent as banned and offline so it is excluded from new task
+        assignments until unbanned.
+      tags:
+        - Admin
+      security:
+        - adminApiKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 500
+      responses:
+        "200":
+          description: Agent banned
+        "403":
+          description: Missing or invalid admin API key
+        "404":
+          description: Agent not found
+  "/api/admin/agents/{id}/unban":
+    post:
+      summary: Lift an agent ban
+      tags:
+        - Admin
+      security:
+        - adminApiKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent unbanned
+        "403":
+          description: Missing or invalid admin API key
+        "404":
+          description: Agent not found
+  /api/admin/logs:
+    get:
+      summary: Recent error log entries
+      description: In-memory ring buffer of the most recent error/fatal log lines.
+      tags:
+        - Admin
+      security:
+        - adminApiKey: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - in: query
+          name: level
+          schema:
+            type: string
+            enum:
+              - error
+              - fatal
+      responses:
+        "200":
+          description: Recent error log entries (newest first)
+        "400":
+          description: Invalid query
+        "403":
+          description: Missing or invalid admin API key
   "/api/admin/traces/{id}":
     get:
       summary: Retrieve a distributed trace by traceId or requestId

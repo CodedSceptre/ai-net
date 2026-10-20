@@ -127,7 +127,7 @@
   "validation.amountPositive": "Amount must be greater than 0 — enter a positive number.",
   "validation.insufficientBalance": "Your wallet balance is too low for this transaction. Add funds and try again.",
   "validation.promptRequired": "Task description is required — describe what you want the agent network to do.",
-  "validation.promptTooLong": "Task description must be 2000 characters or fewer — shorten your description.",
+  "validation.promptTooLong": "Task description must be 4000 characters or fewer — shorten your description.",
   "validation.promptTooShort": "Task description must be at least 20 characters — describe your goal in detail.",
   "validation.minBudget": "Minimum budget is 0.1 XLM — enter a higher amount.",
   "validation.agentRequired": "Select at least one specialist agent to handle your task.",
