@@ -1264,3 +1264,19 @@ Yes. Both TypeScript and Python examples are provided throughout this guide. The
 ---
 
 *Last updated: September 2026 · Issue [#63](https://github.com/Epta-Node/ai-net/issues/63)*
+
+---
+
+## 11. Cross-Chain Payments and Multi-Chain Agent Identity
+
+ai-net runs natively on Stellar, but agents can accept wrapped assets from other blockchains (ETH, USDC, BTC) via bridge protocols, and can prove their Stellar identity on EVM chains and Solana.
+
+For complete guidance on:
+
+- Supported bridge protocols (Allbridge Core, Stargate roadmap)
+- Wrapped asset trustline setup and WETH payment examples
+- Cross-chain agent identity proofs (bridge_identity / verify_bridge_proof)
+- Finality times, bridging fees, and asset availability
+- Risk warnings: bridge exploits, liquidity risk, slippage, depegging
+
+See the **[Cross-Chain Compatibility and Bridge Integration Guide](../smart-contracts/docs/cross-chain.md)**.
