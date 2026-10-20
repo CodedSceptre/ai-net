@@ -14,6 +14,8 @@ Top-level technical reference for the ai-net platform — a decentralized agent 
 6. [Security Model](#6-security-model)
 7. [Technology Decisions Rationale](#7-technology-decisions-rationale)
 
+> **Detailed sequence diagrams** for all major system flows (task submission, agent registration, bidding, escrow lifecycle, dispute resolution, upgrade flow) are in the dedicated reference: **[Sequence Diagrams →](sequence-diagrams.md)**
+
 ---
 
 ## 1. System Context Diagram (C4 Level 1)
@@ -301,14 +303,14 @@ docker compose up -d
 
 ### 5.1 Where Data Lives
 
-| Data Store | File | Owner | Contents |
-|---|---|---|---|
-| `agents.db` | `<cwd>/agents.db` | backend | Agent registrations, capabilities, reputation |
-| `tasks.db` | `<cwd>/tasks.db` | backend | Tasks, DAG state, quality scores, task events |
-| `payments.db` | `<cwd>/payments.db` | backend | Payment records and escrow status |
-| Docker volume | `sqlite_data:/app/data` | compose | Persistent storage across container restarts |
-| On-chain storage | Stellar ledger | Soroban | Agent registry entries, escrow balances |
-| Registry cache | In-process memory | backend | 30-second TTL cache of on-chain agent data |
+| Data Store       | File                    | Owner   | Contents                                      |
+| ---------------- | ----------------------- | ------- | --------------------------------------------- |
+| `agents.db`      | `<cwd>/agents.db`       | backend | Agent registrations, capabilities, reputation |
+| `tasks.db`       | `<cwd>/tasks.db`        | backend | Tasks, DAG state, quality scores, task events |
+| `payments.db`    | `<cwd>/payments.db`     | backend | Payment records and escrow status             |
+| Docker volume    | `sqlite_data:/app/data` | compose | Persistent storage across container restarts  |
+| On-chain storage | Stellar ledger          | Soroban | Agent registry entries, escrow balances       |
+| Registry cache   | In-process memory       | backend | 30-second TTL cache of on-chain agent data    |
 
 ### 5.2 Data Flow
 
@@ -370,12 +372,12 @@ flowchart LR
 
 ### 6.1 Authentication
 
-| Layer | Mechanism |
-|---|---|
-| Frontend → Backend API | `X-Wallet-Public-Key` header (Stellar public key). Verified against task ownership before streaming. |
-| Agent → Backend API | `Authorization: Bearer <secret>` per agent registration. Secrets are stored as bcrypt hashes. |
-| WebSocket connection | First message must contain `{ walletPublicKey }` matching the task owner. Rejected with close frame `4403` otherwise. |
-| Soroban contracts | `require_auth()` on every mutating invocation. Only the deployer or upgrade manager can upgrade. |
+| Layer                  | Mechanism                                                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Frontend → Backend API | `X-Wallet-Public-Key` header (Stellar public key). Verified against task ownership before streaming.                  |
+| Agent → Backend API    | `Authorization: Bearer <secret>` per agent registration. Secrets are stored as bcrypt hashes.                         |
+| WebSocket connection   | First message must contain `{ walletPublicKey }` matching the task owner. Rejected with close frame `4403` otherwise. |
+| Soroban contracts      | `require_auth()` on every mutating invocation. Only the deployer or upgrade manager can upgrade.                      |
 
 ### 6.2 Authorization
 
@@ -386,13 +388,13 @@ flowchart LR
 
 ### 6.3 Key Management
 
-| Key Type | Storage Recommendation |
-|---|---|
+| Key Type                        | Storage Recommendation                                                  |
+| ------------------------------- | ----------------------------------------------------------------------- |
 | `STELLAR_SECRET_KEY` (deployer) | GitHub Actions secrets for CI/CD. Hardware wallet (Ledger) for mainnet. |
-| `VENICE_API_KEY` | Environment variable. Never logged or returned in API responses. |
-| Agent `stellarPublicKey` | Public — stored in `agents.db` and on-chain registry. |
-| Agent secret | Stored as bcrypt hash in `agents.db`. Never stored in plaintext. |
-| Testnet keys | `.env` file (gitignored). Separate from mainnet keys. |
+| `VENICE_API_KEY`                | Environment variable. Never logged or returned in API responses.        |
+| Agent `stellarPublicKey`        | Public — stored in `agents.db` and on-chain registry.                   |
+| Agent secret                    | Stored as bcrypt hash in `agents.db`. Never stored in plaintext.        |
+| Testnet keys                    | `.env` file (gitignored). Separate from mainnet keys.                   |
 
 **Key rotation:** Rotate `STELLAR_SECRET_KEY` after each mainnet deployment. Rotating the Venice API key requires redeploying the backend with the new value.
 
@@ -450,6 +452,7 @@ Vite provides sub-second HMR and optimized production builds with ES module chun
 
 ## Related Documents
 
+- [Sequence Diagrams](sequence-diagrams.md) — all 6 major system flow sequence diagrams: task submission, agent registration, bidding, payment escrow lifecycle, dispute resolution, and upgrade flow
 - [Payment Flows & Escrow Lifecycle](payment-escrow-lifecycle.md) — detailed payment state machine and reconciliation design
 - [Governance Timelock](governance-timelock.md) — on-chain governance proposal and voting flow
 - [Smart Contract Deployment Guide](../../smart-contracts/docs/DEPLOYMENT_GUIDE.md)
