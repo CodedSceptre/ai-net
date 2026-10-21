@@ -60,6 +60,25 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
 
 export const sessionAuthMiddleware = authMiddleware;
 
+export function requireWalletAuthMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const authorization = req.headers["authorization"] ?? "";
+  const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+  if (!token) {
+    res.status(401).json({ error: "Unauthorized", message: "Bearer JWT required" });
+    return;
+  }
+  try {
+    req.user = getAuthService().verifyAccessToken(token);
+    next();
+  } catch {
+    res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
+  }
+}
+
 /**
  * Optional session auth middleware: extracts user token if present without rejecting unauthenticated requests.
  */

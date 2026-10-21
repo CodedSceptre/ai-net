@@ -38,6 +38,7 @@ import { healthRouter } from "./routes/health";
 import { metricsRouter } from "./routes/metrics";
 import { createStatsRouter } from "./routes/stats";
 import { createReconciliationRouter, type ReconciliationRouterOptions } from "./routes/reconciliation";
+import { requireWalletAuthMiddleware } from "./middleware/auth";
 import {
   rateLimitMiddleware,
   registerRateLimitMiddleware,
@@ -201,6 +202,11 @@ export function createApp(opts: AppOptions = {}): {
   const v2TasksRouter = createV2TasksRouter(dispatch, releasePayment, jobQueue);
 
   app.use("/api/tasks", authedLimiter.middleware, (req, res, next) => {
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+      return requireWalletAuthMiddleware(req, res, next);
+    }
+    next();
+  }, (req, res, next) => {
     const apiVersion = (res.locals.apiVersion as string) || "1.0";
     if (apiVersion.startsWith("1.")) {
       return v1TasksRouter(req, res, next);

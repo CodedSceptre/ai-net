@@ -92,7 +92,7 @@ const envSchema = z.object({
   /** JWT secret key used to sign and verify access tokens. */
   AUTH_JWT_SECRET: z.string().default("ai-net-default-auth-secret-change-in-production"),
   /** Access token validity in seconds. Default: 900 (15 min). */
-  AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(86_400),
   /** Refresh token sliding expiry validity in seconds. Default: 604 800 (7 days). */
   AUTH_REFRESH_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(604_800),
   /** Max absolute session lifetime in seconds. Default: 2 592 000 (30 days). */
