@@ -11,6 +11,7 @@ import { RecentTasksTable } from '../components/dashboard/RecentTasksTable';
 import { useToast } from '../hooks/useToast';
 import { Skeleton, SkeletonAvatar, SkeletonCard, SkeletonTable } from '../components/common/Skeleton';
 import { GlossaryHelp } from '../components/common/HelpIcon';
+import { WelcomeModal } from '../components/onboarding/WelcomeModal';
 import styles from './dashboard.module.css';
 import type { TimePoint, NetworkStats } from '../types/api';
 
@@ -66,6 +67,18 @@ export const DashboardPage: React.FC = () => {
   const { data, loading, error } = useNetworkStats();
   const { showToast } = useToast();
   const { t, i18n } = useTranslation();
+  const [recentTaskCount, setRecentTaskCount] = React.useState<number | null>(null);
+  const [firstDashboardVisit] = React.useState(() => {
+    try {
+      return localStorage.getItem('ai-net:dashboard-visited') !== 'true'
+        && localStorage.getItem('onboarding_dismissed') !== 'true'
+        && localStorage.getItem('onboarding_completed') !== 'true';
+    } catch { return false; }
+  });
+
+  React.useEffect(() => {
+    try { localStorage.setItem('ai-net:dashboard-visited', 'true'); } catch { /* Storage is optional. */ }
+  }, []);
 
   React.useEffect(() => {
     if (error) {
@@ -126,8 +139,12 @@ export const DashboardPage: React.FC = () => {
       </section>
       <section className={styles.recentTasks}>
         <h2 className={styles.heading}>{t('page.dashboard.recentTasks')}</h2>
-        <RecentTasksTable walletAddress={address ?? ''} loading={loading} />
+        <RecentTasksTable walletAddress={address ?? ''} loading={loading} onTasksLoaded={setRecentTaskCount} />
       </section>
+      <WelcomeModal
+        open={firstDashboardVisit && recentTaskCount === 0}
+        onDismiss={() => setRecentTaskCount(null)}
+      />
     </DashboardLayout>
   );
 };
