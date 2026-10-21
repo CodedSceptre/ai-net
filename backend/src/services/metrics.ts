@@ -703,6 +703,7 @@ export class MetricsService {
   private veniceCallsByAgentType = new Map<string, number>();
   /** stellar_transactions_total by type — key: type, value: count. */
   private stellarTransactionsByType = new Map<string, number>();
+  private stellarSequenceConflictsTotal = 0;
   /** active_websocket_connections gauge — live count set externally. */
   private activeWsConnections = 0;
   /** agent_health_status by agent_id — key: agentId, value: 1|0. */
@@ -776,6 +777,10 @@ export class MetricsService {
   recordStellarTransaction(type: string): void {
     const key = type || "unknown";
     this.stellarTransactionsByType.set(key, (this.stellarTransactionsByType.get(key) ?? 0) + 1);
+  }
+
+  recordStellarSequenceConflict(): void {
+    this.stellarSequenceConflictsTotal += 1;
   }
 
   /** Set active WebSocket connections gauge (called by stream layer). */
@@ -906,6 +911,11 @@ export class MetricsService {
       }
     }
 
+    lines.push("");
+    lines.push("# HELP stellar_seq_conflicts_total Total Stellar sequence number conflicts");
+    lines.push("# TYPE stellar_seq_conflicts_total counter");
+    lines.push(`stellar_seq_conflicts_total ${this.stellarSequenceConflictsTotal}`);
+
     // ── 8. active_websocket_connections gauge ─────────────────────────────────
     // Prefer the live probe result from the stream layer; fall back to our counter.
     const wsProbeResult = this.webSocketProbe?.();
@@ -970,6 +980,7 @@ export class MetricsService {
     this.tasksFailedByReason.clear();
     this.veniceCallsByAgentType.clear();
     this.stellarTransactionsByType.clear();
+    this.stellarSequenceConflictsTotal = 0;
     this.activeWsConnections = 0;
     this.agentHealthStatuses.clear();
     this.resetCache();
