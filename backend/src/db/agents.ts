@@ -35,6 +35,26 @@ export interface AgentCursorOptions {
   status?: string;
 }
 
+export interface AgentRegistrationDraft {
+  draftId: string;
+  agentId: string;
+  stellarPublicKey: string;
+  capabilities?: string[];
+  pricingXLM?: number;
+  endpoint?: string;
+  createdAt: string;
+  lastActivityAt: string;
+  expiresAt: string;
+}
+
+export interface AgentRegistrationDraftStore {
+  create(draft: AgentRegistrationDraft): void;
+  find(draftId: string, now?: string): AgentRegistrationDraft | undefined;
+  update(draft: AgentRegistrationDraft): void;
+  delete(draftId: string): void;
+  deleteExpired(now?: string): number;
+}
+
 let _agentPool: SqlitePool | null = null;
 
 export function ensureAgentTable(db: Database.Database): void {
@@ -71,6 +91,67 @@ export function ensureAgentTable(db: Database.Database): void {
     }
   }
   db.exec("UPDATE agents SET last_seen_at = CAST(strftime('%s', lastSeenAt) AS INTEGER) WHERE last_seen_at = 0");
+}
+
+export function createAgentRegistrationDraftStore(
+  db: Database.Database,
+): AgentRegistrationDraftStore {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_registration_drafts (
+      draftId TEXT PRIMARY KEY,
+      agentId TEXT NOT NULL,
+      stellarPublicKey TEXT NOT NULL,
+      capabilities TEXT,
+      pricingXLM REAL,
+      endpoint TEXT,
+      createdAt TEXT NOT NULL,
+      lastActivityAt TEXT NOT NULL,
+      expiresAt TEXT NOT NULL
+    )
+  `);
+
+  const read = (row: any): AgentRegistrationDraft | undefined => row && ({
+    ...row,
+    capabilities: row.capabilities ? JSON.parse(row.capabilities) : undefined,
+  });
+
+  return {
+    create(draft): void {
+      db.prepare(`
+        INSERT INTO agent_registration_drafts
+          (draftId, agentId, stellarPublicKey, createdAt, lastActivityAt, expiresAt)
+        VALUES (@draftId, @agentId, @stellarPublicKey, @createdAt, @lastActivityAt, @expiresAt)
+      `).run(draft);
+    },
+
+    find(draftId, now = new Date().toISOString()): AgentRegistrationDraft | undefined {
+      db.prepare("DELETE FROM agent_registration_drafts WHERE expiresAt <= ?").run(now);
+      const row = db.prepare(
+        "SELECT * FROM agent_registration_drafts WHERE draftId = ?",
+      ).get(draftId);
+      return read(row);
+    },
+
+    update(draft): void {
+      db.prepare(`
+        UPDATE agent_registration_drafts
+        SET capabilities = @capabilities, pricingXLM = @pricingXLM,
+            endpoint = @endpoint, lastActivityAt = @lastActivityAt, expiresAt = @expiresAt
+        WHERE draftId = @draftId
+      `).run({
+        ...draft,
+        capabilities: draft.capabilities ? JSON.stringify(draft.capabilities) : null,
+      });
+    },
+
+    delete(draftId): void {
+      db.prepare("DELETE FROM agent_registration_drafts WHERE draftId = ?").run(draftId);
+    },
+
+    deleteExpired(now = new Date().toISOString()): number {
+      return db.prepare("DELETE FROM agent_registration_drafts WHERE expiresAt <= ?").run(now).changes;
+    },
+  };
 }
 
 /** Lazily open (or reopen) the pooled agent database. */

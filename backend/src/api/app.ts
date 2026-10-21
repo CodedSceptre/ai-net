@@ -34,6 +34,7 @@ import {
 import type { DAGNode } from "../types/task";
 import type { AgentRegistry } from "../types/agent";
 import { agentsRouter } from "./routes/agents";
+import { createAgentOnboardingRouter, type AgentOnboardingOptions } from "./routes/agentOnboarding";
 import { healthRouter } from "./routes/health";
 import { metricsRouter } from "./routes/metrics";
 import { createStatsRouter } from "./routes/stats";
@@ -78,6 +79,8 @@ export interface AppOptions {
   jobWorker?: JobWorker;
   /** Custom auth service instance */
   authService?: AuthService;
+  /** Soroban registration hook used by the guided agent onboarding flow. */
+  agentOnboarding?: AgentOnboardingOptions;
   /** Enable background queue worker (default: true) */
   enableQueueWorker?: boolean;
   /**
@@ -194,6 +197,8 @@ export function createApp(opts: AppOptions = {}): {
   // ── Agent routes ───────────────────────────────────────────────────────────
   app.use("/api/agents", publicLimiter.middleware);
   app.post("/api/agents/register", registerRateLimitMiddleware);
+  app.post("/api/agents/onboarding/start", registerRateLimitMiddleware);
+  app.use("/api/agents/onboarding", createAgentOnboardingRouter(opts.agentOnboarding));
   app.use("/api/agents", agentsRouter);
 
   // ── Task routes ────────────────────────────────────────────────────────────
