@@ -27,6 +27,7 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      migrations: ${{ steps.filter.outputs.migrations }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -43,6 +44,12 @@ jobs:
               - '.github/workflows/ci.yml'
             frontend:
               - 'frontend/**'
+              - '.github/workflows/ci.yml'
+            migrations:
+              - 'backend/src/db/migrations/**'
+              - 'backend/src/db/migrator.ts'
+              - 'backend/src/db/migrator.migration.test.ts'
+              - 'backend/jest.migrations.config.js'
               - '.github/workflows/ci.yml'
 
   backend:
@@ -77,6 +84,34 @@ jobs:
 
       - name: Performance latency budgets
         run: npm run test:performance
+
+  migration-rollback:
+    name: migration-rollback
+    needs: [changes]
+    # Run on every PR that touches migration files, migration tests, or the
+    # migrator itself; always run on push/main and manual dispatches.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.migrations == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run down migration tests (real SQLite, no mock)
+        run: npm run test:migrations
 
   frontend:
     name: frontend
@@ -453,7 +488,7 @@ jobs:
   ci-gate:
     name: ci-gate (required)
     if: always()
-    needs: [backend, frontend, contracts, e2e-backend-smoke, e2e-backend-heavy, e2e-frontend-smoke, e2e-frontend-heavy]
+    needs: [backend, frontend, contracts, e2e-backend-smoke, e2e-backend-heavy, e2e-frontend-smoke, e2e-frontend-heavy, migration-rollback]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -466,6 +501,7 @@ jobs:
           echo "e2e-backend-heavy: ${{ needs.e2e-backend-heavy.result }}"
           echo "e2e-frontend-smoke: ${{ needs.e2e-frontend-smoke.result }}"
           echo "e2e-frontend-heavy: ${{ needs.e2e-frontend-heavy.result }}"
+          echo "migration-rollback: ${{ needs.migration-rollback.result }}"
 
           fail=0
           for job in "${{ needs.backend.result }}" "${{ needs.frontend.result }}" "${{ needs.contracts.result }}"; do
@@ -474,7 +510,7 @@ jobs:
               fail=1
             fi
           done
-          for job in "${{ needs.e2e-backend-smoke.result }}" "${{ needs.e2e-backend-heavy.result }}" "${{ needs.e2e-frontend-smoke.result }}" "${{ needs.e2e-frontend-heavy.result }}"; do
+          for job in "${{ needs.e2e-backend-smoke.result }}" "${{ needs.e2e-backend-heavy.result }}" "${{ needs.e2e-frontend-smoke.result }}" "${{ needs.e2e-frontend-heavy.result }}" "${{ needs.migration-rollback.result }}"; do
             if [[ "$job" == "failure" || "$job" == "cancelled" ]]; then
               echo "❌ E2E job failed: $job"
               fail=1
