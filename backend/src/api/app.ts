@@ -109,6 +109,10 @@ export function createApp(opts: AppOptions = {}): {
   const app = express();
   const httpServer = createServer(app);
 
+  if (config.NODE_ENV !== "test") {
+    void eventBus.connectRedis(config.REDIS_URL);
+  }
+
   app.use(express.json());
   app.use((_req, res, next) => {
     if (config.NODE_ENV === "production") {
@@ -256,6 +260,7 @@ export function createApp(opts: AppOptions = {}): {
   function close(callback?: () => void): void {
     jobWorker.stop(opts.jobWorkerStopTimeoutMs ?? 10_000).finally(() => {
       heartbeatService.stop();
+      eventBus.disconnectRedis();
       metricsService.setWebSocketProbe(null);
       detachStream();
       if (httpServer.listening) {
