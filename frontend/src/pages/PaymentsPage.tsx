@@ -3,6 +3,7 @@ import { CreditCard, Download, RefreshCw, ExternalLink } from 'lucide-react'
 import { useWallet } from '../context/WalletContext'
 import { usePayments, type PaymentRow } from '../hooks/usePayments'
 import { Skeleton } from '../components/common/Skeleton'
+import { PaymentFeedback } from '../components/wallet/PaymentFeedback'
 import styles from './PaymentsPage.module.css'
 
 const ITEMS_PER_PAGE = 20
@@ -125,6 +126,8 @@ function PaymentsPage() {
           </button>
         </div>
       </div>
+
+      <PaymentFeedback />
 
       {/* ── Filters ────────────────────────────────────────────────────── */}
       <div className={styles.filters} role="search" aria-label="Filter payments">

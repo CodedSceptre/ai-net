@@ -9,6 +9,7 @@ import { useTransactionHistory } from '../hooks/useTransactionHistory'
 import { SendXLMForm } from '../components/wallet/SendXLMForm'
 import { PaymentChart } from '../components/wallet/PaymentChart'
 import { TransactionTable } from '../components/wallet/TransactionTable'
+import { PaymentFeedback } from '../components/wallet/PaymentFeedback'
 import { WalletWizard } from '../components/wallet/WalletWizard'
 import { Skeleton, SkeletonAvatar, SkeletonCard, SkeletonText } from '../components/common/Skeleton'
 import { ConfirmDialog } from '../components/common/ConfirmDialog'
@@ -349,6 +350,8 @@ function WalletPage() {
           {t('nav.wallet')}
         </h1>
       </div>
+
+      <PaymentFeedback />
 
       {/* Balance Card */}
       <div className={styles.balanceCard}>
