@@ -54,6 +54,7 @@ import { requestLogger } from "./middleware/requestLogger";
 import { versioningMiddleware } from "./middleware/versioning";
 import { getOpenapiJson, getOpenapiYaml, openapiSpec, swaggerUiOptions } from "./docs";
 import { createAdminQueueRouter } from "./routes/admin";
+import { createEventsRouter } from "./routes/events";
 import { createV1TasksRouter } from "./routes/v1/tasks";
 import { createV2TasksRouter } from "./routes/v2/tasks";
 import { createAuthRouter } from "./routes/auth";
@@ -108,6 +109,7 @@ export function createApp(opts: AppOptions = {}): {
   const logger = createLogger({ module: "api-app" });
   const app = express();
   const httpServer = createServer(app);
+  const eventStore: EventStore = opts.eventStore ?? eventBus.store ?? createEventStore();
 
   app.use(express.json());
   app.use((_req, res, next) => {
@@ -191,6 +193,9 @@ export function createApp(opts: AppOptions = {}): {
   // ── Auth routes ────────────────────────────────────────────────────────────
   app.use("/api/auth", createAuthRouter(opts.authService));
 
+  // ── Admin event replay ─────────────────────────────────────────────────────
+  app.use("/api/events", adminLimiter.middleware, createEventsRouter(eventStore));
+
   // ── Agent routes ───────────────────────────────────────────────────────────
   app.use("/api/agents", publicLimiter.middleware);
   app.post("/api/agents/register", registerRateLimitMiddleware);
@@ -235,7 +240,6 @@ export function createApp(opts: AppOptions = {}): {
   app.use(errorHandler);
 
   // ── WebSocket task stream ──────────────────────────────────────────────────
-  const eventStore: EventStore = opts.eventStore ?? createEventStore();
   const detachStream = attachTaskStream({
     httpServer,
     eventStore,
