@@ -23,6 +23,7 @@ import { PerformanceObserver } from "perf_hooks";
 import { getConfig } from "../config";
 import { createLogger } from "../utils/logger";
 import { getCacheMetrics } from "../cache/metrics";
+import { databasePoolMetrics } from "../db/metrics";
 import type {
   AgentMetrics,
   CpuMetrics,
@@ -828,6 +829,7 @@ export class MetricsService {
     }
 
     const lines: string[] = [];
+    const poolMetrics = databasePoolMetrics();
 
     // ── 1. http_requests_total{method,path,status} ───────────────────────────
     lines.push("# HELP http_requests_total Total number of HTTP requests by method, path and status");
@@ -926,6 +928,31 @@ export class MetricsService {
       for (const [agentId, status] of this.agentHealthStatuses.entries()) {
         lines.push(`agent_health_status{agent_id="${agentId}"} ${status}`);
       }
+    }
+
+    // ── SQLite connection pool health ───────────────────────────────────────
+    lines.push("");
+    lines.push("# HELP db_pool_active_connections Active SQLite reader connections");
+    lines.push("# TYPE db_pool_active_connections gauge");
+    lines.push("# HELP db_pool_idle_connections Idle SQLite reader connections");
+    lines.push("# TYPE db_pool_idle_connections gauge");
+    lines.push("# HELP db_pool_waiting_queue_size Callers waiting for an SQLite reader");
+    lines.push("# TYPE db_pool_waiting_queue_size gauge");
+    lines.push("# HELP db_pool_acquire_wait_seconds SQLite reader acquisition wait time");
+    lines.push("# TYPE db_pool_acquire_wait_seconds histogram");
+    for (const [database, pool] of Object.entries(poolMetrics)) {
+      const labels = `{database="${database}"}`;
+      lines.push(`db_pool_active_connections${labels} ${pool.activeConnections}`);
+      lines.push(`db_pool_idle_connections${labels} ${pool.idleConnections}`);
+      lines.push(`db_pool_waiting_queue_size${labels} ${pool.pendingAcquires}`);
+      let cumulative = 0;
+      for (const [bound, count] of Object.entries(pool.acquireWaitBuckets)) {
+        cumulative = count;
+        lines.push(`db_pool_acquire_wait_seconds_bucket{database="${database}",le="${bound}"} ${cumulative}`);
+      }
+      lines.push(`db_pool_acquire_wait_seconds_bucket{database="${database}",le="+Inf"} ${pool.acquireWaitCount}`);
+      lines.push(`db_pool_acquire_wait_seconds_sum${labels} ${pool.acquireWaitSumSeconds}`);
+      lines.push(`db_pool_acquire_wait_seconds_count${labels} ${pool.acquireWaitCount}`);
     }
 
     // ── Legacy metric families (keep for backward compat with existing dashboard) ──

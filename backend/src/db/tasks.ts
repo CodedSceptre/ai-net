@@ -6,6 +6,7 @@ import { createLogger } from "../utils/logger";
 import { migrateToLatest } from "./migrator";
 import { createPool, type SqlitePool } from "./pool";
 import { decodeCursor, encodeCursor, type CursorPage } from "./cursor";
+import { poolSettings } from "./poolConfig";
 
 const logger = createLogger({ component: "task-db" });
 const MIGRATIONS_DIR = path.join(__dirname, "migrations", "tasks");
@@ -18,9 +19,7 @@ export function getTaskPool(dbPath?: string): SqlitePool {
     const filePath = dbPath ?? path.join(process.cwd(), "tasks.db");
     _taskPool = createPool({
       filePath,
-      min: 1,
-      max: 4,
-      acquireTimeoutMs: 5_000,
+      ...poolSettings(),
       onCreate: (db) => {
         try {
           (db as any).on("error", (err: Error) => {

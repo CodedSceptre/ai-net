@@ -5,6 +5,7 @@ import type { ReputationBreakdown } from "../services/qualityScorer.types";
 import { createPool, type SqlitePool } from "./pool";
 import { decodeCursor, encodeCursor, type CursorPage } from "./cursor";
 import { createErrorRegistryStore, getErrorDb } from "./errorRegistry";
+import { poolSettings } from "./poolConfig";
 
 const MIGRATIONS_DIR = path.join(__dirname, "migrations", "agents");
 
@@ -79,9 +80,7 @@ export function getAgentPool(dbPath?: string): SqlitePool {
     const filePath = dbPath ?? path.join(process.cwd(), "agents.db");
     _agentPool = createPool({
       filePath,
-      min: 1,
-      max: 4,
-      acquireTimeoutMs: 5_000,
+      ...poolSettings(),
       onCreate: (db) => {
         migrateToLatest(db, MIGRATIONS_DIR);
       },

@@ -3,6 +3,7 @@ import path from "path";
 import { createLogger } from "../utils/logger";
 import { migrateToLatest } from "./migrator";
 import { createPool, type SqlitePool } from "./pool";
+import { poolSettings } from "./poolConfig";
 
 const MIGRATIONS_DIR = path.join(__dirname, "migrations", "payments");
 
@@ -48,9 +49,7 @@ export function getPaymentPool(dbPath?: string): SqlitePool {
     const filePath = dbPath ?? path.join(process.cwd(), "payments.db");
     _pool = createPool({
       filePath,
-      min: 1,
-      max: 4,
-      acquireTimeoutMs: 5_000,
+      ...poolSettings(),
       onCreate: (db) => {
         (db as unknown as { on: (event: string, fn: (error: Error) => void) => void }).on(
           "error",
