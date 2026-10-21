@@ -1,0 +1,758 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# staging-deploy.yml — Canary deployment workflow for the backend service
+#
+# Deployment lifecycle
+# ────────────────────
+# 1. Build & push Docker image tagged with the commit SHA.
+# 2. Update the canary ECS service with the new image (10 % traffic).
+# 3. Monitor canary health every 60 s for up to 10 minutes:
+#    • ALB 5xx rate on the canary target group
+#    • ALB p99 latency on the canary target group
+#    • ECS unhealthy host count
+#    • CloudWatch composite canary alarm state
+# 4a. If all checks pass for the full observation window → promote:
+#    – Shift canary weight to 100 %, stable to 0 %.
+#    – Update the stable task definition & service to the new image.
+#    – Reset weights to 90 % stable / 10 % canary for the next deploy.
+#    – Scale the canary service back to its standby count.
+# 4b. If any check fails → rollback:
+#    – Shift stable weight to 100 %, canary to 0 %.
+#    – Restore the canary service to its previous task definition.
+#
+# Manual overrides
+# ────────────────
+# workflow_dispatch inputs allow operators to immediately promote or rollback
+# without waiting for the health poll window.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: staging-deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "infra/**"
+      - ".github/workflows/staging-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Manual override action"
+        required: true
+        type: choice
+        options:
+          - deploy         # standard canary deploy (default for push trigger)
+          - promote        # immediately promote current canary to 100 % stable
+          - rollback       # immediately roll back canary to previous stable
+      image_tag:
+        description: "Docker image tag to deploy (defaults to latest main commit SHA). Ignored for promote/rollback."
+        required: false
+        type: string
+
+concurrency:
+  # Only one deploy at a time — queues behind rather than cancels so that
+  # a manual rollback is not interrupted by an in-flight push-triggered deploy.
+  group: staging-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # needed for OIDC-based AWS credential exchange
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared environment
+# ─────────────────────────────────────────────────────────────────────────────
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'ai-net-backend' }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER || 'ai-net-staging-cluster' }}
+  STABLE_SERVICE: ${{ vars.STABLE_SERVICE || 'ai-net-staging-stable' }}
+  CANARY_SERVICE: ${{ vars.CANARY_SERVICE || 'ai-net-staging-canary' }}
+  ALB_ARN: ${{ vars.ALB_ARN }}
+  HTTP_LISTENER_ARN: ${{ vars.HTTP_LISTENER_ARN }}
+  HTTPS_LISTENER_ARN: ${{ vars.HTTPS_LISTENER_ARN }}
+  STABLE_TG_ARN: ${{ vars.STABLE_TG_ARN }}
+  CANARY_TG_ARN: ${{ vars.CANARY_TG_ARN }}
+  ALB_ARN_SUFFIX: ${{ vars.ALB_ARN_SUFFIX }}
+  STABLE_TG_ARN_SUFFIX: ${{ vars.STABLE_TG_ARN_SUFFIX }}
+  CANARY_TG_ARN_SUFFIX: ${{ vars.CANARY_TG_ARN_SUFFIX }}
+  CANARY_5XX_ALARM: ${{ vars.CANARY_5XX_ALARM || 'ai-net-staging-canary-5xx-rate' }}
+  CANARY_UNHEALTHY_ALARM: ${{ vars.CANARY_UNHEALTHY_ALARM || 'ai-net-staging-canary-unhealthy-hosts' }}
+
+  # Traffic weights
+  STABLE_WEIGHT_NORMAL: "90"
+  CANARY_WEIGHT_NORMAL: "10"
+  STABLE_WEIGHT_ROLLBACK: "100"
+  CANARY_WEIGHT_ROLLBACK: "0"
+  STABLE_WEIGHT_PROMOTE: "0"
+  CANARY_WEIGHT_PROMOTE: "100"
+
+  # Health-check poll settings
+  HEALTH_POLL_INTERVAL_SECONDS: "60"
+  HEALTH_POLL_MAX_ATTEMPTS: "10"   # 10 × 60 s = 10 min observation window
+  # Rollback threshold: canary 5xx rate (requests/min) that is ≥ 2 × stable rate
+  ERROR_RATE_MULTIPLIER: "2"
+  # Absolute 5xx/min ceiling regardless of stable rate
+  ABSOLUTE_5XX_CEILING: "10"
+  # p99 latency ceiling in milliseconds
+  P99_LATENCY_CEILING_MS: "2000"
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Resolve action — normalise push vs. workflow_dispatch trigger
+  # ───────────────────────────────────────────────────────────────────────────
+  resolve-action:
+    name: resolve-action
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      action: ${{ steps.resolve.outputs.action }}
+      image_tag: ${{ steps.resolve.outputs.image_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Resolve action and image tag
+        id: resolve
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ACTION="${{ github.event.inputs.action }}"
+            IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+            if [[ -z "$IMAGE_TAG" ]]; then
+              IMAGE_TAG="${{ github.sha }}"
+            fi
+          else
+            ACTION="deploy"
+            IMAGE_TAG="${{ github.sha }}"
+          fi
+
+          echo "action=$ACTION" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved action=$ACTION image_tag=$IMAGE_TAG"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Build — compile, test, and push the Docker image to ECR
+  # ───────────────────────────────────────────────────────────────────────────
+  build:
+    name: build-and-push
+    needs: [resolve-action]
+    if: needs.resolve-action.outputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    outputs:
+      image_uri: ${{ steps.build.outputs.image_uri }}
+      image_tag: ${{ needs.resolve-action.outputs.image_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Unit tests
+        run: npm run test:coverage
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ needs.resolve-action.outputs.image_tag }}
+        run: |
+          IMAGE_URI="${REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          docker build \
+            --build-arg DEPLOY_SLOT=canary \
+            --label "git.sha=${{ github.sha }}" \
+            --label "deploy.slot=canary" \
+            -t "$IMAGE_URI" \
+            -f Dockerfile \
+            ..
+          docker push "$IMAGE_URI"
+          echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          echo "Built and pushed $IMAGE_URI"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Deploy canary — update the canary ECS service (10 % traffic)
+  # ───────────────────────────────────────────────────────────────────────────
+  deploy-canary:
+    name: deploy-canary
+    needs: [resolve-action, build]
+    if: needs.resolve-action.outputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      previous_stable_task_def: ${{ steps.save-stable.outputs.task_def_arn }}
+      previous_canary_task_def: ${{ steps.save-canary.outputs.task_def_arn }}
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ── Save current task definitions for potential rollback ──────────────
+      - name: Save current stable task definition ARN
+        id: save-stable
+        run: |
+          TASK_DEF_ARN=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$STABLE_SERVICE" \
+            --query 'services[0].taskDefinition' \
+            --output text)
+          echo "task_def_arn=${TASK_DEF_ARN}" >> "$GITHUB_OUTPUT"
+          echo "Stable task def: $TASK_DEF_ARN"
+
+      - name: Save current canary task definition ARN
+        id: save-canary
+        run: |
+          TASK_DEF_ARN=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$CANARY_SERVICE" \
+            --query 'services[0].taskDefinition' \
+            --output text)
+          echo "task_def_arn=${TASK_DEF_ARN}" >> "$GITHUB_OUTPUT"
+          echo "Canary task def: $TASK_DEF_ARN"
+
+      # ── Register new canary task definition ──────────────────────────────
+      - name: Register new canary task definition
+        id: register-canary-task
+        env:
+          IMAGE_URI: ${{ needs.build.outputs.image_uri }}
+        run: |
+          # Fetch the current canary task definition JSON as a template
+          CURRENT_TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition "${ECS_CLUSTER}-canary" \
+            --query 'taskDefinition' \
+            --output json)
+
+          # Swap the container image and set DEPLOY_SLOT=canary
+          NEW_TASK_DEF=$(echo "$CURRENT_TASK_DEF" | jq \
+            --arg image "$IMAGE_URI" \
+            --arg sha "${{ github.sha }}" \
+            '.containerDefinitions[0].image = $image
+            | .containerDefinitions[0].environment = (
+                (.containerDefinitions[0].environment // [])
+                | map(select(.name != "APP_VERSION" and .name != "DEPLOY_SLOT"))
+                + [
+                    {"name": "APP_VERSION", "value": $sha},
+                    {"name": "DEPLOY_SLOT",  "value": "canary"}
+                  ]
+              )
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                  .placementConstraints, .compatibilities, .registeredAt,
+                  .registeredBy)')
+
+          NEW_TASK_DEF_ARN=$(echo "$NEW_TASK_DEF" | \
+            aws ecs register-task-definition --cli-input-json /dev/stdin \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "new_task_def_arn=${NEW_TASK_DEF_ARN}" >> "$GITHUB_OUTPUT"
+          echo "Registered new canary task def: $NEW_TASK_DEF_ARN"
+
+      # ── Update canary service with the new task definition ───────────────
+      - name: Update canary ECS service
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$CANARY_SERVICE" \
+            --task-definition "${{ steps.register-canary-task.outputs.new_task_def_arn }}" \
+            --desired-count 1 \
+            --force-new-deployment \
+            --output json > /dev/null
+          echo "Canary service update triggered."
+
+      # ── Set listener weights to 90/10 ────────────────────────────────────
+      - name: Set ALB listener weights (stable=90 canary=10)
+        run: |
+          # Update the HTTP listener
+          aws elbv2 modify-listener \
+            --listener-arn "$HTTP_LISTENER_ARN" \
+            --default-actions \
+              "Type=forward,ForwardConfig={TargetGroups=[{TargetGroupArn=${STABLE_TG_ARN},Weight=${STABLE_WEIGHT_NORMAL}},{TargetGroupArn=${CANARY_TG_ARN},Weight=${CANARY_WEIGHT_NORMAL}}]}"
+
+          # Update the HTTPS listener if configured
+          if [[ -n "$HTTPS_LISTENER_ARN" ]]; then
+            aws elbv2 modify-listener \
+              --listener-arn "$HTTPS_LISTENER_ARN" \
+              --default-actions \
+                "Type=forward,ForwardConfig={TargetGroups=[{TargetGroupArn=${STABLE_TG_ARN},Weight=${STABLE_WEIGHT_NORMAL}},{TargetGroupArn=${CANARY_TG_ARN},Weight=${CANARY_WEIGHT_NORMAL}}]}"
+          fi
+
+          echo "Traffic split: stable=${STABLE_WEIGHT_NORMAL}% canary=${CANARY_WEIGHT_NORMAL}%"
+
+      # ── Wait for canary service to reach steady state ────────────────────
+      - name: Wait for canary service to stabilise
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 8
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            aws ecs wait services-stable \
+              --cluster "$ECS_CLUSTER" \
+              --services "$CANARY_SERVICE"
+
+      - name: Annotate job summary — canary deployed
+        run: |
+          {
+            echo "### 🐤 Canary deployed"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Image | \`${{ needs.build.outputs.image_uri }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Traffic split | Stable **${STABLE_WEIGHT_NORMAL}%** / Canary **${CANARY_WEIGHT_NORMAL}%** |"
+            echo "| Observation window | $((HEALTH_POLL_INTERVAL_SECONDS * HEALTH_POLL_MAX_ATTEMPTS / 60)) minutes |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Monitor canary — poll CloudWatch metrics for the observation window
+  # ───────────────────────────────────────────────────────────────────────────
+  monitor-canary:
+    name: monitor-canary
+    needs: [resolve-action, build, deploy-canary]
+    if: needs.resolve-action.outputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      decision: ${{ steps.health-check.outputs.decision }}
+      failure_reason: ${{ steps.health-check.outputs.failure_reason }}
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Poll canary health metrics
+        id: health-check
+        run: |
+          set -euo pipefail
+
+          POLL_INTERVAL="${HEALTH_POLL_INTERVAL_SECONDS}"
+          MAX_ATTEMPTS="${HEALTH_POLL_MAX_ATTEMPTS}"
+          PASS_COUNT=0
+          FAIL_COUNT=0
+          FAILURE_REASON=""
+          END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          echo "Starting canary health poll — ${MAX_ATTEMPTS} checks × ${POLL_INTERVAL}s = $((MAX_ATTEMPTS * POLL_INTERVAL / 60)) min window"
+
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            echo ""
+            echo "── Health check ${attempt}/${MAX_ATTEMPTS} ─────────────────────"
+
+            START_TIME=$(date -u -d "-${POLL_INTERVAL} seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+              || date -u -v"-${POLL_INTERVAL}S" +%Y-%m-%dT%H:%M:%SZ)
+
+            # ── CloudWatch composite alarm state ──────────────────────────
+            ALARM_STATE=$(aws cloudwatch describe-alarms \
+              --alarm-names "$CANARY_5XX_ALARM" "$CANARY_UNHEALTHY_ALARM" \
+              --query 'MetricAlarms[].StateValue' \
+              --output text)
+
+            if echo "$ALARM_STATE" | grep -q "ALARM"; then
+              FAIL_COUNT=$((FAIL_COUNT + 1))
+              FAILURE_REASON="CloudWatch alarm in ALARM state: ${ALARM_STATE}"
+              echo "❌ ALARM state detected: $ALARM_STATE"
+            else
+              echo "✅ CloudWatch alarms: $ALARM_STATE"
+            fi
+
+            # ── Canary 5xx count (last period) ────────────────────────────
+            CANARY_5XX=$(aws cloudwatch get-metric-statistics \
+              --namespace "AWS/ApplicationELB" \
+              --metric-name "HTTPCode_Target_5XX_Count" \
+              --dimensions \
+                "Name=LoadBalancer,Value=${ALB_ARN_SUFFIX}" \
+                "Name=TargetGroup,Value=${CANARY_TG_ARN_SUFFIX}" \
+              --start-time "$START_TIME" \
+              --end-time "$END_TIME" \
+              --period "$POLL_INTERVAL" \
+              --statistics Sum \
+              --query 'Datapoints[0].Sum' \
+              --output text 2>/dev/null || echo "0")
+            CANARY_5XX="${CANARY_5XX:-0}"
+            # Replace 'None' (no datapoints) with 0
+            [[ "$CANARY_5XX" == "None" ]] && CANARY_5XX=0
+
+            # ── Stable 5xx count (last period) ────────────────────────────
+            STABLE_5XX=$(aws cloudwatch get-metric-statistics \
+              --namespace "AWS/ApplicationELB" \
+              --metric-name "HTTPCode_Target_5XX_Count" \
+              --dimensions \
+                "Name=LoadBalancer,Value=${ALB_ARN_SUFFIX}" \
+                "Name=TargetGroup,Value=${STABLE_TG_ARN_SUFFIX}" \
+              --start-time "$START_TIME" \
+              --end-time "$END_TIME" \
+              --period "$POLL_INTERVAL" \
+              --statistics Sum \
+              --query 'Datapoints[0].Sum' \
+              --output text 2>/dev/null || echo "0")
+            STABLE_5XX="${STABLE_5XX:-0}"
+            [[ "$STABLE_5XX" == "None" ]] && STABLE_5XX=0
+
+            echo "5xx counts — canary=${CANARY_5XX} stable=${STABLE_5XX}"
+
+            # Rollback condition: canary 5xx ≥ 2× stable 5xx (or absolute ceiling)
+            ROLLBACK_THRESHOLD=$(echo "$STABLE_5XX * $ERROR_RATE_MULTIPLIER" | bc -l 2>/dev/null || echo "$ABSOLUTE_5XX_CEILING")
+            # Ensure threshold is at least the absolute ceiling
+            if (( $(echo "$ROLLBACK_THRESHOLD < $ABSOLUTE_5XX_CEILING" | bc -l) )); then
+              ROLLBACK_THRESHOLD="$ABSOLUTE_5XX_CEILING"
+            fi
+
+            if (( $(echo "$CANARY_5XX > $ROLLBACK_THRESHOLD" | bc -l) )); then
+              FAIL_COUNT=$((FAIL_COUNT + 1))
+              FAILURE_REASON="Canary 5xx (${CANARY_5XX}) exceeded ${ERROR_RATE_MULTIPLIER}× stable (${STABLE_5XX}) — threshold ${ROLLBACK_THRESHOLD}"
+              echo "❌ Error rate breach: $FAILURE_REASON"
+            fi
+
+            # ── Canary p99 latency ─────────────────────────────────────────
+            CANARY_P99=$(aws cloudwatch get-metric-statistics \
+              --namespace "AWS/ApplicationELB" \
+              --metric-name "TargetResponseTime" \
+              --dimensions \
+                "Name=LoadBalancer,Value=${ALB_ARN_SUFFIX}" \
+                "Name=TargetGroup,Value=${CANARY_TG_ARN_SUFFIX}" \
+              --start-time "$START_TIME" \
+              --end-time "$END_TIME" \
+              --period "$POLL_INTERVAL" \
+              --extended-statistics "p99" \
+              --query 'Datapoints[0].ExtendedStatistics.p99' \
+              --output text 2>/dev/null || echo "0")
+            CANARY_P99="${CANARY_P99:-0}"
+            [[ "$CANARY_P99" == "None" ]] && CANARY_P99=0
+            # ALB reports response time in seconds; convert to ms
+            CANARY_P99_MS=$(echo "$CANARY_P99 * 1000" | bc -l 2>/dev/null || echo "0")
+            CANARY_P99_MS_INT=$(printf "%.0f" "$CANARY_P99_MS")
+
+            echo "p99 latency — canary=${CANARY_P99_MS_INT}ms (ceiling=${P99_LATENCY_CEILING_MS}ms)"
+
+            if (( CANARY_P99_MS_INT > P99_LATENCY_CEILING_MS )); then
+              FAIL_COUNT=$((FAIL_COUNT + 1))
+              FAILURE_REASON="Canary p99 latency ${CANARY_P99_MS_INT}ms exceeds ceiling ${P99_LATENCY_CEILING_MS}ms"
+              echo "❌ Latency breach: $FAILURE_REASON"
+            fi
+
+            # ── ECS unhealthy host count ───────────────────────────────────
+            UNHEALTHY_HOSTS=$(aws cloudwatch get-metric-statistics \
+              --namespace "AWS/ApplicationELB" \
+              --metric-name "UnHealthyHostCount" \
+              --dimensions \
+                "Name=LoadBalancer,Value=${ALB_ARN_SUFFIX}" \
+                "Name=TargetGroup,Value=${CANARY_TG_ARN_SUFFIX}" \
+              --start-time "$START_TIME" \
+              --end-time "$END_TIME" \
+              --period "$POLL_INTERVAL" \
+              --statistics Maximum \
+              --query 'Datapoints[0].Maximum' \
+              --output text 2>/dev/null || echo "0")
+            UNHEALTHY_HOSTS="${UNHEALTHY_HOSTS:-0}"
+            [[ "$UNHEALTHY_HOSTS" == "None" ]] && UNHEALTHY_HOSTS=0
+            UNHEALTHY_HOSTS_INT=$(printf "%.0f" "$UNHEALTHY_HOSTS")
+
+            echo "Unhealthy hosts: ${UNHEALTHY_HOSTS_INT}"
+
+            if (( UNHEALTHY_HOSTS_INT > 0 )); then
+              FAIL_COUNT=$((FAIL_COUNT + 1))
+              FAILURE_REASON="Canary has ${UNHEALTHY_HOSTS_INT} unhealthy host(s)"
+              echo "❌ Unhealthy hosts: $FAILURE_REASON"
+            fi
+
+            # ── Fail-fast: two consecutive failures → rollback immediately ─
+            if (( FAIL_COUNT >= 2 )); then
+              echo "fail_fast: 2 consecutive health failures"
+              break
+            fi
+
+            # Reset consecutive failure count if this poll was clean
+            if [[ -z "$FAILURE_REASON" ]] || \
+               ( [[ "$ALARM_STATE" != *"ALARM"* ]] && \
+                 (( $(echo "$CANARY_5XX <= $ROLLBACK_THRESHOLD" | bc -l) )) && \
+                 (( CANARY_P99_MS_INT <= P99_LATENCY_CEILING_MS )) && \
+                 (( UNHEALTHY_HOSTS_INT == 0 )) ); then
+              PASS_COUNT=$((PASS_COUNT + 1))
+              FAIL_COUNT=0
+              FAILURE_REASON=""
+              echo "✅ Check ${attempt} passed (total passes: ${PASS_COUNT})"
+            fi
+
+            END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+            # Only sleep between checks, not after the last one
+            if (( attempt < MAX_ATTEMPTS )); then
+              echo "Sleeping ${POLL_INTERVAL}s before next check…"
+              sleep "$POLL_INTERVAL"
+            fi
+          done
+
+          # ── Final decision ─────────────────────────────────────────────────
+          if [[ $FAIL_COUNT -ge 2 ]]; then
+            echo "decision=rollback" >> "$GITHUB_OUTPUT"
+            echo "failure_reason=${FAILURE_REASON}" >> "$GITHUB_OUTPUT"
+            echo ""
+            echo "❌ Health checks failed — triggering automatic rollback"
+            echo "Reason: ${FAILURE_REASON}"
+          else
+            echo "decision=promote" >> "$GITHUB_OUTPUT"
+            echo "failure_reason=" >> "$GITHUB_OUTPUT"
+            echo ""
+            echo "✅ Canary is healthy after ${MAX_ATTEMPTS} checks — promoting to 100%"
+          fi
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Promote — shift 100 % traffic to the new version and update stable service
+  # ───────────────────────────────────────────────────────────────────────────
+  promote:
+    name: promote-canary
+    needs: [resolve-action, build, deploy-canary, monitor-canary]
+    if: |
+      always() && (
+        (needs.monitor-canary.outputs.decision == 'promote') ||
+        (needs.resolve-action.outputs.action == 'promote')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ── 1. Shift all traffic to canary target group ───────────────────────
+      - name: Shift 100 % traffic to canary target group
+        run: |
+          aws elbv2 modify-listener \
+            --listener-arn "$HTTP_LISTENER_ARN" \
+            --default-actions \
+              "Type=forward,ForwardConfig={TargetGroups=[{TargetGroupArn=${STABLE_TG_ARN},Weight=${STABLE_WEIGHT_PROMOTE}},{TargetGroupArn=${CANARY_TG_ARN},Weight=${CANARY_WEIGHT_PROMOTE}}]}"
+
+          if [[ -n "$HTTPS_LISTENER_ARN" ]]; then
+            aws elbv2 modify-listener \
+              --listener-arn "$HTTPS_LISTENER_ARN" \
+              --default-actions \
+                "Type=forward,ForwardConfig={TargetGroups=[{TargetGroupArn=${STABLE_TG_ARN},Weight=${STABLE_WEIGHT_PROMOTE}},{TargetGroupArn=${CANARY_TG_ARN},Weight=${CANARY_WEIGHT_PROMOTE}}]}"
+          fi
+
+          echo "Traffic: stable=0% canary=100%"
+
+      # ── 2. Promote canary task definition to stable service ───────────────
+      - name: Promote canary image to stable service
+        run: |
+          # Get the task definition currently running in the canary service
+          CANARY_TASK_DEF=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$CANARY_SERVICE" \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          echo "Promoting task def: $CANARY_TASK_DEF"
+
+          # Fetch its definition JSON
+          TASK_DEF_JSON=$(aws ecs describe-task-definition \
+            --task-definition "$CANARY_TASK_DEF" \
+            --query 'taskDefinition' \
+            --output json)
+
+          # Register a new revision for the stable family with DEPLOY_SLOT=stable
+          NEW_STABLE_DEF=$(echo "$TASK_DEF_JSON" | jq \
+            --arg sha "${{ github.sha }}" \
+            '.family = ((.family | split("-canary")[0]) + "-stable")
+            | .containerDefinitions[0].environment = (
+                (.containerDefinitions[0].environment // [])
+                | map(select(.name != "APP_VERSION" and .name != "DEPLOY_SLOT"))
+                + [
+                    {"name": "APP_VERSION", "value": $sha},
+                    {"name": "DEPLOY_SLOT",  "value": "stable"}
+                  ]
+              )
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                  .placementConstraints, .compatibilities, .registeredAt,
+                  .registeredBy,
+                  .containerDefinitions[0].logConfiguration.options["awslogs-group"])
+            | .containerDefinitions[0].logConfiguration.options["awslogs-group"] = "/ecs/ai-net-staging/stable"')
+
+          NEW_STABLE_ARN=$(echo "$NEW_STABLE_DEF" | \
+            aws ecs register-task-definition --cli-input-json /dev/stdin \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+
+          echo "New stable task def: $NEW_STABLE_ARN"
+
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$STABLE_SERVICE" \
+            --task-definition "$NEW_STABLE_ARN" \
+            --desired-count "${{ vars.STABLE_DESIRED_COUNT || 2 }}" \
+            --force-new-deployment \
+            --output json > /dev/null
+
+          echo "Stable service update triggered."
+
+      # ── 3. Wait for stable service to reach steady state ─────────────────
+      - name: Wait for stable service to stabilise
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            aws ecs wait services-stable \
+              --cluster "$ECS_CLUSTER" \
+              --services "$STABLE_SERVICE"
+
+      # ── 4. Reset listener weights to 90/10 ───────────────────────────────
+      - name: Reset ALB listener weights to normal (stable=90 canary=10)
+        run: |
+          aws elbv2 modify-listener \
+            --listener-arn "$HTTP_LISTENER_ARN" \
+            --default-actions \
+              "Type=forward,ForwardConfig={TargetGroups=[{TargetGroupArn=${STABLE_TG_ARN},Weight=${STABLE_WEIGHT_NORMAL}},{TargetGroupArn=${CANARY_TG_ARN},Weight=${CANARY_WEIGHT_NORMAL}}]}"
+
+          if [[ -n "$HTTPS_LISTENER_ARN" ]]; then
+            aws elbv2 modify-listener \
+              --listener-arn "$HTTPS_LISTENER_ARN" \
+              --default-actions \
+                "Type=forward,ForwardConfig={TargetGroups=[{TargetGroupArn=${STABLE_TG_ARN},Weight=${STABLE_WEIGHT_NORMAL}},{TargetGroupArn=${CANARY_TG_ARN},Weight=${CANARY_WEIGHT_NORMAL}}]}"
+          fi
+
+          echo "Traffic reset: stable=${STABLE_WEIGHT_NORMAL}% canary=${CANARY_WEIGHT_NORMAL}%"
+
+      - name: Annotate job summary — promotion complete
+        run: |
+          {
+            echo "### ✅ Canary promoted to stable"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Image | \`${{ needs.build.outputs.image_uri }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Traffic | Stable **${STABLE_WEIGHT_NORMAL}%** / Canary **${CANARY_WEIGHT_NORMAL}%** (reset) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Rollback — restore 100 % traffic to stable and revert canary service
+  # ───────────────────────────────────────────────────────────────────────────
+  rollback:
+    name: rollback-canary
+    needs: [resolve-action, build, deploy-canary, monitor-canary]
+    if: |
+      always() && (
+        (needs.monitor-canary.outputs.decision == 'rollback') ||
+        (needs.resolve-action.outputs.action == 'rollback')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ── 1. Shift 100 % traffic to stable target group immediately ─────────
+      - name: Shift 100 % traffic to stable target group
+        run: |
+          aws elbv2 modify-listener \
+            --listener-arn "$HTTP_LISTENER_ARN" \
+            --default-actions \
+              "Type=forward,ForwardConfig={TargetGroups=[{TargetGroupArn=${STABLE_TG_ARN},Weight=${STABLE_WEIGHT_ROLLBACK}},{TargetGroupArn=${CANARY_TG_ARN},Weight=${CANARY_WEIGHT_ROLLBACK}}]}"
+
+          if [[ -n "$HTTPS_LISTENER_ARN" ]]; then
+            aws elbv2 modify-listener \
+              --listener-arn "$HTTPS_LISTENER_ARN" \
+              --default-actions \
+                "Type=forward,ForwardConfig={TargetGroups=[{TargetGroupArn=${STABLE_TG_ARN},Weight=${STABLE_WEIGHT_ROLLBACK}},{TargetGroupArn=${CANARY_TG_ARN},Weight=${CANARY_WEIGHT_ROLLBACK}}]}"
+          fi
+
+          echo "Traffic: stable=100% canary=0%"
+
+      # ── 2. Revert canary service to previous task definition ──────────────
+      - name: Revert canary service to previous task definition
+        env:
+          PREVIOUS_CANARY_TASK_DEF: ${{ needs.deploy-canary.outputs.previous_canary_task_def }}
+        run: |
+          if [[ -n "$PREVIOUS_CANARY_TASK_DEF" && "$PREVIOUS_CANARY_TASK_DEF" != "None" ]]; then
+            aws ecs update-service \
+              --cluster "$ECS_CLUSTER" \
+              --service "$CANARY_SERVICE" \
+              --task-definition "$PREVIOUS_CANARY_TASK_DEF" \
+              --desired-count 0 \
+              --output json > /dev/null
+            echo "Canary service reverted to: $PREVIOUS_CANARY_TASK_DEF (scaled to 0)"
+          else
+            echo "No previous canary task definition available; scaling canary service to 0"
+            aws ecs update-service \
+              --cluster "$ECS_CLUSTER" \
+              --service "$CANARY_SERVICE" \
+              --desired-count 0 \
+              --output json > /dev/null
+          fi
+
+      # ── 3. Reset listener weights to 90/10 after canary is drained ────────
+      - name: Reset ALB listener weights to normal after rollback
+        run: |
+          # Brief wait to allow connection draining (deregistration_delay = 30s)
+          sleep 35
+
+          aws elbv2 modify-listener \
+            --listener-arn "$HTTP_LISTENER_ARN" \
+            --default-actions \
+              "Type=forward,ForwardConfig={TargetGroups=[{TargetGroupArn=${STABLE_TG_ARN},Weight=${STABLE_WEIGHT_NORMAL}},{TargetGroupArn=${CANARY_TG_ARN},Weight=${CANARY_WEIGHT_NORMAL}}]}"
+
+          if [[ -n "$HTTPS_LISTENER_ARN" ]]; then
+            aws elbv2 modify-listener \
+              --listener-arn "$HTTPS_LISTENER_ARN" \
+              --default-actions \
+                "Type=forward,ForwardConfig={TargetGroups=[{TargetGroupArn=${STABLE_TG_ARN},Weight=${STABLE_WEIGHT_NORMAL}},{TargetGroupArn=${CANARY_TG_ARN},Weight=${CANARY_WEIGHT_NORMAL}}]}"
+          fi
+
+          echo "Traffic reset: stable=${STABLE_WEIGHT_NORMAL}% canary=${CANARY_WEIGHT_NORMAL}% (canary scaled to 0)"
+
+      - name: Annotate job summary — rollback complete
+        run: |
+          {
+            echo "### ⚠️ Canary rollback triggered"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Rolled-back image | \`${{ needs.build.outputs.image_uri }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Failure reason | ${{ needs.monitor-canary.outputs.failure_reason }} |"
+            echo "| Traffic | Stable **${STABLE_WEIGHT_NORMAL}%** / Canary **${CANARY_WEIGHT_NORMAL}%** (canary at 0 tasks) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Surface rollback as a failed workflow so branch protection sees it
+      - name: Fail workflow to surface rollback in PR checks
+        run: |
+          echo "::error::Canary rollback triggered: ${{ needs.monitor-canary.outputs.failure_reason }}"
+          exit 1
