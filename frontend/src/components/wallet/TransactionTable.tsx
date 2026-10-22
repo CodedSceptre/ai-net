@@ -120,6 +120,7 @@ export function TransactionTable({ transactions, loading, publicKey }: Transacti
     {
       key: 'direction',
       header: t('wallet.tx.type'),
+      priority: 'primary',
       render: (tx) => (
         tx.direction === 'in' ? (
           <span className={styles.incoming}><ArrowDownRight size={14} /> {t('wallet.tx.in')}</span>
@@ -133,6 +134,7 @@ export function TransactionTable({ transactions, loading, publicKey }: Transacti
     {
       key: 'amount',
       header: t('wallet.tx.amount'),
+      priority: 'primary',
       sortable: true,
       render: (tx) => (
         <span className={`${styles.colAmount} ${tx.direction === 'in' ? styles.amountIn : styles.amountOut}`}>
@@ -142,27 +144,31 @@ export function TransactionTable({ transactions, loading, publicKey }: Transacti
       width: '16%',
     },
     {
+      key: 'timestamp',
+      header: t('wallet.tx.time'),
+      priority: 'primary',
+      sortable: true,
+      render: (tx) => <span>{formatTimestamp(tx.timestamp, t, i18n.language)}</span>,
+      width: '18%',
+    },
+    {
       key: 'counterparty',
       header: t('wallet.tx.counterparty'),
+      priority: 'secondary',
       render: (tx) => <span title={tx.counterparty}>{truncateAddress(tx.counterparty)}</span>,
       width: '20%',
     },
     {
       key: 'memo',
       header: t('wallet.tx.memo'),
+      priority: 'secondary',
       render: (tx) => (tx.memo ? <span className={styles.memoText}>{tx.memo}</span> : <span className={styles.noMemo}>—</span>),
       width: '22%',
     },
     {
-      key: 'timestamp',
-      header: t('wallet.tx.time'),
-      sortable: true,
-      render: (tx) => <span>{formatTimestamp(tx.timestamp, t, i18n.language)}</span>,
-      width: '18%',
-    },
-    {
       key: 'txHash',
       header: t('wallet.tx.tx'),
+      priority: 'secondary',
       render: (tx) => (
         <a href={`${STELLAR_EXPLORER}/tx/${tx.txHash}`} target="_blank" rel="noopener noreferrer" className={styles.txLink} title={t('a11y.viewOnStellarExplorer')}>
           <ExternalLink size={14} />
@@ -234,6 +240,7 @@ export function TransactionTable({ transactions, loading, publicKey }: Transacti
           columns={columns}
           rows={pageItems}
           getRowKey={(tx) => tx.txHash}
+          mobileView="cards"
           maxHeight={520}
           stickyHeader
           emptyState={<div className={styles.emptyState}><Clock size={32} className={styles.emptyIcon} /><p>{t('wallet.tx.noMatches')}</p></div>}
