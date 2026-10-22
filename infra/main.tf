@@ -105,6 +105,7 @@ module "iam" {
   s3_bucket_arns = [
     module.s3.task_results_bucket_arn,
     module.s3.redis_backups_bucket_arn,
+    module.s3.database_backups_bucket_arn,
   ]
   secrets_arns = module.secrets.secret_arns
 }

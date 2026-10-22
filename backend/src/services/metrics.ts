@@ -17,7 +17,9 @@
  * without touching a database, a socket, or the clock.
  */
 
+import fs from "fs";
 import os from "os";
+import path from "path";
 import { PerformanceObserver } from "perf_hooks";
 
 import { getConfig } from "../config";
@@ -547,6 +549,20 @@ export class MetricsService {
 
   private webSocketProbe: (() => WebSocketProbeResult) | null = null;
 
+  private getLastBackupAgeHours(): number {
+    const markerPath = process.env.BACKUP_TIMESTAMP_FILE ?? path.join(
+      process.env.DB_DIR ?? process.cwd(),
+      ".last-backup-timestamp",
+    );
+    try {
+      const timestampSeconds = Number(fs.readFileSync(markerPath, "utf8").trim());
+      if (!Number.isFinite(timestampSeconds) || timestampSeconds <= 0) return -1;
+      return Math.max(0, (this.clock() / 1000 - timestampSeconds) / 3600);
+    } catch {
+      return -1;
+    }
+  }
+
   constructor(options: MetricsCollectorOptions = {}) {
     const config = readMetricsConfig();
     this.cacheTtlMs = options.cacheTtlMs ?? config.cacheTtlMs;
@@ -915,6 +931,11 @@ export class MetricsService {
     lines.push("# TYPE active_websocket_connections gauge");
     lines.push(`active_websocket_connections ${wsCount}`);
 
+    lines.push("");
+    lines.push("# HELP last_backup_age_hours Age of the last successful database backup in hours; -1 means no timestamp is available");
+    lines.push("# TYPE last_backup_age_hours gauge");
+    lines.push(`last_backup_age_hours ${this.getLastBackupAgeHours()}`);
+
     // ── 9. agent_health_status{agent_id} gauge ────────────────────────────────
     lines.push("");
     lines.push("# HELP agent_health_status Agent health status (1=healthy, 0=unhealthy) by agent_id");
@@ -951,7 +972,7 @@ export class MetricsService {
       status: "ok",
       uptimeSeconds: Math.max(0, Math.floor((this.clock() - this.startedAtMs) / 1000)),
       lastScrapeTimestamp: this.lastScrapeTimestamp,
-      metricFamiliesCount: 17, // 9 new + 8 legacy families
+      metricFamiliesCount: 18, // 10 new + 8 legacy families
       registeredOnce: this.registeredOnce,
     };
   }
