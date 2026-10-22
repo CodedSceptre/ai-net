@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.31"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.7"
+    }
   }
 
   # Remote state in S3 with DynamoDB locking.
@@ -115,8 +119,10 @@ module "secrets" {
 }
 
 module "logging" {
-  source      = "./modules/logging"
-  environment = var.environment
+  source             = "./modules/logging"
+  environment        = var.environment
+  archive_bucket_name = module.s3.log_archive_bucket_name
+  archive_bucket_arn  = module.s3.log_archive_bucket_arn
 }
 
 # ── Data sources ──────────────────────────────────────────────────────────────

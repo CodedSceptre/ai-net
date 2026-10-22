@@ -23,6 +23,11 @@ output "redis_backups_bucket" {
   value       = module.s3.redis_backups_bucket_name
 }
 
+output "log_archive_bucket" {
+  description = "S3 bucket name for one-year CloudWatch log archives"
+  value       = module.s3.log_archive_bucket_name
+}
+
 output "rds_endpoint" {
   description = "RDS PostgreSQL endpoint"
   value       = module.rds.db_endpoint
