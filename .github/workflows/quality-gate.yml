@@ -143,6 +143,46 @@ jobs:
           path: frontend/coverage/
           retention-days: 7
 
+  frontend-accessibility:
+    name: frontend-accessibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run axe accessibility scans
+        run: npx playwright test tests/e2e/accessibility.spec.ts --project=chromium --workers=1 --reporter=list
+        env:
+          CI: "true"
+
+      - name: Upload accessibility report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-accessibility-${{ github.run_id }}
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
 # ── Job: smart-contracts ─────────────────────────────────────────────────────
   smart-contracts:
     name: smart-contracts
@@ -325,6 +365,7 @@ jobs:
       - backend-test
       - frontend-lint-typecheck
       - frontend-test
+      - frontend-accessibility
       - smart-contracts
       - docker-build
     runs-on: ubuntu-latest
@@ -336,6 +377,7 @@ jobs:
           echo "backend-test           : ${{ needs.backend-test.result }}"
           echo "frontend-lint-typecheck: ${{ needs.frontend-lint-typecheck.result }}"
           echo "frontend-test          : ${{ needs.frontend-test.result }}"
+          echo "frontend-accessibility: ${{ needs.frontend-accessibility.result }}"
           echo "smart-contracts        : ${{ needs.smart-contracts.result }}"
           echo "docker-build           : ${{ needs.docker-build.result }}"
 
@@ -345,6 +387,7 @@ jobs:
             "${{ needs.backend-test.result }}" \
             "${{ needs.frontend-lint-typecheck.result }}" \
             "${{ needs.frontend-test.result }}" \
+            "${{ needs.frontend-accessibility.result }}" \
             "${{ needs.smart-contracts.result }}" \
             "${{ needs.docker-build.result }}"; do
             if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then

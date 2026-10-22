@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react'
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { I18nextProvider } from 'react-i18next'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import i18n from './i18n'
@@ -81,6 +81,8 @@ const RoutedContent: React.FC = () => {
                       </ProtectedRoute>
                     }
                   />
+                  <Route path="/marketplace" element={<Navigate to="/agents" replace />} />
+                  <Route path="/tasks" element={<Navigate to="/tasks/history" replace />} />
                   <Route
                     path="/agents"
                     element={
