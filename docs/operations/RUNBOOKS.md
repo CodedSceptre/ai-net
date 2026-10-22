@@ -593,6 +593,7 @@ curl -s -X POST http://localhost:3001/api/v1/agents/research-agent-v1/heartbeat 
 
 - [Node Operators Guide](../NODE_OPERATORS_GUIDE.md) — provisioning, configuration, and initial setup
 - [Health Checks and Graceful Shutdown](health-and-shutdown.md) — probe contracts and shutdown order
+- [Incident Response Playbook](INCIDENT_RESPONSE.md) — severity classification, escalation paths, and common production incident procedures
 - [Testnet Contract Upgrade Runbook](../../smart-contracts/docs/TESTNET_UPGRADE_RUNBOOK.md) — full upgrade and rollback procedures
 - [REST API Reference](../API_REFERENCE.md) — endpoint documentation including admin endpoints
 - [Architecture Specification](../architecture/index.md) — system component reference
