@@ -242,6 +242,10 @@
   "task.wizard.summary.noAgents": "未选择智能体",
 
   "page.dashboard.totalAgents": "智能体总数",
+  "page.dashboard.activeTasks": "活动任务",
+  "page.dashboard.xlmTransacted24h": "24小时 XLM 交易额",
+  "page.dashboard.tasksCompletedAllTime": "已完成任务（历史总计）",
+  "page.dashboard.staleData": "数据可能已过期（每60秒轮询）",
   "page.dashboard.totalTasks": "已执行任务总数",
   "page.dashboard.totalXLM": "XLM 交易总额",
   "page.dashboard.uptime": "网络在线率",

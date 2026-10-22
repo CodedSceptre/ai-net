@@ -242,6 +242,10 @@
   "task.wizard.summary.noAgents": "No agents selected",
 
   "page.dashboard.totalAgents": "Total Agents",
+  "page.dashboard.activeTasks": "Active Tasks",
+  "page.dashboard.xlmTransacted24h": "XLM Transacted (24h)",
+  "page.dashboard.tasksCompletedAllTime": "Tasks Completed (all time)",
+  "page.dashboard.staleData": "Data may be out of date (polling every 60s)",
   "page.dashboard.totalTasks": "Total Tasks Run",
   "page.dashboard.totalXLM": "Total XLM Transacted",
   "page.dashboard.uptime": "Network Uptime",
