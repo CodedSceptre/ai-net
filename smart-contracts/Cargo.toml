@@ -8,6 +8,8 @@ members = [
     "contracts/upgrade-manager",
     "contracts/task_store",
     "contracts/payment_escrow",
+    "contracts/agent_marketplace",
+    "contracts/oracle_manager",
 ]
 resolver = "2"
 

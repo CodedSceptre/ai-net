@@ -95,3 +95,22 @@ pub struct ServiceCancelledEvent {
     pub booking_id: Symbol,
     pub refund_amount: i128,
 }
+
+/// Agent search result entry for capability-based search (Issue #419).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentSearchResult {
+    pub agent_id: Symbol,
+    pub owner: Address,
+    pub capabilities: soroban_sdk::Vec<soroban_sdk::Bytes>,
+    pub reputation_score: u32,
+}
+
+/// Paginated capability search results (Issue #419).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CapabilitySearchResult {
+    pub agents: soroban_sdk::Vec<AgentSearchResult>,
+    pub next_cursor: Option<soroban_sdk::Bytes>,
+    pub total_count_estimate: u32,
+}
