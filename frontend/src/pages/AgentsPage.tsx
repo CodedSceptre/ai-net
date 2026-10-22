@@ -20,13 +20,14 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { LayoutGrid, List, Users, Plus } from 'lucide-react'
+import { LayoutGrid, List, Plus } from 'lucide-react'
 
 import { useAgentRegistry } from '../hooks/useAgentRegistry'
 import { AgentTable } from '../components/agents/AgentTable'
 import { AgentFilterBar } from '../components/agents/AgentFilterBar'
 import { AgentDetailModal } from '../components/agents/AgentDetailModal'
 import { AgentRegistryCard } from '../components/agents/AgentRegistryCard'
+import { SearchWithTypeahead } from '../components/agents/SearchWithTypeahead'
 import { EmptyState } from '../components/common/EmptyState'
 import { AgentsEmptyIllustration } from '../components/common/illustrations'
 import { SearchEmptyIllustration } from '../components/common/illustrations'
@@ -149,7 +150,7 @@ export function AgentsPageSkeleton() {
 function AgentsPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { agents, loading, error, refetch } = useAgentRegistry()
+  const { agents, loading, error, refetch, getSuggestions } = useAgentRegistry()
   const [searchParams, setSearchParams] = useSearchParams()
   const [selected, setSelected] = useState<AgentRecord | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('card')
@@ -247,6 +248,26 @@ function AgentsPage() {
         <AgentsPageSkeleton />
       ) : (
         <div className="fade-in">
+          {/* Search with typeahead */}
+          <div className={styles.searchSection}>
+            <SearchWithTypeahead
+              value={filters.searchQuery ?? ''}
+              onChange={(q) => updateFilters({ searchQuery: q })}
+              onSelectSuggestion={(s) => {
+                if (s.type === 'agent' && s.agent) {
+                  setSelected(s.agent)
+                } else if (s.type === 'capability') {
+                  if (!filters.capabilities.includes(s.value)) {
+                    updateFilters({ capabilities: [...filters.capabilities, s.value] })
+                  }
+                } else if (s.type === 'type') {
+                  updateFilters({ searchQuery: s.value })
+                }
+              }}
+              getSuggestions={getSuggestions}
+            />
+          </div>
+
           {/* Filter bar */}
           <AgentFilterBar
             filters={filters}

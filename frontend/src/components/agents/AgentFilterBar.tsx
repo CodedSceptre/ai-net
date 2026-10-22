@@ -49,7 +49,8 @@ export function AgentFilterBar({
     filters.priceMin != null ||
     filters.priceMax != null ||
     filters.status !== 'all' ||
-    filters.sortKey != null
+    filters.sortKey != null ||
+    Boolean(filters.searchQuery)
 
   return (
     <div className={styles.bar}>
