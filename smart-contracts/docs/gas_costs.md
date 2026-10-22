@@ -66,8 +66,8 @@ All formulae return `0` when `n == 0`.
 
 ## Average Reduction
 
-The CI benchmark guard compares the optimized estimates against the previous
-baseline for:
+The current testnet benchmark records measured CPU instructions for these
+operations:
 
 | Operation | Previous CU | Optimized CU | Reduction |
 |----------|------------:|-------------:|----------:|
@@ -107,3 +107,22 @@ Average reduction: **20.3%**, exceeding the 15% acceptance threshold.
 
 The unit tests in `contracts/agent_registry/src/test.rs` assert the benchmark
 tables and the >=15% average reduction guard.
+
+## Nightly regression tracking
+
+The nightly testnet farm stores the measured `gas-measurements.json` as a
+90-day GitHub Actions artifact. Each successful run compares operation CPU
+instructions with the latest successful baseline using
+[`scripts/compare-gas.js`](../scripts/compare-gas.js); a regression strictly
+greater than 20% fails the workflow and leaves a JSON and Markdown comparison
+report artifact. A passing run becomes the next baseline.
+
+For S3 and Grafana history, configure the `GAS_BENCHMARKS_AWS_ROLE_ARN` and
+`GAS_BENCHMARKS_S3_BUCKET` repository secrets and the
+`GAS_BENCHMARKS_AWS_REGION` repository variable. The role must trust GitHub
+Actions OIDC and allow writing objects under `gas-benchmarks/` and publishing
+the `AiNet/SmartContracts` CloudWatch namespace. Configure the bucket with a
+90-day lifecycle expiration rule for the `gas-benchmarks/` prefix. The Grafana
+dashboard at `monitoring/grafana/dashboards/gas-cost-trends.json` reads the
+CloudWatch custom metrics; provision a CloudWatch data source with UID
+`cloudwatch` in Grafana.
