@@ -68,7 +68,7 @@ export interface WalletPair {
 export function makeWallet(n?: number): WalletPair {
   const seq = n ?? nextId();
   // Pad with zeros so the result is always exactly 56 chars.
-  const suffix = String(seq).padStart(49, "0");
+  const suffix = String(seq).padStart(42, "0");
   return {
     publicKey: `GTESTWALLETKEY${suffix}`,
     secretKey: `STESTWALLETKEY${suffix}`,
