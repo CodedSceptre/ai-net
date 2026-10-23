@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { createApp } from "../src/api";
 import { getTaskDb, closeTaskDb, createTaskDb } from "../src/db/tasks";
 import type { TaskStatus } from "../src/types/task";
+import { taskFactory } from "./factories";
 
 // Use in-memory SQLite for tests by monkey-patching getTaskDb
 let inMemoryDb: Database.Database;
@@ -360,15 +361,14 @@ describe("GET /api/tasks (filtering, sorting, search)", () => {
     ];
 
     for (const t of seedTasks) {
-      db.insert({
+      db.insert(taskFactory.create({
         id: t.id,
         prompt: t.prompt,
         walletPublicKey: wallet,
         status: t.status,
-        dag: [],
         createdAt: new Date(now - t.minutesAgo * 60_000).toISOString(),
         updatedAt: new Date().toISOString(),
-      });
+      }));
     }
   });
 
