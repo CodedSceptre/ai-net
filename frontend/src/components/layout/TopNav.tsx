@@ -1,14 +1,16 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useWallet } from '../../context/WalletContext'
+import { useWalletBalance } from '../../hooks/useWalletBalance'
+import { useToast } from '../../hooks/useToast'
 import { NotificationBell } from '../notifications/NotificationBell'
 import { SUPPORTED_LANGUAGES } from '../../i18n/options'
 import { NAV_ITEMS } from './navigation'
 import type { SupportedLanguage } from '../../i18n/options'
 import './TopNav.css'
 import useTheme from '../../hooks/useTheme'
-import { Sun, Moon, Monitor } from 'lucide-react'
+import { Sun, Moon, Monitor, Wallet } from 'lucide-react'
 
 interface TopNavProps {
   onMenuClick: () => void
@@ -40,10 +42,13 @@ const TopNav: React.FC<TopNavProps> = ({
   isMobile,
   isDrawerOpen = false,
 }) => {
-  const { publicKey, connected, ready, connectionMethod, disconnect } = useWallet()
+  const { publicKey, connected, ready, connectionMethod, connectFreighter, disconnect } = useWallet()
+  const { balance, loading: balanceLoading } = useWalletBalance(publicKey)
+  const { showToast } = useToast()
   const { t, i18n } = useTranslation()
   const location = useLocation()
   const { mode, setMode } = useTheme()
+  const [isConnecting, setIsConnecting] = useState(false)
 
   const activeLanguage = (i18n.resolvedLanguage ?? 'en') as SupportedLanguage
 
@@ -64,6 +69,24 @@ const TopNav: React.FC<TopNavProps> = ({
   const truncateKey = (key: string) => {
     if (key.length <= 8) return key
     return `${key.slice(0, 4)}...${key.slice(-3)}`
+  }
+
+  const handleConnectFreighter = async () => {
+    setIsConnecting(true)
+    try {
+      await connectFreighter()
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (message.toLowerCase().includes('not installed') || message.toLowerCase().includes('not connected')) {
+        showToast(t('wallet.freighterNotDetected'), 'error')
+      } else if (message.toLowerCase().includes('denied') || message.toLowerCase().includes('rejected') || message.toLowerCase().includes('user')) {
+        showToast(t('wallet.failedToConnectFreighter'), 'warning')
+      } else {
+        showToast(`${t('wallet.failedToConnect')}: ${message}`, 'error')
+      }
+    } finally {
+      setIsConnecting(false)
+    }
   }
 
   return (
@@ -105,19 +128,16 @@ const TopNav: React.FC<TopNavProps> = ({
       <div className="nav-right">
         <NotificationBell />
 
-        {/* Theme toggle: cycles light -> dark -> system */}
         <button
           className="theme-toggle"
-          onClick={() => {
-            const next: Record<string, 'light' | 'dark' | 'system'> = { light: 'dark', dark: 'system', system: 'light' }
-            setMode(next[mode])
-          }}
+          onClick={() => setMode(effectiveTheme === 'dark' ? 'light' : 'dark')}
+          type="button"
           role="switch"
-          aria-label={mode === 'light' ? 'Switch to dark or system theme' : mode === 'dark' ? 'Switch to system or light theme' : 'Switch to light or dark theme'}
-          aria-checked={mode === 'dark' ? 'true' : mode === 'light' ? 'false' : 'mixed'}
-          title={`Theme: ${mode}`}
+          aria-label={`Switch to ${effectiveTheme === 'dark' ? 'light' : 'dark'} theme`}
+          aria-checked={effectiveTheme === 'dark'}
+          title={`Switch to ${effectiveTheme === 'dark' ? 'light' : 'dark'} theme`}
         >
-          {mode === 'light' ? <Sun size={16} /> : mode === 'dark' ? <Moon size={16} /> : <Monitor size={16} />}
+          {effectiveTheme === 'dark' ? <Moon size={16} /> : <Sun size={16} />}
         </button>
 
         <div
@@ -148,11 +168,18 @@ const TopNav: React.FC<TopNavProps> = ({
         {connected && publicKey ? (
           ready ? (
             <>
-              <span className="wallet-chip connected" id="wallet-pubkey-display">
+              <span className="wallet-chip connected" id="wallet-pubkey-display" title={publicKey}>
                 {truncateKey(publicKey)}
               </span>
+              <span
+                className="wallet-chip connected wallet-balance"
+                id="wallet-balance-display"
+                aria-label={`XLM balance: ${balance}`}
+              >
+                {balanceLoading ? '…' : `${parseFloat(balance).toFixed(2)} XLM`}
+              </span>
               {connectionMethod && (
-                <span className="wallet-chip connected" style={{ fontSize: '10px', padding: '2px 6px' }}>
+                <span className="wallet-chip connected wallet-method" style={{ fontSize: '10px', padding: '2px 6px' }}>
                   {connectionMethod === 'freighter' ? t('wallet.freighter') : t('wallet.secretKey')}
                 </span>
               )}
@@ -166,7 +193,7 @@ const TopNav: React.FC<TopNavProps> = ({
             </>
           ) : (
             <>
-              <span className="wallet-chip connected" id="wallet-pubkey-display" style={{ opacity: 0.6 }}>
+              <span className="wallet-chip connected" id="wallet-pubkey-display" style={{ opacity: 0.6 }} title={publicKey}>
                 {truncateKey(publicKey)}
               </span>
               <span className="wallet-chip" style={{ fontSize: '10px', padding: '2px 6px', background: 'var(--status-warning-surface-strong)', color: 'var(--status-warning-text)' }}>
@@ -175,9 +202,16 @@ const TopNav: React.FC<TopNavProps> = ({
             </>
           )
         ) : (
-          <span className="wallet-chip disconnected" id="wallet-pubkey-display">
-            {t('wallet.notConnected')}
-          </span>
+          <button
+            className="connect-wallet-btn"
+            onClick={() => { void handleConnectFreighter() }}
+            disabled={isConnecting}
+            id="btn-connect-wallet"
+            aria-label={t('wallet.connectWithFreighter')}
+          >
+            <Wallet size={16} aria-hidden="true" />
+            <span>{isConnecting ? t('common.connecting') : t('wallet.connectWithFreighter')}</span>
+          </button>
         )}
       </div>
     </header>

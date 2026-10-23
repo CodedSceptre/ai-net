@@ -14,8 +14,8 @@ export class AgentCleanupService {
   private readonly log = createLogger({ component: 'AgentCleanup' });
 
   constructor(options: AgentCleanupOptions = {}) {
-    this.intervalMs = options.intervalMs ?? 60_000;
-    this.ttlMs = options.ttlMs ?? 90_000;
+    this.intervalMs = options.intervalMs ?? Number(process.env.HEARTBEAT_INTERVAL_MS ?? 30_000);
+    this.ttlMs = options.ttlMs ?? Number(process.env.HEARTBEAT_GRACE_PERIOD_MS ?? 90_000);
   }
 
   start(): void {
@@ -39,10 +39,10 @@ export class AgentCleanupService {
     if (this.stopped) return;
 
     try {
-      const staleMinutes = Math.ceil(this.ttlMs / 60_000);
       const db = createAgentDb(getAgentDb());
-      const count = db.markStaleAgents(staleMinutes);
-      this.log.info({ count, staleMinutes }, 'marked stale agents offline');
+      const staleSeconds = Math.floor(this.ttlMs / 1000);
+      const count = db.markStaleAgents(staleSeconds);
+      this.log.info({ count, staleSeconds }, 'marked stale agents offline');
     } catch (err) {
       this.log.error({ err }, 'cleanup tick failed');
     }
