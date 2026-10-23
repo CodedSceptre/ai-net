@@ -1,33 +1,60 @@
-import React, { useState, useMemo } from 'react';
-import { useTranslation, Trans } from 'react-i18next';
-import { useParams } from 'react-router-dom';
+import React, { useState, useMemo } from "react";
+import { useTranslation, Trans } from "react-i18next";
+import { useParams } from "react-router-dom";
 
-import { useTaskMonitor } from '../hooks/useTaskMonitor';
-import { TaskDetailTimeline } from '../components/dashboard/TaskDetailTimeline';
-import { PaymentTimeline } from '../components/dashboard/PaymentTimeline';
-import { Skeleton, SkeletonText } from '../components/common/Skeleton';
-import { AlertCircle, CheckCircle2, Play, RefreshCw } from 'lucide-react';
+import { useTaskMonitor } from "../hooks/useTaskMonitor";
+import PipelineStepIndicator from "../components/tasks/PipelineStepIndicator";
+import { TaskDetailTimeline } from "../components/dashboard/TaskDetailTimeline";
+import { PaymentTimeline } from "../components/dashboard/PaymentTimeline";
+import { Skeleton, SkeletonText } from "../components/common/Skeleton";
+import { AlertCircle, CheckCircle2, Play, RefreshCw } from "lucide-react";
+import ReactFlow, {
+  Background,
+  Controls,
+  Handle,
+  MarkerType,
+  Position,
+} from "reactflow";
+import type { Edge, Node } from "reactflow";
+import "reactflow/dist/style.css";
 
-const CustomNode: React.FC<{ id: string; data: { label: string; status: string } }> = ({ id, data }) => {
+const CustomNode: React.FC<{
+  id: string;
+  data: { label: string; status: string };
+}> = ({ id, data }) => {
   const { t } = useTranslation();
 
   return (
-    <div id={id} className={`dag-node ${data.status} h-full flex flex-col justify-between`}>
-      <Handle type="target" position={Position.Left} style={{ background: 'var(--text-muted)', width: 8, height: 8 }} />
+    <div
+      id={id}
+      className={`dag-node ${data.status} h-full flex flex-col justify-between`}
+    >
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={{ background: "var(--text-muted)", width: 8, height: 8 }}
+      />
       <div>
         <div className="text-[10px] uppercase font-extrabold tracking-wider opacity-60 mb-0.5">
-          {t('page.task.agentNode')}
+          {t("page.task.agentNode")}
         </div>
-        <div className="text-sm font-bold truncate capitalize">{data.label}</div>
+        <div className="text-sm font-bold truncate capitalize">
+          {data.label}
+        </div>
       </div>
       <div className="node-status text-[9px] font-mono font-bold uppercase tracking-widest mt-2 px-1.5 py-0.5 rounded bg-black/25 inline-block mx-auto">
         {data.status}
       </div>
-      <Handle type="source" position={Position.Right} style={{ background: 'var(--text-muted)', width: 8, height: 8 }} />
+      <Handle
+        type="source"
+        position={Position.Right}
+        style={{ background: "var(--text-muted)", width: 8, height: 8 }}
+      />
     </div>
   );
 };
 
+const nodeTypes = { custom: CustomNode };
 
 /**
  * Context-aware skeleton that mirrors the task detail layout (header, DAG
@@ -37,7 +64,12 @@ export const TaskDetailSkeleton: React.FC = () => {
   const { t } = useTranslation();
 
   return (
-    <div className="space-y-6" data-testid="task-detail-skeleton" aria-busy="true" aria-label={t('a11y.loadingTaskDetails')}>
+    <div
+      className="space-y-6"
+      data-testid="task-detail-skeleton"
+      aria-busy="true"
+      aria-label={t("a11y.loadingTaskDetails")}
+    >
       {/* Details Header */}
       <div className="glass-panel flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div className="w-full md:w-2/3">
@@ -62,9 +94,18 @@ export const TaskDetailSkeleton: React.FC = () => {
           <Skeleton height="80px" />
           <Skeleton height="80px" />
         </div>
-        <div className="w-full bg-slate-950/40 rounded-xl border border-[var(--panel-border)] overflow-hidden flex items-center gap-8 px-8" style={{ height: '280px' }}>
+        <div
+          className="w-full bg-slate-950/40 rounded-xl border border-[var(--panel-border)] overflow-hidden flex items-center gap-8 px-8"
+          style={{ height: "280px" }}
+        >
           {Array.from({ length: 3 }, (_, index) => (
-            <Skeleton key={index} variant="rect" width="160px" height="92px" className="shrink-0 rounded-xl" />
+            <Skeleton
+              key={index}
+              variant="rect"
+              width="160px"
+              height="92px"
+              className="shrink-0 rounded-xl"
+            />
           ))}
         </div>
       </div>
@@ -85,62 +126,63 @@ export const TaskDetailSkeleton: React.FC = () => {
 const TaskDetailPage: React.FC = () => {
   const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
-  const { task, loading, error, wsStatus, nodes, payments, outputs, refetch } = useTaskMonitor(id);
+  const { task, loading, error, wsStatus, nodes, payments, outputs, refetch } =
+    useTaskMonitor(id);
 
   // Check if any node is failed
   const failedNode = useMemo(() => {
-    return nodes.find(n => n.status === 'failed');
+    return nodes.find((n) => n.status === "failed");
   }, [nodes]);
 
   // Construct React Flow nodes dynamically based on node state
   const flowNodes = useMemo<Node[]>(() => {
     return nodes.map((node, index) => {
-      let background = 'var(--surface-panel-translucent)';
-      let borderColor = 'var(--white-alpha-08)';
-      let boxShadow = 'none';
-      let color = 'var(--text-muted)';
+      let background = "var(--surface-panel-translucent)";
+      let borderColor = "var(--white-alpha-08)";
+      let boxShadow = "none";
+      let color = "var(--text-muted)";
 
-      if (node.status === 'completed') {
-        background = 'var(--status-success-surface)';
-        borderColor = 'var(--success)';
-        boxShadow = 'var(--glow-success)';
-        color = 'var(--status-success-text)';
-      } else if (node.status === 'running') {
-        background = 'var(--accent-surface-strong)';
-        borderColor = 'var(--primary)';
-        boxShadow = 'var(--glow-info)';
-        color = 'var(--accent-text)';
-      } else if (node.status === 'failed') {
-        background = 'var(--status-danger-surface-strong)';
-        borderColor = 'var(--danger)';
-        boxShadow = 'var(--glow-danger)';
-        color = 'var(--status-danger-text)';
+      if (node.status === "completed") {
+        background = "var(--status-success-surface)";
+        borderColor = "var(--success)";
+        boxShadow = "var(--glow-success)";
+        color = "var(--status-success-text)";
+      } else if (node.status === "running") {
+        background = "var(--accent-surface-strong)";
+        borderColor = "var(--primary)";
+        boxShadow = "var(--glow-info)";
+        color = "var(--accent-text)";
+      } else if (node.status === "failed") {
+        background = "var(--status-danger-surface-strong)";
+        borderColor = "var(--danger)";
+        boxShadow = "var(--glow-danger)";
+        color = "var(--status-danger-text)";
       }
 
-      const cleanLabel = node.nodeId.replace('node_', '').replace('node-', '');
+      const cleanLabel = node.nodeId.replace("node_", "").replace("node-", "");
 
       return {
         id: node.nodeId,
-        type: 'custom',
-        data: { 
-          label: cleanLabel, 
-          status: node.status 
+        type: "custom",
+        data: {
+          label: cleanLabel,
+          status: node.status,
         },
         position: { x: index * 240 + 60, y: 110 },
         style: {
-          padding: '12px 16px',
-          borderRadius: 'var(--radius-2xl)',
-          border: '2px solid',
+          padding: "12px 16px",
+          borderRadius: "var(--radius-2xl)",
+          border: "2px solid",
           backgroundColor: background,
           borderColor: borderColor,
           color: color,
           boxShadow: boxShadow,
-          minWidth: '160px',
-          height: '92px',
-          textAlign: 'center',
-          fontWeight: 'bold',
-          transition: 'all 0.3s ease',
-          cursor: 'pointer',
+          minWidth: "160px",
+          height: "92px",
+          textAlign: "center",
+          fontWeight: "bold",
+          transition: "all 0.3s ease",
+          cursor: "pointer",
         },
       };
     });
@@ -149,19 +191,19 @@ const TaskDetailPage: React.FC = () => {
   // Construct React Flow edges dynamically based on dependency state
   const flowEdges = useMemo<Edge[]>(() => {
     const edges: Edge[] = [];
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       if (node.dependsOn && node.dependsOn.length > 0) {
-        node.dependsOn.forEach(depId => {
-          let strokeColor = 'var(--border-strong)';
+        node.dependsOn.forEach((depId) => {
+          let strokeColor = "var(--border-strong)";
           let animated = false;
-          
-          if (node.status === 'completed') {
-            strokeColor = 'var(--status-success)'; // green for completed paths
-          } else if (node.status === 'running') {
-            strokeColor = 'var(--accent-secondary)'; // blue animated for active paths
+
+          if (node.status === "completed") {
+            strokeColor = "var(--status-success)"; // green for completed paths
+          } else if (node.status === "running") {
+            strokeColor = "var(--accent-secondary)"; // blue animated for active paths
             animated = true;
-          } else if (node.status === 'failed') {
-            strokeColor = 'var(--status-danger)'; // red for failed paths
+          } else if (node.status === "failed") {
+            strokeColor = "var(--status-danger)"; // red for failed paths
           }
 
           edges.push({
@@ -189,11 +231,13 @@ const TaskDetailPage: React.FC = () => {
     return (
       <div className="glass-panel border-rose-500/30 text-center py-12">
         <AlertCircle className="text-rose-500 mx-auto mb-4" size={48} />
-        <h2 className="text-xl font-bold text-[var(--text-primary)] mb-2">{t('page.task.errorTitle')}</h2>
+        <h2 className="text-xl font-bold text-[var(--text-primary)] mb-2">
+          {t("page.task.errorTitle")}
+        </h2>
         <p className="text-rose-300/80 mb-6">{error.message}</p>
         <button onClick={refetch} className="flex items-center gap-2 mx-auto">
           <RefreshCw size={16} />
-          <span>{t('common.retry')}</span>
+          <span>{t("common.retry")}</span>
         </button>
       </div>
     );
@@ -202,28 +246,28 @@ const TaskDetailPage: React.FC = () => {
   // Get current WS status color/label
   const getWsStatusBadge = () => {
     switch (wsStatus) {
-      case 'connected':
+      case "connected":
         return {
-          bg: 'var(--status-success-surface)',
-          border: 'var(--status-success-border)',
-          color: 'var(--status-success-text)',
-          label: t('page.task.ws.connected'),
+          bg: "var(--status-success-surface)",
+          border: "var(--status-success-border)",
+          color: "var(--status-success-text)",
+          label: t("page.task.ws.connected"),
         };
-      case 'connecting':
+      case "connecting":
         return {
-          bg: 'var(--status-warning-surface)',
-          border: 'var(--status-warning-border)',
-          color: 'var(--status-warning-text)',
-          label: t('page.task.ws.connecting'),
+          bg: "var(--status-warning-surface)",
+          border: "var(--status-warning-border)",
+          color: "var(--status-warning-text)",
+          label: t("page.task.ws.connecting"),
         };
-      case 'error':
-      case 'disconnected':
+      case "error":
+      case "disconnected":
       default:
         return {
-          bg: 'var(--status-danger-surface)',
-          border: 'var(--status-danger-border)',
-          color: 'var(--status-danger-text)',
-          label: t('page.task.ws.disconnected'),
+          bg: "var(--status-danger-surface)",
+          border: "var(--status-danger-border)",
+          color: "var(--status-danger-text)",
+          label: t("page.task.ws.disconnected"),
         };
     }
   };
@@ -234,18 +278,28 @@ const TaskDetailPage: React.FC = () => {
     <div className="space-y-6 fade-in">
       {/* Task failed banner */}
       {failedNode && (
-        <div className="p-4 bg-rose-950/60 border border-rose-500/50 rounded-xl flex items-start gap-3 text-rose-200 animate-fadeIn" role="alert">
+        <div
+          className="p-4 bg-rose-950/60 border border-rose-500/50 rounded-xl flex items-start gap-3 text-rose-200 animate-fadeIn"
+          role="alert"
+        >
           <AlertCircle className="text-rose-400 mt-0.5 shrink-0" size={20} />
           <div>
-            <h4 className="font-bold text-sm">{t('page.task.failedTitle')}</h4>
+            <h4 className="font-bold text-sm">{t("page.task.failedTitle")}</h4>
             <p className="text-xs text-[var(--status-danger-text)] mt-0.5">
               <Trans
                 i18nKey="page.task.failedBody"
                 values={{
-                  node: failedNode.nodeId.replace('node_', '').replace('node-', ''),
-                  error: failedNode.error || t('page.task.unknownError'),
+                  node: failedNode.nodeId
+                    .replace("node_", "")
+                    .replace("node-", ""),
+                  error: failedNode.error || t("page.task.unknownError"),
                 }}
-                components={[<span key="node" className="font-mono font-bold capitalize" />]}
+                components={[
+                  <span
+                    key="node"
+                    className="font-mono font-bold capitalize"
+                  />,
+                ]}
               />
             </p>
           </div>
@@ -253,13 +307,21 @@ const TaskDetailPage: React.FC = () => {
       )}
 
       {/* Task completed banner */}
-      {task?.status === 'completed' && !failedNode && (
-        <div className="p-4 bg-emerald-950/60 border border-emerald-500/50 rounded-xl flex items-start gap-3 text-emerald-200 animate-fadeIn" role="alert">
-          <CheckCircle2 className="text-emerald-400 mt-0.5 shrink-0" size={20} />
+      {task?.status === "completed" && !failedNode && (
+        <div
+          className="p-4 bg-emerald-950/60 border border-emerald-500/50 rounded-xl flex items-start gap-3 text-emerald-200 animate-fadeIn"
+          role="alert"
+        >
+          <CheckCircle2
+            className="text-emerald-400 mt-0.5 shrink-0"
+            size={20}
+          />
           <div>
-            <h4 className="font-bold text-sm">{t('page.task.completedTitle')}</h4>
+            <h4 className="font-bold text-sm">
+              {t("page.task.completedTitle")}
+            </h4>
             <p className="text-xs text-[var(--status-success-text)] mt-0.5">
-              {t('page.task.completedBody')}
+              {t("page.task.completedBody")}
             </p>
           </div>
         </div>
@@ -269,7 +331,9 @@ const TaskDetailPage: React.FC = () => {
       <div className="glass-panel flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-xl md:text-2xl font-bold tracking-tight">{t('nav.taskMonitoring')}</h1>
+            <h1 className="text-xl md:text-2xl font-bold tracking-tight">
+              {t("nav.taskMonitoring")}
+            </h1>
             <span
               id="ws-status"
               // The raw state, so tests can assert the connection without
@@ -282,11 +346,11 @@ const TaskDetailPage: React.FC = () => {
                 color: wsBadge.color,
               }}
             >
-              {t('page.task.wsStatus', { status: wsBadge.label })}
+              {t("page.task.wsStatus", { status: wsBadge.label })}
             </span>
           </div>
           <p className="text-xs text-[var(--text-secondary)] font-mono mt-1">
-            {t('page.task.taskId', { id })}
+            {t("page.task.taskId", { id })}
           </p>
           {task?.prompt && (
             <p className="text-sm text-[var(--text-muted)] mt-3 italic border-l-2 border-[var(--accent-secondary)] pl-3">
@@ -297,40 +361,64 @@ const TaskDetailPage: React.FC = () => {
 
         <div className="flex items-center gap-3 self-stretch md:self-auto justify-between">
           <div className="text-right hidden sm:block">
-            <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)]">{t('common.status')}</div>
-            <div className={`text-xs font-extrabold capitalize mt-0.5 ${
-              task?.status === 'completed' ? 'text-[var(--status-success)]' :
-              task?.status === 'failed' ? 'text-[var(--status-danger)]' : 'text-[var(--accent-secondary)]'
-            }`}>
-              {task?.status || 'queued'}
+            <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)]">
+              {t("common.status")}
+            </div>
+            <div
+              className={`text-xs font-extrabold capitalize mt-0.5 ${
+                task?.status === "completed"
+                  ? "text-[var(--status-success)]"
+                  : task?.status === "failed"
+                    ? "text-[var(--status-danger)]"
+                    : "text-[var(--accent-secondary)]"
+              }`}
+            >
+              {task?.status || "queued"}
             </div>
           </div>
-          <button onClick={refetch} className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[var(--surface-elevated)] hover:bg-[var(--surface-muted)] border border-[var(--border-strong)] transition">
+          <button
+            onClick={refetch}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[var(--surface-elevated)] hover:bg-[var(--surface-muted)] border border-[var(--border-strong)] transition"
+          >
             <RefreshCw size={12} />
-            <span>{t('page.task.sync')}</span>
+            <span>{t("page.task.sync")}</span>
           </button>
         </div>
       </div>
+
+      <PipelineStepIndicator
+        nodes={nodes}
+        startedAt={task?.createdAt}
+        endedAt={
+          task?.status === "completed" || task?.status === "failed"
+            ? task.updatedAt
+            : undefined
+        }
+        running={task?.status === "running" || task?.status === "queued"}
+      />
 
       {/* DAG Graph Panel */}
       <div className="glass-panel relative flex flex-col">
         <div className="flex items-center gap-2 mb-3">
           <Play size={16} className="text-[var(--accent-secondary)]" />
-          <h3 className="text-md font-semibold text-[var(--text-primary)]">{t('page.task.dagTitle')}</h3>
-          <span className="text-[10px] text-[var(--text-muted)] ml-auto">{t('page.task.dagHint')}</span>
+          <h3 className="text-md font-semibold text-[var(--text-primary)]">
+            {t("page.task.dagTitle")}
+          </h3>
+          <span className="text-[10px] text-[var(--text-muted)] ml-auto">
+            {t("page.task.dagHint")}
+          </span>
         </div>
-        
-        <div 
+
+        <div
           id="dag-preview"
           className="w-full bg-[var(--surface-glass-subtle)] rounded-xl border border-[var(--panel-border)] overflow-hidden relative"
-          style={{ height: '280px' }}
+          style={{ height: "280px" }}
         >
           {flowNodes.length > 0 ? (
             <ReactFlow
               nodes={flowNodes}
               edges={flowEdges}
               nodeTypes={nodeTypes}
-              onNodeClick={(_event, node) => setSelectedNodeId(node.id)}
               fitView
               fitViewOptions={{ padding: 0.2 }}
               nodesConnectable={false}
@@ -347,7 +435,7 @@ const TaskDetailPage: React.FC = () => {
             </ReactFlow>
           ) : (
             <div className="flex items-center justify-center h-full text-[var(--text-muted)]">
-              {t('page.task.dagEmpty')}
+              {t("page.task.dagEmpty")}
             </div>
           )}
         </div>

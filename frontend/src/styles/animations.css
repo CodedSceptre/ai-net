@@ -14,6 +14,10 @@
   animation: pulse 2s infinite ease-in-out;
 }
 
+.pipeline-step-active {
+  animation: pipelineStepPulse 1.6s ease-in-out infinite;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -57,6 +61,16 @@
   }
 }
 
+@keyframes pipelineStepPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 36%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--primary) 0%, transparent);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fade-in,
   .slide-up,
@@ -66,5 +80,10 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     animation-delay: 0.01ms !important;
+  }
+
+  .pipeline-step-active {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
