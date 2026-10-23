@@ -1,5 +1,8 @@
 import { randomUUID } from 'crypto';
 import type { SpanStatus, Trace, TraceSpan } from './tracing.types';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger({ service: 'ai-net-backend' });
 
 /**
  * In-memory distributed tracing service.
@@ -66,6 +69,11 @@ export class TracingService {
       this.requestIndex.set(metadata.requestId, correlationId);
     }
 
+    logger.info(
+      { event: 'span_start', traceId: correlationId, spanId: span.spanId, service, operation, ...metadata },
+      'span_start',
+    );
+
     return span;
   }
 
@@ -92,6 +100,20 @@ export class TracingService {
     if (metadata !== undefined) {
       span.metadata = { ...span.metadata, ...metadata };
     }
+
+    logger.info(
+      {
+        event: 'span_end',
+        traceId: span.correlationId,
+        spanId: span.spanId,
+        service: span.service,
+        operation: span.operation,
+        status,
+        durationMs: span.durationMs,
+        ...metadata,
+      },
+      'span_end',
+    );
   }
 
   /**

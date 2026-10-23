@@ -38,7 +38,6 @@ import type {
   PaymentMetrics,
   RegistryCacheMetrics,
   PrometheusHistogram,
-  RegistryCacheMetrics,
   RequestMetrics,
   RequestSample,
   ScrapeHealth,
@@ -563,8 +562,8 @@ export class MetricsService {
   }
 
   /** Record one completed HTTP response. */
-  recordRequest(durationMs: number, statusCode: number): void {
-    this.samples.push({ timestamp: this.clock(), durationMs, statusCode });
+  recordRequest(durationMs: number, statusCode: number, method?: string, path?: string): void {
+    this.samples.push({ timestamp: this.clock(), durationMs, statusCode, method, path });
     if (this.samples.length > this.maxSamples) {
       this.samples.splice(0, this.samples.length - this.maxSamples);
     }
@@ -695,6 +694,20 @@ export class MetricsService {
   private registeredOnce = true;
   private lastScrapeTimestamp: string;
 
+  // ── Extended Prometheus Metrics (Observability Enhancement) ────────────────
+  /** tasks_submitted_total — counter incremented on each new task submission. */
+  private tasksSubmittedTotal = 0;
+  /** tasks_failed_total by reason — key: reason, value: count. */
+  private tasksFailedByReason = new Map<string, number>();
+  /** venice_ai_calls_total by agent_type — key: agent_type::status, value: count. */
+  private veniceCallsByAgentType = new Map<string, number>();
+  /** stellar_transactions_total by type — key: type, value: count. */
+  private stellarTransactionsByType = new Map<string, number>();
+  /** active_websocket_connections gauge — live count set externally. */
+  private activeWsConnections = 0;
+  /** agent_health_status by agent_id — key: agentId, value: 1|0. */
+  private agentHealthStatuses = new Map<string, number>();
+
   /** Record completed task duration in seconds. */
   recordTaskCompletion(durationSeconds: number, _status: string = "completed"): void {
     observeHistogram(this.taskDurationHistogram, Math.max(0, durationSeconds));
@@ -735,13 +748,189 @@ export class MetricsService {
     return this.veniceCircuitBreakerState;
   }
 
+  // ── Extended Metrics (Observability Enhancement) ───────────────────────────
+
+  /** Increment tasks_submitted_total counter. */
+  recordTaskSubmitted(): void {
+    this.tasksSubmittedTotal += 1;
+  }
+
+  /** Increment tasks_failed_total counter by reason label. */
+  recordTaskFailed(reason: string): void {
+    const key = reason || "unknown";
+    this.tasksFailedByReason.set(key, (this.tasksFailedByReason.get(key) ?? 0) + 1);
+  }
+
+  /**
+   * Record a Venice AI call attributed to a specific agent type.
+   * Also increments the existing model-keyed counter for backward compat.
+   */
+  recordVeniceCallByAgentType(agentType: string, status: string, latencySeconds: number): void {
+    const key = `${agentType || "unknown"}::${status || "success"}`;
+    this.veniceCallsByAgentType.set(key, (this.veniceCallsByAgentType.get(key) ?? 0) + 1);
+    // Keep the existing histogram up-to-date too
+    observeHistogram(this.veniceLatencyHistogram, Math.max(0, latencySeconds));
+  }
+
+  /** Record a Stellar transaction by type (e.g. payment, create_account). */
+  recordStellarTransaction(type: string): void {
+    const key = type || "unknown";
+    this.stellarTransactionsByType.set(key, (this.stellarTransactionsByType.get(key) ?? 0) + 1);
+  }
+
+  /** Set active WebSocket connections gauge (called by stream layer). */
+  setActiveWsConnections(count: number): void {
+    this.activeWsConnections = Math.max(0, count);
+  }
+
+  /** Get current active WebSocket connections count. */
+  getActiveWsConnections(): number {
+    return this.activeWsConnections;
+  }
+
+  /**
+   * Update agent health status gauge.
+   * @param agentId - Agent identifier (used as label).
+   * @param healthy - true = 1 (healthy), false = 0 (unhealthy).
+   */
+  setAgentHealthStatus(agentId: string, healthy: boolean): void {
+    this.agentHealthStatuses.set(agentId, healthy ? 1 : 0);
+  }
+
+  /** Remove an agent's health entry (e.g. on deregistration). */
+  removeAgentHealthStatus(agentId: string): void {
+    this.agentHealthStatuses.delete(agentId);
+  }
+
   /**
    * Render all metric families in Prometheus text format.
+   * Emits the full set of required metrics including labelled counters for
+   * HTTP method/path/status, task submission, task failures by reason,
+   * Venice AI calls by agent type, Stellar transactions by type,
+   * active WebSocket connections, and per-agent health status.
    */
   async exportPrometheusMetrics(): Promise<string> {
     const dashboard = await this.getDashboard();
     this.lastScrapeTimestamp = new Date(this.clock()).toISOString();
-    return formatPrometheusMetrics({
+
+    const samples = this.samples;
+
+    // Build http_requests_total{method,path,status} from the sample buffer
+    const httpCountByLabel = new Map<string, number>();
+    const httpDurationsMs: number[] = [];
+    for (const s of samples) {
+      const method = s.method ?? "UNKNOWN";
+      const path = s.path ?? "/";
+      const status = String(s.statusCode);
+      const key = `${method}::${path}::${status}`;
+      httpCountByLabel.set(key, (httpCountByLabel.get(key) ?? 0) + 1);
+      httpDurationsMs.push(s.durationMs);
+    }
+
+    const lines: string[] = [];
+
+    // ── 1. http_requests_total{method,path,status} ───────────────────────────
+    lines.push("# HELP http_requests_total Total number of HTTP requests by method, path and status");
+    lines.push("# TYPE http_requests_total counter");
+    if (httpCountByLabel.size === 0) {
+      lines.push('http_requests_total{method="GET",path="/",status="200"} 0');
+    } else {
+      for (const [key, count] of httpCountByLabel.entries()) {
+        const parts = key.split("::");
+        const method = parts[0] ?? "UNKNOWN";
+        const path = parts[1] ?? "/";
+        const status = parts[2] ?? "0";
+        lines.push(`http_requests_total{method="${method}",path="${path}",status="${status}"} ${count}`);
+      }
+    }
+
+    // ── 2. http_request_duration_seconds histogram ────────────────────────────
+    lines.push("");
+    const durationBuckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
+    const durHist = createEmptyHistogram(durationBuckets);
+    for (const ms of httpDurationsMs) {
+      observeHistogram(durHist, ms / 1000); // convert ms to seconds
+    }
+    lines.push(renderHistogram("http_request_duration_seconds", "HTTP request latency in seconds", durHist));
+
+    // ── 3. tasks_submitted_total ──────────────────────────────────────────────
+    lines.push("");
+    lines.push("# HELP tasks_submitted_total Total number of tasks submitted");
+    lines.push("# TYPE tasks_submitted_total counter");
+    lines.push(`tasks_submitted_total ${this.tasksSubmittedTotal}`);
+
+    // ── 4. tasks_completed_total{status} ─────────────────────────────────────
+    lines.push("");
+    lines.push("# HELP tasks_completed_total Total number of tasks by completion status");
+    lines.push("# TYPE tasks_completed_total counter");
+    lines.push(`tasks_completed_total{status="completed"} ${dashboard.tasks.completed}`);
+    lines.push(`tasks_completed_total{status="failed"} ${dashboard.tasks.failed}`);
+    lines.push(`tasks_completed_total{status="cancelled"} ${dashboard.tasks.cancelled}`);
+
+    // ── 5. tasks_failed_total{reason} ────────────────────────────────────────
+    lines.push("");
+    lines.push("# HELP tasks_failed_total Total number of failed tasks by reason");
+    lines.push("# TYPE tasks_failed_total counter");
+    if (this.tasksFailedByReason.size === 0) {
+      lines.push('tasks_failed_total{reason="unknown"} 0');
+    } else {
+      for (const [reason, count] of this.tasksFailedByReason.entries()) {
+        lines.push(`tasks_failed_total{reason="${reason}"} ${count}`);
+      }
+    }
+
+    // ── 6. venice_ai_calls_total{agent_type,status} ───────────────────────────
+    lines.push("");
+    lines.push("# HELP venice_ai_calls_total Total Venice AI API calls by agent type and status");
+    lines.push("# TYPE venice_ai_calls_total counter");
+    if (this.veniceCallsByAgentType.size === 0) {
+      lines.push('venice_ai_calls_total{agent_type="unknown",status="success"} 0');
+    } else {
+      for (const [key, count] of this.veniceCallsByAgentType.entries()) {
+        const parts = key.split("::");
+        const agentType = parts[0] ?? "unknown";
+        const status = parts[1] ?? "success";
+        lines.push(`venice_ai_calls_total{agent_type="${agentType}",status="${status}"} ${count}`);
+      }
+    }
+
+    // ── 7. stellar_transactions_total{type} ───────────────────────────────────
+    lines.push("");
+    lines.push("# HELP stellar_transactions_total Total Stellar blockchain transactions by type");
+    lines.push("# TYPE stellar_transactions_total counter");
+    if (this.stellarTransactionsByType.size === 0) {
+      lines.push('stellar_transactions_total{type="payment"} 0');
+    } else {
+      for (const [type, count] of this.stellarTransactionsByType.entries()) {
+        lines.push(`stellar_transactions_total{type="${type}"} ${count}`);
+      }
+    }
+
+    // ── 8. active_websocket_connections gauge ─────────────────────────────────
+    // Prefer the live probe result from the stream layer; fall back to our counter.
+    const wsProbeResult = this.webSocketProbe?.();
+    const wsCount = wsProbeResult !== undefined ? wsProbeResult.connections : this.activeWsConnections;
+    lines.push("");
+    lines.push("# HELP active_websocket_connections Number of active WebSocket connections");
+    lines.push("# TYPE active_websocket_connections gauge");
+    lines.push(`active_websocket_connections ${wsCount}`);
+
+    // ── 9. agent_health_status{agent_id} gauge ────────────────────────────────
+    lines.push("");
+    lines.push("# HELP agent_health_status Agent health status (1=healthy, 0=unhealthy) by agent_id");
+    lines.push("# TYPE agent_health_status gauge");
+    if (this.agentHealthStatuses.size === 0) {
+      // No agents registered yet — emit a synthetic zero so Grafana panels load
+      lines.push('agent_health_status{agent_id="none"} 0');
+    } else {
+      for (const [agentId, status] of this.agentHealthStatuses.entries()) {
+        lines.push(`agent_health_status{agent_id="${agentId}"} ${status}`);
+      }
+    }
+
+    // ── Legacy metric families (keep for backward compat with existing dashboard) ──
+    lines.push("");
+    lines.push(formatPrometheusMetrics({
       tasks: dashboard.tasks,
       agents: dashboard.agents,
       payments: dashboard.payments,
@@ -749,7 +938,9 @@ export class MetricsService {
       veniceRequests: this.veniceRequests,
       veniceLatencyHistogram: this.veniceLatencyHistogram,
       veniceCircuitBreakerState: this.veniceCircuitBreakerState,
-    });
+    }));
+
+    return lines.join("\n") + "\n";
   }
 
   /**
@@ -760,7 +951,7 @@ export class MetricsService {
       status: "ok",
       uptimeSeconds: Math.max(0, Math.floor((this.clock() - this.startedAtMs) / 1000)),
       lastScrapeTimestamp: this.lastScrapeTimestamp,
-      metricFamiliesCount: 8,
+      metricFamiliesCount: 17, // 9 new + 8 legacy families
       registeredOnce: this.registeredOnce,
     };
   }
@@ -774,6 +965,13 @@ export class MetricsService {
     this.veniceLatencyHistogram = createEmptyHistogram(DEFAULT_VENICE_LATENCY_BUCKETS);
     this.veniceCircuitBreakerState = 0;
     this.registeredOnce = true;
+    // Reset extended counters
+    this.tasksSubmittedTotal = 0;
+    this.tasksFailedByReason.clear();
+    this.veniceCallsByAgentType.clear();
+    this.stellarTransactionsByType.clear();
+    this.activeWsConnections = 0;
+    this.agentHealthStatuses.clear();
     this.resetCache();
   }
 
@@ -1029,13 +1227,22 @@ export const metricsService = new MetricsService();
  * Sample every HTTP response into {@link metricsService}.
  *
  * Mount before the routers so that latency covers the full handler chain.
+ * Captures method, normalized path, status code and duration for labelled counters.
  */
-export function metricsMiddleware(_req: Request, res: Response, next: NextFunction): void {
+export function metricsMiddleware(req: Request, res: Response, next: NextFunction): void {
   const startedAt = process.hrtime.bigint();
 
   res.on("finish", () => {
     const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
-    metricsService.recordRequest(durationMs, res.statusCode);
+    // Normalize path to avoid high-cardinality label explosion.
+    // Replace UUIDs and numeric IDs with placeholders.
+    const rawPath = req.path ?? "/";
+    const normalizedPath = rawPath
+      .replace(/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "/:id")
+      .replace(/\/task_[a-z0-9]+/gi, "/:taskId")
+      .replace(/\/[0-9]+/g, "/:id");
+    const method = req.method ?? "UNKNOWN";
+    metricsService.recordRequest(durationMs, res.statusCode, method, normalizedPath);
   });
 
   next();

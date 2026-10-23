@@ -32,8 +32,8 @@ export function PaymentChart({ transactions }: PaymentChartProps) {
   const [legendOpen, setLegendOpen] = useState(true)
 
   const SLICE_COLORS = effectiveTheme === 'dark' ? DARK_COLORS : LIGHT_COLORS
-  const gridStroke = effectiveTheme === 'dark' ? 'var(--border-color)' : '#e6e9ee'
-  const textColor = effectiveTheme === 'dark' ? '#f8fafc' : '#0A0E14'
+  const gridStroke = 'var(--border-color)'
+  const textColor = 'var(--text-primary)'
 
   const dailySpend = useMemo(() => aggregateDailySpend(transactions, 30), [transactions])
   const byAgent = useMemo(() => aggregateByCounterparty(transactions), [transactions])
@@ -60,8 +60,8 @@ export function PaymentChart({ transactions }: PaymentChartProps) {
                 formatter={(value: number) => [`${value.toFixed(7)} XLM`, t('wallet.chart.spent')]}
                 labelFormatter={(value: string) => formatDate(value, i18n.language)}
                 contentStyle={{
-                  backgroundColor: effectiveTheme === 'dark' ? '#1A1F2E' : '#F8FAFC',
-                  border: `1px solid ${effectiveTheme === 'dark' ? '#2A3040' : '#E6E9EE'}`,
+                  backgroundColor: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-color)',
                   borderRadius: '8px',
                   color: textColor,
                 }}

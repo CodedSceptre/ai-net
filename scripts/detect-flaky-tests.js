@@ -1,7 +1,3 @@
-#!/usr/bin/env node
-/**
- * detect-flaky-tests.js
- *
  * Scans Jest JSON test result files for tests that PASSED ON RETRY (i.e. the
  * test had at least one failed attempt before succeeding) and generates a
  * flaky-tests report. Also tracks flaky rate over a rolling 7-day window and

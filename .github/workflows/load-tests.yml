@@ -1,0 +1,57 @@
+name: Backend Load Tests (weekly)
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  load-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Start local Stellar and backend services
+        env:
+          VENICE_API_KEY: mock_local_key
+        run: |
+          docker compose up -d --build stellar-standalone backend
+          for attempt in $(seq 1 120); do
+            if curl --fail --silent http://localhost:3000/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs backend
+          exit 1
+
+      - name: Install k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Run scenarios and export percentile summaries
+        env:
+          BASE_URL: http://localhost:3000
+        run: |
+          mkdir -p reports/load
+          k6 run --summary-export reports/load/get-agents.json tests/load/scenarios/get-agents.js
+          k6 run --summary-export reports/load/submit-tasks.json tests/load/scenarios/submit-tasks.js
+          k6 run --summary-export reports/load/websocket-subscribers.json tests/load/scenarios/websocket-subscribers.js
+          k6 run --summary-export reports/load/poll-task.json tests/load/scenarios/poll-task.js
+
+      - name: Upload load-test summaries
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-load-reports
+          path: reports/load/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Stop local services
+        if: always()
+        run: docker compose down
