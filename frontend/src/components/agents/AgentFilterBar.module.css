@@ -63,7 +63,7 @@
 }
 
 .capChip:active {
-  background: rgba(99, 102, 241, 0.2);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
   transform: scale(0.95);
 }
 
@@ -76,11 +76,11 @@
 .capChipActive:hover {
   background: var(--accent-surface-strong);
   border-color: var(--primary);
-  color: #C7D2FE;
+  color: var(--text-muted);
 }
 
 .capChipActive:active {
-  background: rgba(99, 102, 241, 0.35);
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
   transform: scale(0.95);
 }
 
@@ -123,7 +123,7 @@
 }
 
 .toggleButton:active {
-  background: rgba(255, 255, 255, 0.09);
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
   transform: scale(0.95);
 }
 
@@ -139,7 +139,7 @@
 }
 
 .toggleButtonActive:active {
-  background: var(--primary-hover, #7c3aed);
+  background: var(--primary-hover, var(--accent));
   transform: scale(0.95);
 }
 
@@ -172,7 +172,7 @@
 }
 
 .iconAction:active {
-  background: rgba(99, 102, 241, 0.25);
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
   transform: scale(0.92);
 }
 
@@ -196,7 +196,7 @@
 }
 
 .resetButton:active {
-  background: rgba(239, 68, 68, 0.18);
+  background: color-mix(in srgb, var(--status-danger) 18%, transparent);
   transform: scale(0.96);
 }
 

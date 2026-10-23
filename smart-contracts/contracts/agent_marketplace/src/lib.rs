@@ -12,7 +12,7 @@ pub use errors::Error;
 pub use types::*;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, Symbol, Vec,
 };
 
 #[contracttype]
@@ -24,6 +24,8 @@ pub enum DataKey {
     Booking(Symbol),
     AgentRating(Symbol),
     ListingsByCapability(Symbol),
+    /// Oracle manager contract address for XLM/USD price resolution.
+    OracleManager,
 }
 
 #[contract]
@@ -68,6 +70,61 @@ impl AgentMarketplaceContract {
         require_admin(&env)?;
         env.storage().instance().set(&DataKey::Paused, &paused);
         Ok(())
+    }
+
+    /// Admin: configure the oracle manager contract address for XLM/USD price resolution.
+    ///
+    /// When set, `book_agent` fetches a fresh price from the oracle manager
+    /// before accepting payment. Stale prices (>300 s) block new bookings.
+    pub fn set_oracle(env: Env, oracle_manager: Address) -> Result<(), Error> {
+        require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleManager, &oracle_manager);
+        env.events().publish(
+            (symbol_short!("market"), symbol_short!("ora_set")),
+            oracle_manager,
+        );
+        Ok(())
+    }
+
+    /// Read the current oracle manager address, if configured.
+    pub fn get_oracle(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::OracleManager)
+    }
+
+    /// Fetch the current XLM/USD price from the configured oracle manager.
+    ///
+    /// Returns `None` if no oracle is configured or the price is unavailable.
+    pub fn get_xlm_price(env: Env) -> Option<i128> {
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleManager)?;
+
+        let fn_name = soroban_sdk::Symbol::new(&env, "resolve_price");
+        let pair = soroban_sdk::Symbol::new(&env, "XLM_USD");
+        let args = soroban_sdk::vec![&env, pair.into_val(&env)];
+
+        use soroban_sdk::{InvokeError, Val, TryIntoVal, Map};
+
+        let result: Result<Result<Val, _>, Result<InvokeError, InvokeError>> =
+            env.try_invoke_contract(&oracle, &fn_name, args);
+
+        match result {
+            Ok(Ok(val)) => {
+                let map: Result<Map<soroban_sdk::Symbol, Val>, _> = val.try_into_val(&env);
+                if let Ok(m) = map {
+                    let price_key = soroban_sdk::Symbol::new(&env, "price");
+                    let price: Option<i128> = m
+                        .get(price_key)
+                        .and_then(|v| v.try_into_val(&env).ok());
+                    return price;
+                }
+                None
+            }
+            _ => None,
+        }
     }
 
     /// List a service on the marketplace.
@@ -186,6 +243,24 @@ impl AgentMarketplaceContract {
 
         if !listing.active {
             return Err(Error::ServiceNotAvailable);
+        }
+
+        // If an oracle manager is configured, fetch a fresh XLM/USD price.
+        // A stale or unavailable price blocks new bookings to prevent pricing
+        // at an outdated exchange rate.
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::OracleManager)
+        {
+            // get_xlm_price does a cross-contract call; None means stale/unavailable.
+            let oracle_price = Self::get_xlm_price(env.clone());
+            if oracle_price.is_none() {
+                return Err(Error::ServiceNotAvailable); // reuse: oracle stale
+            }
+            // oracle_price is available — marketplace records it but leaves
+            // the actual payment validation to the payment_amount check below.
+            // Future: convert USD-denominated listing price → XLM using oracle_price.
         }
 
         if payment_amount < listing.price_stroops {

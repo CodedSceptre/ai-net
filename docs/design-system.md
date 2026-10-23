@@ -48,6 +48,41 @@ Tables, lists, timelines, and dashboards should use `--surface-*`, `--border-*`,
 
 Agent visuals use the `--agent-*` token set. Do not hard-code agent hex colors in components.
 
+### Agent Tokens and Tailwind
+
+The agent color tokens (`--agent-research`, `--agent-risk`, `--agent-coding`, `--agent-design`, `--agent-report`) and their `-surface` and `-border` variants are **not exposed as named Tailwind classes** in `tailwind.config.js`. This is intentional — the set of agent types is extensible and they are consumed by a small number of components.
+
+**Use inline `style` props with `var()` references** when you need agent token colors in JSX:
+
+```tsx
+// ✅ Correct — use inline styles with CSS variables
+const capabilityTokens = {
+  research: {
+    color: 'var(--agent-research)',
+    surface: 'var(--agent-research-surface)',
+    border: 'var(--agent-research-border)',
+  },
+  // ...
+}
+
+<span
+  className="px-2 py-0.5 rounded-full border text-xs"
+  style={{ color: tokens.color, backgroundColor: tokens.surface, borderColor: tokens.border }}
+>
+  research
+</span>
+
+// ❌ Wrong — hardcoded hex values that break theming
+<span className="text-[#60A5FA] bg-[#60A5FA]/15 border-[#60A5FA]/30">research</span>
+
+// ❌ Wrong — inline hex values
+<span style={{ color: '#60A5FA' }}>research</span>
+```
+
+For icon colors in demo/marketing components use the same `style={{ color: 'var(--agent-research)' }}` pattern rather than Tailwind arbitrary classes.
+
+If a future refactor warrants exposing agent tokens to Tailwind (e.g., more widespread use across non-landing components), add them to the `colors.agent` section of `tailwind.config.js` following the pattern of the existing `accent` and `status` tokens.
+
 Shadows and glow effects use `--shadow-*`, `--glow-*`, or `--info-glow-*`. Do not add raw `rgba()` shadows in component CSS.
 
 ## Review Checklist
