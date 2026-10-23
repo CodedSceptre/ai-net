@@ -1,0 +1,86 @@
+groups:
+  - name: ai-net-p1
+    rules:
+      - alert: api_down
+        expr: absent(ainet_up) or ainet_up == 0
+        for: 1m
+        labels:
+          severity: P1
+          service: ai-net-api
+        annotations:
+          summary: ai-net API is unavailable
+          description: The ai-net Prometheus health metric is missing or reports the API as down.
+
+      - alert: payment_failure_rate
+        expr: sum(ainet_payments_total{status=~"failed|refunded"}) / clamp_min(sum(ainet_payments_total), 1) > 0.05
+        for: 5m
+        labels:
+          severity: P1
+          service: ai-net-payments
+        annotations:
+          summary: Payment failure rate exceeds 5%
+          description: More than 5% of recorded payments failed or were refunded. Refunds are the persisted failure proxy in the current payment schema.
+
+      - alert: all_agents_offline
+        expr: (sum(ainet_agents_total{status="online"}) or vector(0)) == 0
+        for: 2m
+        labels:
+          severity: P1
+          service: ai-net-agents
+        annotations:
+          summary: All agents are offline
+          description: No active agents are currently registered.
+
+  - name: ai-net-p2
+    rules:
+      - alert: db_pool_exhausted
+        expr: sum(ainet_db_pool_pending_acquires) > 0
+        for: 1m
+        labels:
+          severity: P2
+          service: ai-net-database
+        annotations:
+          summary: Database pool has waiting requests
+          description: One or more callers are waiting to acquire a database connection.
+
+      - alert: task_dlq_depth
+        expr: ainet_queue_dead_letter_depth > 10
+        for: 5m
+        labels:
+          severity: P2
+          service: ai-net-task-queue
+        annotations:
+          summary: Task dead-letter queue exceeds 10 jobs
+          description: The task dead-letter queue has accumulated more than 10 jobs.
+
+      - alert: p99_latency
+        expr: histogram_quantile(0.99, sum by (le) (ainet_http_request_duration_milliseconds_bucket)) > 2000
+        for: 5m
+        labels:
+          severity: P2
+          service: ai-net-api
+        annotations:
+          summary: API p99 latency exceeds 2 seconds
+          description: The rolling HTTP request histogram reports p99 latency above 2 seconds.
+
+  - name: ai-net-p3
+    rules:
+      - alert: disk_usage
+        expr: (1 - node_filesystem_avail_bytes{fstype!="tmpfs", mountpoint!="/boot"} / node_filesystem_size_bytes{fstype!="tmpfs", mountpoint!="/boot"}) * 100 > 80
+        for: 10m
+        labels:
+          severity: P3
+          service: ai-net-host
+        annotations:
+          summary: Disk usage exceeds 80%
+          description: A monitored host filesystem is more than 80% full.
+
+      - alert: cache_miss_rate
+        expr: rate(ainet_cache_misses_total[5m]) / clamp_min(rate(ainet_cache_misses_total[5m]) + rate(ainet_cache_hits_total[5m]), 1) > 0.5
+        for: 10m
+        labels:
+          severity: P3
+          service: ai-net-cache
+        annotations:
+          summary: Cache miss rate exceeds 50%
+          description: More than half of cache lookups missed over the last five minutes.
