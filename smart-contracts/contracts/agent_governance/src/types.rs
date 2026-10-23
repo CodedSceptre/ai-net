@@ -40,7 +40,7 @@
 //! | `execute_proposal` | `executed`    | `ProposalExecutedEvent` |
 //! | `execute_proposal` | `failed`      | `ProposalFailedEvent`   |
 
-use soroban_sdk::{contracttype, Address, String};
+use soroban_sdk::{contracttype, Address, String, Symbol, Vec};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -233,4 +233,112 @@ pub struct ProposalFailedEvent {
     pub for_power: i128,
     pub against_power: i128,
     pub abstain_power: i128,
+}
+
+// ─── Timelock constants ───────────────────────────────────────────────────────
+
+/// Default minimum delay in ledgers before a proposed change can be executed
+/// (~4 days at 5 s/ledger: 48 ledgers for testnet convenience; production
+/// deployments should pass a higher value to `initialize_timelock`).
+pub const MIN_DELAY_LEDGERS: u32 = 48;
+
+/// Maximum TTL in ledgers for a pending change stored in Temporary storage.
+/// If the change is not executed or cancelled within this window it expires
+/// automatically and a fresh proposal must be submitted.
+pub const CHANGE_EXPIRY_LEDGERS: u32 = 200;
+
+/// Minimum number of guardian approvals required for an emergency fast-track
+/// execution that bypasses the timelock delay.
+pub const DEFAULT_GUARDIAN_THRESHOLD: u32 = 3;
+
+/// Recommended guardian set size (3-of-5 default).
+pub const DEFAULT_GUARDIAN_SET_SIZE: u32 = 5;
+
+// ─── Timelock storage keys ────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TimelockKey {
+    /// Minimum delay configured at deploy time (overrides `MIN_DELAY_LEDGERS`).
+    MinDelay,
+    /// Monotonic counter for pending change ids.
+    ChangeCount,
+    /// Guardian multi-sig configuration.
+    GuardianConfig,
+    /// Pending change record (Temporary storage).
+    PendingChange(u32),
+    /// Guardian approval for a given change (Temporary storage).
+    GuardianApproval(u32, Address),
+}
+
+// ─── Timelock types ───────────────────────────────────────────────────────────
+
+/// A guardian set that can fast-track execution via M-of-N approval.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GuardianConfig {
+    /// The set of trusted guardian addresses.
+    pub guardians: Vec<Address>,
+    /// Minimum approvals required to emergency-execute a change.
+    pub threshold: u32,
+}
+
+/// A pending parameter-change proposal stored in Temporary storage.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingChange {
+    /// Monotonic identifier.
+    pub id: u32,
+    /// The protocol parameter being changed (e.g. `Symbol::new(&env, "fee_rate")`).
+    pub parameter: Symbol,
+    /// The address that proposed the change (admin or guardian).
+    pub proposer: Address,
+    /// Ledger sequence number at or after which the change may be executed normally.
+    pub execute_after_ledger: u32,
+    /// Whether the change has been executed.
+    pub executed: bool,
+    /// Whether the change has been cancelled.
+    pub cancelled: bool,
+    /// Number of guardian approvals received for emergency fast-track.
+    pub guardian_approvals: u32,
+}
+
+// ─── Timelock event payloads ──────────────────────────────────────────────────
+
+/// Emitted by `propose_change`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChangeProposedEvent {
+    pub change_id: u32,
+    pub parameter: Symbol,
+    pub proposer: Address,
+    pub execute_after_ledger: u32,
+}
+
+/// Emitted by `execute_change`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChangeExecutedEvent {
+    pub change_id: u32,
+    pub parameter: Symbol,
+    pub executor: Address,
+    pub emergency: bool,
+}
+
+/// Emitted by `cancel_change`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChangeCancelledEvent {
+    pub change_id: u32,
+    pub parameter: Symbol,
+    pub canceller: Address,
+}
+
+/// Emitted by `guardian_approve`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GuardianApprovalEvent {
+    pub change_id: u32,
+    pub guardian: Address,
+    pub total_approvals: u32,
 }

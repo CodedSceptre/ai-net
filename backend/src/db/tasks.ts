@@ -64,6 +64,17 @@ export interface TaskEvent {
   timestamp: string;
 }
 
+export interface StoredTaskResult {
+  result: string | null;
+  resultFile: string | null;
+  resultExpiresAt: string | null;
+}
+
+export interface ExpiredTaskResult {
+  id: string;
+  resultFile: string | null;
+}
+
 export interface TaskListOptions {
   status?: string;
   q?: string;
@@ -101,11 +112,22 @@ export interface TaskDb {
   ): CursorPage<Task>;
   updateStatus(id: string, status: TaskStatus): void;
   updateDagJson(id: string, dagJson: string): void;
+  saveResult(id: string, result: string, resultFile: string | null, expiresAt: string): void;
+  getResult(id: string): StoredTaskResult | undefined;
+  listExpiredResults(before: string): ExpiredTaskResult[];
+  clearResult(id: string): void;
   insertEvent(event: TaskEvent): void;
   getEventHistory(taskId: string): TaskEvent[];
   failRunningTasks(): void;
   insertQualityScore(record: QualityScoreRecord): void;
   listQualityScores(agentId?: string, limit?: number): QualityScoreRecord[];
+}
+
+function taskFromRow(row: any): Task {
+  delete row.result;
+  delete row.resultFile;
+  delete row.resultExpiresAt;
+  return { ...row, dag: JSON.parse(row.dagJson) };
 }
 
 export function createTaskDb(db: Database.Database): TaskDb {
@@ -125,10 +147,7 @@ export function createTaskDb(db: Database.Database): TaskDb {
     findById(id: string): Task | undefined {
       const row = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as any;
       if (!row) return undefined;
-      return {
-        ...row,
-        dag: JSON.parse(row.dagJson),
-      };
+      return taskFromRow(row);
     },
 
     list(
@@ -163,10 +182,7 @@ export function createTaskDb(db: Database.Database): TaskDb {
         )
         .all(...params, pageSize, offset) as any[];
 
-      const tasks: Task[] = rows.map((row) => ({
-        ...row,
-        dag: JSON.parse(row.dagJson),
-      }));
+      const tasks: Task[] = rows.map(taskFromRow);
 
       const { total } = db
         .prepare(`SELECT COUNT(*) as total FROM tasks WHERE ${whereClause}`)
@@ -222,10 +238,7 @@ export function createTaskDb(db: Database.Database): TaskDb {
       const hasMore = rows.length > limit;
       const pageRows = hasMore ? rows.slice(0, limit) : rows;
 
-      const tasks: Task[] = pageRows.map((row) => ({
-        ...row,
-        dag: JSON.parse(row.dagJson),
-      }));
+      const tasks: Task[] = pageRows.map(taskFromRow);
 
       const result: CursorPage<Task> = { items: tasks };
       if (hasMore) {
@@ -247,6 +260,30 @@ export function createTaskDb(db: Database.Database): TaskDb {
       db.prepare(
         "UPDATE tasks SET dagJson = ?, updatedAt = ? WHERE id = ?",
       ).run(dagJson, new Date().toISOString(), id);
+    },
+
+    saveResult(id: string, result: string, resultFile: string | null, expiresAt: string): void {
+      db.prepare(
+        "UPDATE tasks SET result = ?, resultFile = ?, resultExpiresAt = ?, updatedAt = ? WHERE id = ?",
+      ).run(result, resultFile, expiresAt, new Date().toISOString(), id);
+    },
+
+    getResult(id: string): StoredTaskResult | undefined {
+      return db.prepare(
+        "SELECT result, resultFile, resultExpiresAt FROM tasks WHERE id = ?",
+      ).get(id) as StoredTaskResult | undefined;
+    },
+
+    listExpiredResults(before: string): ExpiredTaskResult[] {
+      return db.prepare(
+        "SELECT id, resultFile FROM tasks WHERE result IS NOT NULL AND resultExpiresAt <= ?",
+      ).all(before) as ExpiredTaskResult[];
+    },
+
+    clearResult(id: string): void {
+      db.prepare(
+        "UPDATE tasks SET result = NULL, resultFile = NULL, resultExpiresAt = NULL WHERE id = ?",
+      ).run(id);
     },
 
     insertEvent(event: TaskEvent): void {

@@ -47,6 +47,7 @@ export function ensureAgentTable(db: Database.Database): void {
       stellarPublicKey TEXT NOT NULL,
       reputationScore  REAL NOT NULL DEFAULT 2.5,
       lastSeenAt       TEXT NOT NULL,
+      last_seen_at     INTEGER NOT NULL DEFAULT 0,
       status           TEXT NOT NULL DEFAULT 'online',
       bondAmountXLM    REAL NOT NULL DEFAULT 0,
       tasksCompleted   INTEGER NOT NULL DEFAULT 0,
@@ -55,6 +56,7 @@ export function ensureAgentTable(db: Database.Database): void {
     )
   `);
   const migrations = [
+    "ALTER TABLE agents ADD COLUMN last_seen_at INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'offline'",
     "ALTER TABLE agents ADD COLUMN bondAmountXLM REAL NOT NULL DEFAULT 0",
     "ALTER TABLE agents ADD COLUMN tasksCompleted INTEGER NOT NULL DEFAULT 0",
@@ -68,6 +70,7 @@ export function ensureAgentTable(db: Database.Database): void {
       // Ignored if column already exists
     }
   }
+  db.exec("UPDATE agents SET last_seen_at = CAST(strftime('%s', lastSeenAt) AS INTEGER) WHERE last_seen_at = 0");
 }
 
 /** Lazily open (or reopen) the pooled agent database. */
@@ -121,7 +124,7 @@ export interface AgentDb {
   countByStellarKey(stellarPublicKey: string): number;
   markAllOffline(): void;
   updateLastSeen(agentId: string): void;
-  markStaleAgents(staleThresholdMinutes?: number): number;
+  markStaleAgents(staleThresholdSeconds?: number): number;
   deleteOfflineAgents(offlineThresholdHours?: number): number;
   // Optional on-chain event handlers used by registry/sync.ts. Not every
   // AgentDb implementation mirrors contract state, so call sites use `?.`.
@@ -144,14 +147,15 @@ export function createAgentDb(db: Database.Database): AgentDb {
     upsert(agent: AgentRecord): void {
       const rep = agent.reputationScore !== undefined ? Math.max(0.0, Math.min(5.0, agent.reputationScore)) : 2.5;
       db.prepare(`
-        INSERT INTO agents (id, capabilities, pricingXLM, endpoint, stellarPublicKey, reputationScore, lastSeenAt, status, bondAmountXLM, tasksCompleted, tasksFailed, lastActiveAt)
-        VALUES (@id, @capabilities, @pricingXLM, @endpoint, @stellarPublicKey, @reputationScore, @lastSeenAt, @status, @bondAmountXLM, @tasksCompleted, @tasksFailed, @lastActiveAt)
+        INSERT INTO agents (id, capabilities, pricingXLM, endpoint, stellarPublicKey, reputationScore, lastSeenAt, last_seen_at, status, bondAmountXLM, tasksCompleted, tasksFailed, lastActiveAt)
+        VALUES (@id, @capabilities, @pricingXLM, @endpoint, @stellarPublicKey, @reputationScore, @lastSeenAt, @last_seen_at, @status, @bondAmountXLM, @tasksCompleted, @tasksFailed, @lastActiveAt)
         ON CONFLICT(id) DO UPDATE SET
           capabilities = excluded.capabilities,
           pricingXLM = excluded.pricingXLM,
           endpoint = excluded.endpoint,
           stellarPublicKey = excluded.stellarPublicKey,
           lastSeenAt = excluded.lastSeenAt,
+          last_seen_at = excluded.last_seen_at,
           status = excluded.status,
           bondAmountXLM = excluded.bondAmountXLM,
           tasksCompleted = excluded.tasksCompleted,
@@ -160,6 +164,7 @@ export function createAgentDb(db: Database.Database): AgentDb {
       `).run({
         ...agent,
         capabilities: JSON.stringify(agent.capabilities),
+        last_seen_at: Math.floor(Date.parse(agent.lastSeenAt) / 1000),
         status: agent.status ?? 'offline',
         reputationScore: rep,
         bondAmountXLM: agent.bondAmountXLM ?? 0,
@@ -334,25 +339,23 @@ export function createAgentDb(db: Database.Database): AgentDb {
     },
 
     updateLastSeen(agentId: string): void {
-      // Store an ISO-8601 UTC timestamp (same format upsert uses). The raw
-      // SQLite `datetime('now')` output lacks a timezone designator and gets
-      // parsed as *local* time by JS `new Date()`, shifting timestamps by the
-      // machine's UTC offset.
+      const now = new Date();
       db.prepare(`
         UPDATE agents
         SET lastSeenAt = ?,
+            last_seen_at = ?,
             status = 'online'
         WHERE id = ?
-      `).run(new Date().toISOString(), agentId);
+      `).run(now.toISOString(), Math.floor(now.getTime() / 1000), agentId);
     },
 
-    markStaleAgents(staleThresholdMinutes: number = 5): number {
+    markStaleAgents(staleThresholdSeconds: number = 90): number {
       const result = db.prepare(`
         UPDATE agents
         SET status = 'offline'
         WHERE status = 'online'
-          AND datetime(lastSeenAt, '+' || ? || ' minutes') < datetime('now')
-      `).run(staleThresholdMinutes);
+          AND last_seen_at < ?
+      `).run(Math.floor(Date.now() / 1000) - staleThresholdSeconds);
       return result.changes;
     },
 

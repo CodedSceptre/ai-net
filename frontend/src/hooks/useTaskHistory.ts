@@ -26,6 +26,13 @@ export const DEFAULT_FILTERS: TaskHistoryFilters = {
 
 // ─── URL serialisation ───────────────────────────────────────────────────────
 
+/**
+ * Deserialises filter state from URL search params.
+ *
+ * @param params - The `URLSearchParams` instance to parse (e.g. from `useSearchParams()`).
+ * @returns A {@link TaskHistoryFilters} object with values populated from the
+ *   params, falling back to defaults for any missing keys.
+ */
 export function filtersFromSearchParams(
   params: URLSearchParams
 ): TaskHistoryFilters {
@@ -39,6 +46,16 @@ export function filtersFromSearchParams(
   };
 }
 
+/**
+ * Serialises non-default filter values into a plain object suitable for
+ * constructing URL search params.
+ *
+ * Only fields that differ from their defaults are included so the URL stays
+ * clean.
+ *
+ * @param filters - Current filter state to serialise.
+ * @returns A `Record<string, string>` containing only the non-default filter entries.
+ */
 export function filtersToSearchParams(
   filters: TaskHistoryFilters
 ): Record<string, string> {
@@ -54,7 +71,13 @@ export function filtersToSearchParams(
 
 // ─── Derived helpers ─────────────────────────────────────────────────────────
 
-/** Compute the total duration (ms) of a task. Returns undefined when unknown. */
+/**
+ * Computes the total wall-clock duration of a task in milliseconds.
+ *
+ * @param task - The {@link TaskResponse} whose timestamps are inspected.
+ * @returns Duration in milliseconds, or `undefined` when either timestamp is
+ *   missing or the end precedes the start.
+ */
 export function getTaskDuration(task: TaskResponse): number | undefined {
   if (!task.createdAt || !task.updatedAt) return undefined;
   const start = new Date(task.createdAt).getTime();
@@ -62,7 +85,14 @@ export function getTaskDuration(task: TaskResponse): number | undefined {
   return end > start ? end - start : undefined;
 }
 
-/** Rough cost estimate: sum agent costs derived from agentType. */
+/**
+ * Estimates the total cost of a task in XLM by summing per-agent-type costs
+ * across all DAG nodes.
+ *
+ * @param task - The {@link TaskResponse} whose DAG nodes are costed.
+ * @returns Estimated cost in XLM as a floating-point number; `0` when the
+ *   task has no DAG nodes.
+ */
 export function getTaskCost(task: TaskResponse): number {
   if (!task.dag || !task.dag.length) return 0;
   const costs: Record<string, number> = {
@@ -79,7 +109,13 @@ export function getTaskCost(task: TaskResponse): number {
   }, 0);
 }
 
-/** Unique agent types used across a task's DAG */
+/**
+ * Returns the unique set of agent capability types used across a task's DAG.
+ *
+ * @param task - The {@link TaskResponse} to inspect.
+ * @returns Deduplicated array of capability strings (e.g. `["research", "report"]`),
+ *   or an empty array when the task has no DAG.
+ */
 export function getTaskAgentTypes(task: TaskResponse): string[] {
   if (!task.dag) return [];
   const types = new Set<string>();
@@ -93,7 +129,14 @@ export function getTaskAgentTypes(task: TaskResponse): string[] {
   return Array.from(types);
 }
 
-/** Format ms duration as human-readable string */
+/**
+ * Formats a duration expressed in milliseconds as a human-readable string.
+ *
+ * Examples: `"450ms"`, `"3.2s"`, `"2m 15s"`, `"10m"`.
+ *
+ * @param ms - Duration in milliseconds.
+ * @returns Human-readable duration string.
+ */
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
@@ -181,6 +224,21 @@ export interface UseTaskHistoryResult {
   availableAgentTypes: string[];
 }
 
+/**
+ * Fetches and manages the task history for the connected wallet.
+ *
+ * Loads tasks from `GET /api/wallets/<address>/tasks` using cursor-based
+ * pagination. Client-side filtering (status, agent type, date range, search)
+ * and a zoom window are applied to the full fetched list without additional
+ * network requests. Comparison mode lets the caller select up to two tasks for
+ * side-by-side diffing.
+ *
+ * @param filters - Currently applied filter criteria.
+ * @param updateFilters - Callback to partially update the active filters.
+ * @param resetFilters - Callback to reset all filters back to {@link DEFAULT_FILTERS}.
+ * @returns A {@link UseTaskHistoryResult} object with task lists, filter
+ *   controls, comparison selection state, and a `refetch` trigger.
+ */
 export function useTaskHistory(
   filters: TaskHistoryFilters,
   updateFilters: (next: Partial<TaskHistoryFilters>) => void,
