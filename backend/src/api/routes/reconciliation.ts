@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import {
   ReconciliationService,
   createDefaultReconciliationService,
@@ -6,6 +7,11 @@ import {
 import type { ReconciliationTrigger } from '../../services/reconciliation.types';
 import { createLogger } from '../../utils/logger';
 import { NotFoundError, AppError } from '../../errors';
+import { validate } from '../middleware/validate';
+
+const reconciliationRunSchema = z.object({
+  triggeredBy: z.enum(['manual', 'scheduled', 'release']).default('manual'),
+}).strict();
 
 export interface ReconciliationRouterOptions {
   /** Service to use; defaults to the production service. */
@@ -70,13 +76,11 @@ export function createReconciliationRouter(
   const getService = (): ReconciliationService =>
     (service ??= options.service ?? createDefaultReconciliationService());
 
-    router.post('/run', async (req, res, next) => {
+  router.post('/run', validate(reconciliationRunSchema), async (req, res, next) => {
     try {
-      const requested = req.body?.triggeredBy as string | undefined;
-      const triggeredBy: ReconciliationTrigger =
-        requested === 'scheduled' || requested === 'release' ? requested : 'manual';
+      const { triggeredBy } = req.body as z.infer<typeof reconciliationRunSchema>;
 
-      const report = await getService().run(triggeredBy);
+      const report = await getService().run(triggeredBy as ReconciliationTrigger);
       return res.status(200).json(report);
     } catch (error) {
       logger.error({ err: error }, "reconciliation run failed");
