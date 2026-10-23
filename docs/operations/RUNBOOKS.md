@@ -589,6 +589,12 @@ curl -s -X POST http://localhost:3001/api/v1/agents/research-agent-v1/heartbeat 
 
 ---
 
+## Distributed Trace Inspection
+
+Configure `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to an OTLP/HTTP traces endpoint (defaults to `http://localhost:4318/v1/traces`). The request middleware extracts W3C `traceparent`; coordinator agent spans, Venice completions, and payment spans share the trace ID. Exported span attributes include task/node/agent identifiers, prompt token estimate, byte sizes, duration, status, and Stellar transaction hash.
+
+In Grafana, select the Tempo or Jaeger data source and open **Explore**. Search by the `traceId` shown in backend error logs, then expand `coordinator.node_execution` to inspect child agent and `venice.completion` spans. To compare latency by agent type, group `coordinator.node_execution` span durations by the `agentType` attribute and use p99 aggregation. A long Venice span points to model latency; a long payment span points to Horizon or settlement latency.
+
 ## Related Documentation
 
 - [Node Operators Guide](../NODE_OPERATORS_GUIDE.md) — provisioning, configuration, and initial setup
