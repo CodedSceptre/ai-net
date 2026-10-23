@@ -492,6 +492,10 @@ components:
         reputationScore:
           type: number
           example: 98.5
+        quality_score:
+          type: number
+          description: Average composite quality score (0-100), when score history exists
+          example: 87.5
         lastSeenAt:
           type: string
           format: date-time
@@ -1700,6 +1704,75 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NotFoundError"
+  "/api/agents/{id}/quality":
+    get:
+      summary: Get an agent's composite quality score and sub-scores
+      operationId: getAgentQuality
+      tags:
+        - Agents
+      security: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Versioned quality score breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agent_id, composite_score, sub_scores, score_version]
+                properties:
+                  agent_id: { type: string }
+                  composite_score: { type: number, minimum: 0, maximum: 100 }
+                  sub_scores:
+                    type: object
+                    properties:
+                      completion_rate: { type: number, minimum: 0, maximum: 1 }
+                      response_time: { type: number, description: Average node duration in milliseconds }
+                      accuracy: { type: number, minimum: 0, maximum: 100 }
+                  score_version: { type: string, example: "1.0" }
+                  sample_size: { type: integer }
+        "404":
+          description: Agent not found
+  "/api/agents/{id}/quality/history":
+    get:
+      summary: Get an agent's quality score history for the last 30 days
+      operationId: getAgentQualityHistory
+      tags:
+        - Agents
+      security: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Quality score records, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agent_id: { type: string }
+                  score_version: { type: string, example: "1.0" }
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        task_id: { type: string }
+                        node_id: { type: string }
+                        score: { type: number }
+                        response_time_ms: { type: number, nullable: true }
+                        timestamp: { type: string, format: date-time }
+        "404":
+          description: Agent not found
   "/api/agents/{id}/health":
     get:
       summary: Check an agent's live health/reachability

@@ -425,6 +425,7 @@ export class Coordinator {
     node: DAGNode,
     nodeById: Map<string, DAGNode>
   ): Promise<'completed' | 'failed'> {
+    const nodeStartedAt = Date.now();
     node.status = 'running';
     updateNode(taskId, node.nodeId, { status: 'running' });
     this.bus.emit(taskId, {
@@ -456,7 +457,7 @@ export class Coordinator {
 
       // Quality score the output and feed it back into reputation. Best-effort:
       // scoring never fails the node.
-      const quality = this.scoreOutput(taskId, node, result, agentId);
+      const quality = this.scoreOutput(taskId, node, result, agentId, Date.now() - nodeStartedAt);
       if (quality) {
         node.quality = quality;
       }
@@ -536,7 +537,8 @@ export class Coordinator {
     taskId: string,
     node: DAGNode,
     result: unknown,
-    agentId?: string
+    agentId?: string,
+    responseTimeMs = 0,
   ): QualityScore | undefined {
     try {
       const quality = this.qualityScorer.scoreForAgentType(result, node.prompt, node.type);
@@ -559,9 +561,11 @@ export class Coordinator {
           relevance: quality.relevance.score,
           format: quality.format.score,
           needsReview: quality.needsReview,
+          responseTimeMs,
           timestamp: quality.timestamp,
         });
-        updateAgentReputation(agentId, reputationDeltaForScore(quality.score));
+        updateAgentReputation(agentId, reputationDeltaForScore(quality.score), 'success');
+        metricsService.setAgentQualityScore(agentId, quality.score);
       }
 
       this.log.info(

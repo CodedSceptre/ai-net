@@ -8,6 +8,8 @@ import { cacheMiddleware } from "../middleware/cache";
 import { invalidateAgentsCache } from "../../cache/invalidation";
 import { ttlForRoute } from "../../config";
 import { authMiddleware } from "../middleware/auth";
+import { createTaskDb, getTaskDb } from "../../db/tasks";
+import { getAgentQualityMetrics } from "../../services/qualityScorer";
 
 const AgentCursorListSchema = z.object({
   cursor: z.string().optional(),
@@ -35,6 +37,7 @@ const RegisterAgentSchema = z.object({
 });
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 3_000;
+const QUALITY_SCORE_VERSION = "1.0";
 const HORIZON_URL = process.env.STELLAR_HORIZON_URL || "https://horizon-testnet.stellar.org";
 const horizon = new Horizon.Server(HORIZON_URL);
 
@@ -93,9 +96,13 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
       const { cursor, limit, capability, minReputation, maxPriceXLM, status } = parse.data;
       try {
         const page = db.listCursor({ cursor, limit, capability, minReputation, maxPriceXLM, status });
+        const items = page.items.map((agent) => {
+          const quality = getAgentQualityMetrics(agent.id);
+          return quality ? { ...agent, quality_score: quality.average } : agent;
+        });
         res.json({
           data: {
-            items: page.items,
+              items,
             pagination: {
               limit,
               nextCursor: page.nextCursor ?? null,
@@ -122,7 +129,10 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
 
     try {
       const agents = db.list({ capability, minReputation, maxPriceXLM });
-      res.json(agents);
+      res.json(agents.map((agent) => {
+        const quality = getAgentQualityMetrics(agent.id);
+        return quality ? { ...agent, quality_score: quality.average } : agent;
+      }));
     } catch (err) {
       next(new AppError("Internal Server Error", 500, "INTERNAL_ERROR"));
     }
@@ -166,6 +176,101 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
         return next(agentNotFound(req.params.id));
       }
       res.json(agent);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * @openapi
+   * /api/agents/{id}/quality:
+   *   get:
+   *     summary: Get an agent's composite quality score and sub-scores
+   *     operationId: getAgentQuality
+   *     tags: [Agents]
+   *     security: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema: { type: string }
+   *     responses:
+   *       200:
+   *         description: Versioned quality score breakdown
+   *       404:
+   *         description: Agent not found
+   */
+  router.get("/:id/quality", (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      const agent = getDb().findById(req.params.id);
+      if (!agent) return next(agentNotFound(req.params.id));
+
+      const metrics = getAgentQualityMetrics(agent.id);
+      const records = createTaskDb(getTaskDb()).listQualityScores(agent.id);
+      const responseSamples = records.filter((record) => record.responseTimeMs !== undefined);
+      const totalTasks = (agent.tasksCompleted ?? 0) + (agent.tasksFailed ?? 0);
+      res.json({
+        agent_id: agent.id,
+        composite_score: metrics?.average ?? 0,
+        sub_scores: {
+          completion_rate: totalTasks > 0 ? (agent.tasksCompleted ?? 0) / totalTasks : 0,
+          response_time: responseSamples.length > 0
+            ? responseSamples.reduce((sum, record) => sum + (record.responseTimeMs ?? 0), 0) / responseSamples.length
+            : 0,
+          accuracy: records.length > 0
+            ? records.reduce((sum, record) => sum + record.relevance, 0) / records.length
+            : 0,
+        },
+        score_version: QUALITY_SCORE_VERSION,
+        sample_size: metrics?.sampleSize ?? 0,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * @openapi
+   * /api/agents/{id}/quality/history:
+   *   get:
+   *     summary: Get an agent's quality score history for the last 30 days
+   *     operationId: getAgentQualityHistory
+   *     tags: [Agents]
+   *     security: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema: { type: string }
+   *     responses:
+   *       200:
+   *         description: Quality score records, oldest first
+   *       404:
+   *         description: Agent not found
+   */
+  router.get("/:id/quality/history", (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      const agent = getDb().findById(req.params.id);
+      if (!agent) return next(agentNotFound(req.params.id));
+
+      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const records = createTaskDb(getTaskDb()).listQualityScores(agent.id, 500, since);
+      res.json({
+        agent_id: agent.id,
+        score_version: QUALITY_SCORE_VERSION,
+        data: records.map((record) => ({
+          task_id: record.taskId,
+          node_id: record.nodeId,
+          score: record.score,
+          sub_scores: {
+            completeness: record.completeness,
+            relevance: record.relevance,
+            format: record.format,
+          },
+          response_time_ms: record.responseTimeMs ?? null,
+          timestamp: record.timestamp,
+        })),
+      });
     } catch (error) {
       next(error);
     }
