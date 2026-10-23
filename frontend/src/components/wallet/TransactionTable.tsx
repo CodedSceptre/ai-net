@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
-import { ExternalLink, ArrowUpRight, ArrowDownRight, Clock, Search, CreditCard, Send } from 'lucide-react'
+import { ExternalLink, ArrowUpRight, ArrowDownRight, Clock, Search, Send } from 'lucide-react'
 import type { TransactionEvent } from '../../hooks/useTransactionHistory'
 import { filterTransactions, computeRunningTotal } from '../../hooks/useTransactionHistory'
 import styles from './TransactionTable.module.css'
@@ -9,6 +9,8 @@ import { formatDate } from '../../utils/format'
 import { ExportButton } from './ExportButton'
 import { DataTable, type DataTableColumn } from '../common/DataTable'
 import { SkeletonTable } from '../common/Skeleton'
+import { EmptyState } from '../common/EmptyState'
+import { PaymentsEmptyIllustration } from '../common/illustrations'
 
 const STELLAR_EXPLORER = 'https://stellar.expert/explorer/testnet'
 
@@ -99,7 +101,7 @@ export function TransactionTable({ transactions, loading, publicKey }: Transacti
       <div className={styles.container}>
         <h3 className={styles.heading}>{t('wallet.tx.heading')}</h3>
         <EmptyState
-          icon={<CreditCard size={32} />}
+          illustration={<PaymentsEmptyIllustration />}
           title={t('wallet.tx.empty')}
           description={t('wallet.tx.emptySubtext')}
           primaryAction={{
@@ -109,6 +111,10 @@ export function TransactionTable({ transactions, loading, publicKey }: Transacti
               if (el) el.scrollIntoView({ behavior: 'smooth' })
             },
             icon: <Send size={16} />,
+          }}
+          secondaryAction={{
+            label: 'Complete a Task First',
+            to: '/tasks/new',
           }}
           variant="card"
         />

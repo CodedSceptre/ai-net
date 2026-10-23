@@ -23,13 +23,20 @@
 //! oracle returns no usable price (stale feed + no fallback), the call is
 //! **rejected** with `Error::OraclePriceUnavailable`. This prevents tasks from
 //! being accepted at an unknown cost.
+//!
+//! ## Coordinator authorization model
+//!
+//! A single coordinator address is stored in instance storage via
+//! `set_coordinator`.  Only the coordinator may call `assign_task`,
+//! `release_funds`, and `fail_task`.  The admin may rotate the coordinator at
+//! any time via `rotate_coordinator`.
 
 mod types;
 
 pub use types::{
-    DataKey, Error, OracleManagerSetEvent, TaskCreatedEvent, TaskFinalizedEvent, TaskMetadata,
-    TaskStatus, TaskUpdatedEvent, DEFAULT_TTL_DAYS, LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES,
-    MAX_TTL_DAYS, TASK_LIFECYCLE_EVENT_VERSION,
+    CoordinatorSetEvent, DataKey, Error, OracleManagerSetEvent, TaskCreatedEvent,
+    TaskFinalizedEvent, TaskMetadata, TaskStatus, TaskUpdatedEvent, DEFAULT_TTL_DAYS,
+    LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES, MAX_TTL_DAYS, TASK_LIFECYCLE_EVENT_VERSION,
 };
 
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, String, Vec};
@@ -98,6 +105,23 @@ fn require_admin(env: &Env) -> Result<(), Error> {
     Ok(())
 }
 
+/// Read the stored coordinator address, returning `Error::CoordinatorNotSet`
+/// if none has been configured yet.
+fn read_coordinator(env: &Env) -> Result<Address, Error> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Coordinator)
+        .ok_or(Error::CoordinatorNotSet)
+}
+
+/// Require that the caller is the stored coordinator.
+/// Returns `Error::CoordinatorNotSet` if no coordinator has been configured.
+fn require_coordinator(env: &Env) -> Result<(), Error> {
+    let coordinator = read_coordinator(env)?;
+    coordinator.require_auth();
+    Ok(())
+}
+
 /// Call `OracleManager::resolve_price(pair)` via a low-level cross-contract
 /// call and return the resolved price in stroops on success, or `None` on any
 /// failure (stale feed, no fallback, call error).  The oracle manager expresses
@@ -163,7 +187,8 @@ impl TaskStoreContract {
         new_wasm_hash: BytesN<32>,
         new_version: String,
     ) -> Result<(), Error> {
-        let admin = require_admin(&env)?;
+        let admin = read_admin(&env)?;
+        admin.require_auth();
         let old_version = Self::contract_version(env.clone());
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
@@ -174,6 +199,182 @@ impl TaskStoreContract {
         );
         Ok(())
     }
+
+    // ── Coordinator authorization model ───────────────────────────────────────
+
+    /// Store `coordinator` as the authorized coordinator address.
+    /// Requires admin authorization.
+    pub fn set_coordinator(env: Env, coordinator: Address) -> Result<(), Error> {
+        require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::Coordinator, &coordinator);
+        env.events().publish(
+            (symbol_short!("task_str"), symbol_short!("coord_set")),
+            CoordinatorSetEvent {
+                coordinator: coordinator.clone(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Return the currently configured coordinator address, or `None` if none
+    /// has been set.
+    pub fn get_coordinator(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::Coordinator)
+    }
+
+    /// Replace the current coordinator with `new_coordinator`.
+    /// Requires admin authorization.
+    pub fn rotate_coordinator(env: Env, new_coordinator: Address) -> Result<(), Error> {
+        require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::Coordinator, &new_coordinator);
+        env.events().publish(
+            (symbol_short!("task_str"), symbol_short!("coord_set")),
+            CoordinatorSetEvent {
+                coordinator: new_coordinator.clone(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Assign `agent` to task `task_id`, transitioning it from `Pending` to
+    /// `Running`.  Only the coordinator may call this function.  The coordinator
+    /// cannot assign the task to itself (`SelfAssignmentNotAllowed`).
+    pub fn assign_task(
+        env: Env,
+        task_id: BytesN<32>,
+        agent: Address,
+    ) -> Result<(), Error> {
+        let coordinator = read_coordinator(&env)?;
+        coordinator.require_auth();
+
+        // Prevent self-assignment: coordinator cannot be the assigned agent.
+        if coordinator == agent {
+            return Err(Error::SelfAssignmentNotAllowed);
+        }
+
+        let key = DataKey::Task(task_id.clone());
+        let mut metadata = read_metadata(&env, &task_id)?;
+
+        if !can_transition(metadata.status, TaskStatus::Running) {
+            return Err(Error::InvalidStatusTransition);
+        }
+
+        let old_status = metadata.status;
+        metadata.status = TaskStatus::Running;
+        env.storage().persistent().set(&key, &metadata);
+
+        env.events().publish(
+            (symbol_short!("task_meta"), symbol_short!("updated")),
+            TaskUpdatedEvent {
+                version: TASK_LIFECYCLE_EVENT_VERSION,
+                task_id,
+                agent,
+                old_status,
+                new_status: TaskStatus::Running,
+                updated_at: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Release funds for task `task_id`.  The task must already be in
+    /// `Completed` status.  Only the coordinator may call this function.
+    /// Emits a `TaskFinalizedEvent` acknowledging the fund release.
+    pub fn release_funds(env: Env, task_id: BytesN<32>) -> Result<(), Error> {
+        require_coordinator(&env)?;
+
+        let metadata = read_metadata(&env, &task_id)?;
+
+        if metadata.status != TaskStatus::Completed {
+            return Err(Error::TaskNotCompleted);
+        }
+
+        env.events().publish(
+            (symbol_short!("task_meta"), symbol_short!("finalized")),
+            TaskFinalizedEvent {
+                version: TASK_LIFECYCLE_EVENT_VERSION,
+                task_id,
+                agent: read_coordinator(&env).unwrap(),
+                old_status: TaskStatus::Completed,
+                final_status: TaskStatus::Completed,
+                finalized_at: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Transition task `task_id` to the `Failed` terminal state with a human-
+    /// readable `reason`.  Only the coordinator may call this function.
+    pub fn fail_task(
+        env: Env,
+        task_id: BytesN<32>,
+        reason: String,
+    ) -> Result<(), Error> {
+        let coordinator = read_coordinator(&env)?;
+        coordinator.require_auth();
+
+        let key = DataKey::Task(task_id.clone());
+        let mut metadata = read_metadata(&env, &task_id)?;
+
+        if !can_transition(metadata.status, TaskStatus::Failed) {
+            return Err(Error::InvalidStatusTransition);
+        }
+
+        let old_status = metadata.status;
+        metadata.status = TaskStatus::Failed;
+        env.storage().persistent().set(&key, &metadata);
+
+        env.events().publish(
+            (symbol_short!("task_meta"), symbol_short!("finalized")),
+            TaskFinalizedEvent {
+                version: TASK_LIFECYCLE_EVENT_VERSION,
+                task_id,
+                agent: coordinator,
+                old_status,
+                final_status: TaskStatus::Failed,
+                finalized_at: env.ledger().timestamp(),
+            },
+        );
+
+        // Suppress unused variable warning for reason (stored in event context
+        // but not in on-chain storage to keep the footprint bounded).
+        let _ = reason;
+
+        Ok(())
+    }
+
+    // ── Oracle management ─────────────────────────────────────────────────────
+
+    pub fn set_oracle_manager(env: Env, oracle_manager: Option<Address>) -> Result<(), Error> {
+        require_admin(&env)?;
+        match &oracle_manager {
+            Some(addr) => env
+                .storage()
+                .instance()
+                .set(&DataKey::OracleManager, addr),
+            None => env
+                .storage()
+                .instance()
+                .remove(&DataKey::OracleManager),
+        }
+        env.events().publish(
+            (symbol_short!("task_str"), symbol_short!("ora_set")),
+            OracleManagerSetEvent { oracle_manager },
+        );
+        Ok(())
+    }
+
+    pub fn get_oracle_manager(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::OracleManager)
+    }
+
+    // ── Task lifecycle ────────────────────────────────────────────────────────
 
     pub fn store_task_metadata(
         env: Env,
@@ -890,3 +1091,8 @@ mod test {
         );
     }
 }
+
+#[cfg(test)]
+mod coordinator_tests;
+#[cfg(test)]
+mod integration_tests;

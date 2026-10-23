@@ -62,6 +62,14 @@ export function createTasksRouter(
    *     tags: [Tasks]
    *     security:
    *       - WalletAuth: []
+  *     parameters:
+  *       - in: header
+  *         name: Idempotency-Key
+  *         required: false
+  *         schema:
+  *           type: string
+  *           format: uuid
+  *         description: UUID v4 key scoped to the wallet. Repeated requests replay the original response for 24 hours.
    *     requestBody:
    *       required: true
    *       content:

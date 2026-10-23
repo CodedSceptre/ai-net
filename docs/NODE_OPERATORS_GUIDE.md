@@ -531,6 +531,163 @@ sudo systemctl start ainet-node
 
 ---
 
+## 13. Secret Rotation Procedure
+
+This section documents how to rotate every secret used by an ai-net node.
+Follow this procedure whenever a secret is suspected to be compromised, when
+an operator leaves the team, or on the routine 90-day rotation schedule.
+
+> **Never store plaintext secrets in source code, `.env` files committed to
+> git, Docker images, or Terraform state.** Use GitHub Actions encrypted
+> secrets for CI and AWS Secrets Manager / HashiCorp Vault for production
+> runtime secrets.
+
+### 13.1 Identifying All Secrets
+
+| Secret | Environment Variable | Storage | Rotation Frequency |
+|--------|---------------------|---------|-------------------|
+| Venice AI API key | `VENICE_API_KEY` | GitHub Actions secret + AWS Secrets Manager | 90 days |
+| Stellar Coordinator hot-wallet secret key | `STELLAR_COORDINATOR_SECRET` | GitHub Actions secret + AWS Secrets Manager | On suspected compromise only |
+| Admin API key | `ADMIN_API_KEY` | GitHub Actions secret + AWS Secrets Manager | 90 days |
+| Redis URL (includes password) | `REDIS_URL` | AWS Secrets Manager | 180 days |
+| Database master password | `DATABASE_URL` | AWS Secrets Manager (managed by RDS) | Automated via RDS rotation |
+| JWT / API bearer keys | `API_KEYS` | AWS Secrets Manager | 90 days |
+
+### 13.2 Pre-Rotation Checklist
+
+Before rotating any secret:
+
+1. Confirm a rollback path exists (e.g., old secret kept active in AWS Secrets Manager for 15 minutes after rotation).
+2. Notify all operators of the maintenance window.
+3. Ensure the new secret value has been provisioned (API console, key generation, etc.).
+4. Verify CI pipelines are not mid-run.
+
+### 13.3 Rotating Venice AI API Key
+
+```bash
+# 1. Generate a new key from https://venice.ai → Settings → API Keys
+
+# 2. Update GitHub Actions secret (requires repo admin)
+gh secret set VENICE_API_KEY --body "sk-new-value-here"
+
+# 3. Update AWS Secrets Manager (production)
+aws secretsmanager put-secret-value \
+  --secret-id "ai-net/production/venice_api_key" \
+  --secret-string "sk-new-value-here"
+
+# 4. Force ECS service redeploy to pick up new secret value
+aws ecs update-service \
+  --cluster ai-net-production \
+  --service ai-net-production-backend \
+  --force-new-deployment
+
+# 5. Verify health endpoint returns 200
+curl -s https://api.your-domain.com/health | jq '.status'
+
+# 6. Revoke old key from Venice AI console
+```
+
+### 13.4 Rotating the Stellar Coordinator Secret Key
+
+Stellar keypair rotation is higher risk because the hot wallet holds XLM
+reserves. Perform this rotation during a low-traffic window.
+
+```bash
+# 1. Generate a new Stellar keypair
+stellar keys generate coordinator-new --network testnet   # or mainnet
+
+NEW_PUBLIC=$(stellar keys address coordinator-new)
+NEW_SECRET=$(stellar keys show coordinator-new)
+
+# 2. Fund the new keypair with the minimum operational balance
+#    (Testnet: Friendbot; Mainnet: transfer from cold wallet)
+# Testnet:
+curl -X POST "https://friendbot.stellar.org?addr=${NEW_PUBLIC}"
+
+# 3. Transfer any XLM operational balance from old coordinator to new
+#    (use Stellar Laboratory or stellar-cli payment)
+
+# 4. Update GitHub Actions secret
+gh secret set STELLAR_COORDINATOR_SECRET --body "$NEW_SECRET"
+
+# 5. Update AWS Secrets Manager
+aws secretsmanager put-secret-value \
+  --secret-id "ai-net/production/stellar_coordinator_secret" \
+  --secret-string "$NEW_SECRET"
+
+# 6. Force ECS service redeploy
+aws ecs update-service \
+  --cluster ai-net-production \
+  --service ai-net-production-backend \
+  --force-new-deployment
+
+# 7. Verify transactions sign correctly via the health endpoint and logs
+
+# 8. Allow the old keypair to expire naturally (do not fund it further)
+```
+
+### 13.5 Rotating Admin API Key
+
+```bash
+# 1. Generate a new random key (min 32 bytes of entropy)
+NEW_ADMIN_KEY=$(openssl rand -hex 32)
+
+# 2. Update GitHub Actions secret
+gh secret set ADMIN_API_KEY --body "$NEW_ADMIN_KEY"
+
+# 3. Update AWS Secrets Manager
+aws secretsmanager put-secret-value \
+  --secret-id "ai-net/production/admin_api_key" \
+  --secret-string "$NEW_ADMIN_KEY"
+
+# 4. Force redeploy
+aws ecs update-service \
+  --cluster ai-net-production \
+  --service ai-net-production-backend \
+  --force-new-deployment
+
+# 5. Verify admin endpoints still respond with new key
+curl -H "X-Admin-Key: $NEW_ADMIN_KEY" https://api.your-domain.com/health/dashboard
+```
+
+### 13.6 AWS Secrets Manager Automatic Rotation
+
+For database passwords, enable automatic rotation via AWS Secrets Manager's
+built-in RDS rotation lambda:
+
+```bash
+aws secretsmanager rotate-secret \
+  --secret-id "ai-net/production/db_password" \
+  --rotation-rules AutomaticallyAfterDays=90
+```
+
+### 13.7 Post-Rotation Verification
+
+After every rotation:
+
+1. Run a smoke test against the affected environment:
+   ```bash
+   curl -sf https://api.your-domain.com/health | jq '.status == "ok"'
+   ```
+2. Check CloudWatch logs for any `authentication_failed` or `invalid_key` error entries.
+3. Confirm CI pipelines pass with updated secrets.
+4. Record the rotation date in your team's operations runbook or ticketing system.
+
+### 13.8 Secrets Scan in CI
+
+Every push and pull request is scanned by TruffleHog (see
+`.github/workflows/secrets-scan.yml`). If TruffleHog flags a finding:
+
+1. **Assume the secret is compromised** — rotate it immediately using this guide.
+2. Remove the secret value from the git history:
+   ```bash
+   git filter-repo --path <file-with-secret> --invert-paths
+   # Then force-push (requires bypassing branch protection — coordinate with team)
+   ```
+3. Open a security incident ticket and notify all stakeholders.
+
+---
+
 ## 📞 Support & Community
 
 - **Repository**: [GitHub Epta-Node/ai-net](https://github.com/Epta-Node/ai-net)

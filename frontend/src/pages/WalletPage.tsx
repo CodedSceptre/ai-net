@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useTranslation, Trans } from 'react-i18next'
 import { QRCodeSVG } from 'qrcode.react'
 import { Wallet, Copy, ExternalLink, Download } from 'lucide-react'
@@ -11,6 +11,7 @@ import { PaymentChart } from '../components/wallet/PaymentChart'
 import { TransactionTable } from '../components/wallet/TransactionTable'
 import { WalletWizard } from '../components/wallet/WalletWizard'
 import { Skeleton, SkeletonAvatar, SkeletonCard, SkeletonText } from '../components/common/Skeleton'
+import { ConfirmDialog } from '../components/common/ConfirmDialog'
 import styles from './WalletPage.module.css'
 
 const STELLAR_EXPLORER = 'https://stellar.expert/explorer/testnet'
@@ -69,6 +70,7 @@ function WalletPage() {
   const [connecting, setConnecting] = React.useState(false)
   const [freighterConnecting, setFreighterConnecting] = React.useState(false)
   const [freighterError, setFreighterError] = React.useState<string | null>(null)
+  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false)
 
   const handleCopyAddress = async () => {
     if (!publicKey) return
@@ -311,13 +313,24 @@ function WalletPage() {
               <button
                 type="button"
                 className={styles.disconnectButton}
-                onClick={disconnect}
+                onClick={() => setShowDisconnectConfirm(true)}
               >
                 {t('wallet.disconnect')}
               </button>
             </div>
           </form>
         </div>
+
+        <ConfirmDialog
+          open={showDisconnectConfirm}
+          title={t('wallet.disconnectConfirm.title', { defaultValue: 'Disconnect Wallet?' })}
+          description={t('wallet.disconnectConfirm.description', { defaultValue: 'This will disconnect your wallet and clear your current session.' })}
+          consequence={t('wallet.disconnectConfirm.consequence', { defaultValue: 'All session state will be cleared. You will need to reconnect to perform any transactions.' })}
+          confirmLabel={t('wallet.disconnectConfirm.confirm', { defaultValue: 'Disconnect' })}
+          cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}
+          onConfirm={() => { setShowDisconnectConfirm(false); disconnect(); }}
+          onCancel={() => setShowDisconnectConfirm(false)}
+        />
       </div>
     )
   }
@@ -381,11 +394,22 @@ function WalletPage() {
         </div>
 
         <div className={styles.actions}>
-          <button className={styles.disconnectButton} onClick={disconnect}>
+          <button className={styles.disconnectButton} onClick={() => setShowDisconnectConfirm(true)}>
             {t('wallet.disconnect')}
           </button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={showDisconnectConfirm}
+        title={t('wallet.disconnectConfirm.title', { defaultValue: 'Disconnect Wallet?' })}
+        description={t('wallet.disconnectConfirm.description', { defaultValue: 'This will disconnect your wallet and clear your current session.' })}
+        consequence={t('wallet.disconnectConfirm.consequence', { defaultValue: 'All session state will be cleared. You will need to reconnect to perform any transactions.' })}
+        confirmLabel={t('wallet.disconnectConfirm.confirm', { defaultValue: 'Disconnect' })}
+        cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}
+        onConfirm={() => { setShowDisconnectConfirm(false); disconnect(); }}
+        onCancel={() => setShowDisconnectConfirm(false)}
+      />
 
       {/* Main content grid */}
       <div className={styles.contentGrid}>
