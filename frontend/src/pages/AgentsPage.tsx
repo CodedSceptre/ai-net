@@ -28,6 +28,8 @@ import { AgentFilterBar } from '../components/agents/AgentFilterBar'
 import { AgentDetailModal } from '../components/agents/AgentDetailModal'
 import { AgentRegistryCard } from '../components/agents/AgentRegistryCard'
 import { EmptyState } from '../components/common/EmptyState'
+import { AgentsEmptyIllustration } from '../components/common/illustrations'
+import { SearchEmptyIllustration } from '../components/common/illustrations'
 import { Skeleton, SkeletonCard } from '../components/common/Skeleton'
 import type { AgentRecord } from '../types/api'
 import {
@@ -260,7 +262,11 @@ function AgentsPage() {
             <>
               {visibleAgents.length === 0 ? (
                 <EmptyState
-                  icon={<Users size={40} />}
+                  illustration={
+                    agents.length === 0
+                      ? <AgentsEmptyIllustration />
+                      : <SearchEmptyIllustration />
+                  }
                   title={t('agent.table.emptyTitle', { defaultValue: 'No agents found' })}
                   description={
                     agents.length === 0

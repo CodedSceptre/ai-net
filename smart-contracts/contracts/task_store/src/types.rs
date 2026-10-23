@@ -47,13 +47,17 @@ pub struct TaskMetadata {
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
+    /// Admin address — the only address permitted to call privileged admin functions.
     Admin,
+    /// Current contract version string.
     Version,
+    /// Per-task metadata keyed by task ID.
     Task(BytesN<32>),
-    /// Admin address — the only address permitted to call `set_oracle_manager`.
-    Admin,
     /// Optional OracleManager contract address used to resolve quoted prices.
     OracleManager,
+    /// Coordinator address — the only address permitted to call coordinator functions
+    /// such as `assign_task`, `release_funds`, and `fail_task`.
+    Coordinator,
 }
 
 /// Emitted exactly once per successful `store_task_metadata` call, under
@@ -110,6 +114,14 @@ pub struct OracleManagerSetEvent {
     pub oracle_manager: Option<Address>,
 }
 
+/// Emitted when the admin sets or rotates the coordinator address.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CoordinatorSetEvent {
+    /// The new coordinator address.
+    pub coordinator: Address,
+}
+
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -127,4 +139,12 @@ pub enum Error {
     NotInitialized = 11,
     Unauthorized = 12,
     UpgradeFailed = 13,
+    OraclePriceUnavailable = 14,
+    MissingPricePair = 15,
+    /// No coordinator has been configured yet via `set_coordinator`.
+    CoordinatorNotSet = 16,
+    /// The coordinator cannot assign a task to itself.
+    SelfAssignmentNotAllowed = 17,
+    /// Task must be in `Completed` status before funds can be released.
+    TaskNotCompleted = 18,
 }

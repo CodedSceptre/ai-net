@@ -26,6 +26,28 @@ This handbook establishes our **Software Development Life Cycle (SDLC)**, branch
 
 ---
 
+## 1.1 Local Git Hooks
+
+After cloning the repository and installing dependencies, enable the project hooks once:
+
+```bash
+npm install
+```
+
+The root `package.json` uses Husky's `prepare` script, so the hooks are installed automatically during `npm install`. The hooks enforce:
+
+- `pre-commit`: `lint-staged` runs ESLint and Prettier only on staged files
+- `commit-msg`: `commitlint` validates Conventional Commits
+- `pre-push`: `npm run typecheck` before pushing
+
+If the hooks are not installed yet, run:
+
+```bash
+npx husky install
+```
+
+---
+
 ## 2. Branch Naming Conventions
 
 All branches must follow standardized prefixes with an optional issue number:

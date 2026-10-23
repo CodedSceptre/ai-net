@@ -1,122 +1,123 @@
 # Task Store Contract — Lifecycle Events
 
-This document details the Soroban events emitted by the `task_store` smart
-contract. These events give off-chain indexers and the UI a consistent,
-versioned signal for every task lifecycle transition, without needing to
-poll `get_task_metadata`/`get_task_status`.
+This document defines the Soroban event schema for the high-level task lifecycle
+API exposed by `task_store`.
 
 ## Event Topics
 
-All task lifecycle events share the first topic (`task_meta`). The second
-topic indicates which lifecycle stage occurred: `created`, `updated`, or
-`finalized`.
+Every lifecycle event is emitted under the first topic `task_store`. The second
+topic identifies the transition:
+
+- `task_created`
+- `task_assigned`
+- `task_completed`
+- `task_failed`
 
 ## Versioning & Compatibility
 
-Every payload carries a `version: u32` field (currently `1`, the
-`TASK_LIFECYCLE_EVENT_VERSION` constant in
-`contracts/task_store/src/types.rs`). The schema is **append-only**:
+Every payload includes a `version: u32` field. The event schema is append-only:
 
-- Adding a new field to an existing payload does **not** require a version
-  bump — consumers should tolerate unknown/new fields.
-- Removing, renaming, or changing the type/meaning of an existing field
-  **does** require a version bump, so existing consumers can detect the
-  change (by branching on `version`) instead of silently misreading data.
-- The topic pair for a given lifecycle stage (e.g. `(task_meta, created)`)
-  is stable; a schema-breaking change bumps `version` in the payload, it
-  does not introduce a new topic.
+- New fields may be added without bumping the version.
+- Renaming, removing, or changing the meaning of an existing field requires a
+  version bump.
+- The topic pair for each lifecycle stage is stable.
 
-## Invariant: exactly one event per transition
+## Lifecycle invariant
 
-Every successful call to `store_task_metadata` emits exactly one `created`
-event. Every successful call to `update_task_status` emits exactly one
-event — `updated` for a non-terminal transition, or `finalized` for a
-transition into a terminal status — never both, and never zero. A call
-that is rejected (unauthorized agent, invalid transition, expired task)
-emits no lifecycle event at all, since it errors out before any state
-change or publish.
+Each successful state transition emits exactly one event, and rejected calls emit
+no event at all.
 
 ---
 
 ### 1. Task Created
 
-Emitted once, when `store_task_metadata` succeeds.
+Emitted once when `create_task` succeeds.
 
-- **Topic 1**: `Symbol::new(env, "task_meta")`
-- **Topic 2**: `Symbol::new(env, "created")`
-- **Data (Structure)**: `TaskCreatedEvent`
-  ```rust
-  pub struct TaskCreatedEvent {
-      pub version: u32,
-      pub task_id: BytesN<32>,
-      pub prompt_hash: BytesN<32>,
-      pub assigned_agents: Vec<Address>,
-      pub created_at: u64,
-      pub expires_at: u64,
-  }
-  ```
+- **Topic 1**: `Symbol::new(env, "task_store")`
+- **Topic 2**: `Symbol::new(env, "task_created")`
+- **Data (Structure)**: `TaskStoreCreatedEvent`
 
-### 2. Task Updated
+```rust
+pub struct TaskStoreCreatedEvent {
+    pub version: u32,
+    pub task_id: u64,
+    pub submitter: Address,
+    pub description_hash: BytesN<32>,
+    pub budget_xlm: i128,
+    pub created_at: u64,
+}
+```
 
-Emitted when `update_task_status` succeeds with a **non-terminal**
-transition. Today the only non-terminal transition is `Pending -> Running`;
-`Pending -> Failed` is terminal and emits `finalized` instead (see below).
+### 2. Task Assigned
 
-- **Topic 1**: `Symbol::new(env, "task_meta")`
-- **Topic 2**: `Symbol::new(env, "updated")`
-- **Data (Structure)**: `TaskUpdatedEvent`
-  ```rust
-  pub struct TaskUpdatedEvent {
-      pub version: u32,
-      pub task_id: BytesN<32>,
-      pub agent: Address,
-      pub old_status: TaskStatus,
-      pub new_status: TaskStatus,
-      pub updated_at: u64,
-  }
-  ```
+Emitted when `assign_task` succeeds.
 
-### 3. Task Finalized
+- **Topic 1**: `Symbol::new(env, "task_store")`
+- **Topic 2**: `Symbol::new(env, "task_assigned")`
+- **Data (Structure)**: `TaskStoreAssignedEvent`
 
-Emitted when `update_task_status` succeeds with a transition **into a
-terminal status** — `-> Completed` or `-> Failed`. `final_status` is
-always one of those two values; `old_status` records what it transitioned
-from.
+```rust
+pub struct TaskStoreAssignedEvent {
+    pub version: u32,
+    pub task_id: u64,
+    pub agent_id: Address,
+    pub assigned_at: u64,
+}
+```
 
-- **Topic 1**: `Symbol::new(env, "task_meta")`
-- **Topic 2**: `Symbol::new(env, "finalized")`
-- **Data (Structure)**: `TaskFinalizedEvent`
-  ```rust
-  pub struct TaskFinalizedEvent {
-      pub version: u32,
-      pub task_id: BytesN<32>,
-      pub agent: Address,
-      pub old_status: TaskStatus,
-      pub final_status: TaskStatus,
-      pub finalized_at: u64,
-  }
-  ```
+### 3. Task Completed
+
+Emitted when `complete_task` succeeds.
+
+- **Topic 1**: `Symbol::new(env, "task_store")`
+- **Topic 2**: `Symbol::new(env, "task_completed")`
+- **Data (Structure)**: `TaskStoreCompletedEvent`
+
+```rust
+pub struct TaskStoreCompletedEvent {
+    pub version: u32,
+    pub task_id: u64,
+    pub agent_id: Address,
+    pub result_hash: BytesN<32>,
+    pub completed_at: u64,
+}
+```
+
+### 4. Task Failed
+
+Emitted when `fail_task` succeeds.
+
+- **Topic 1**: `Symbol::new(env, "task_store")`
+- **Topic 2**: `Symbol::new(env, "task_failed")`
+- **Data (Structure)**: `TaskStoreFailedEvent`
+
+```rust
+pub struct TaskStoreFailedEvent {
+    pub version: u32,
+    pub task_id: u64,
+    pub actor: Address,
+    pub reason: String,
+    pub failed_at: u64,
+}
+```
 
 ## Status transition → event map
 
 | Transition | Event |
 |---|---|
-| (none) → `store_task_metadata` succeeds | `created` |
-| `Pending` → `Running` | `updated` |
-| `Running` → `Completed` | `finalized` |
-| `Pending` → `Failed` | `finalized` |
-| `Running` → `Failed` | `finalized` |
-| Any other transition (rejected — `InvalidStatusTransition`) | *(no event)* |
+| `Created` → `Assigned` | `task_assigned` |
+| `Assigned` → `Completed` | `task_completed` |
+| `Assigned` → `Failed` | `task_failed` |
+| `Created` → `Failed` | `task_failed` |
+| Any invalid transition | *(no event)* |
 
 ## Reading events with the JS/TS SDK
 
-The contract's generated bindings (`smart-contracts/src/`) expose the
-event payload types once regenerated from the built Wasm. Off-chain code
-should filter by topic pair before decoding, e.g.:
+Consumers should filter by the topic pair before decoding a payload:
 
 ```ts
-if (topics[0] === "task_meta" && topics[1] === "finalized") {
-  const event = scValToNative(data) as TaskFinalizedEvent;
-  // event.version, event.final_status, ...
+if (topics[0] === "task_store" && topics[1] === "task_completed") {
+  const event = scValToNative(data) as TaskStoreCompletedEvent;
+  // event.version, event.task_id, event.result_hash, ...
 }
 ```

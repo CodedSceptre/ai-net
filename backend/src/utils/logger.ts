@@ -8,8 +8,10 @@ import { currentTraceContext } from '../services/traceContext';
 const REDACTED = "[REDACTED]";
 const REDACTED_ADDRESS = "[REDACTED_ADDRESS]";
 const DEFAULT_LOG_CONTEXT = {
+  service: "ai-net-backend",
   requestId: "system",
   traceId: "system",
+  spanId: "system",
   userId: "system",
   taskId: "none",
   route: "system",
@@ -17,7 +19,7 @@ const DEFAULT_LOG_CONTEXT = {
 const logContextStore = new AsyncLocalStorage<Record<string, unknown>>();
 
 const SECRET_KEY_RE =
-  /secret|token|api[_-]?key|password|authorization|cookie|private[_-]?key|seed/i;
+  /secret|token|jwt|api[_-]?key|password|authorization|cookie|private[_-]?key|seed/i;
 const ADDRESS_KEY_RE =
   /address|public[_-]?key|wallet|owner|claimant|destination|source|account/i;
 const STELLAR_ADDRESS_RE = /\b[CGM][A-Z2-7]{55}\b/g;
@@ -28,6 +30,18 @@ const KEY_VALUE_SECRET_RE =
 
 export interface LoggerFactoryOptions {
   destination?: DestinationStream;
+  redactPaths?: string[];
+}
+
+function matchesRedactionPath(path: string, paths: readonly string[]): boolean {
+  const segments = path.split(".");
+  return paths.some((redactionPath) => {
+    const pattern = redactionPath.split(".");
+    return (
+      pattern.length === segments.length &&
+      pattern.every((segment, index) => segment === "*" || segment === segments[index])
+    );
+  });
 }
 
 function redactString(value: string): string {
@@ -73,7 +87,12 @@ export function sanitizeLogPayload(
   value: unknown,
   key?: string,
   seen = new WeakSet<object>(),
+  path = "",
+  redactPaths: readonly string[] = [],
 ): unknown {
+  if (path && matchesRedactionPath(path, redactPaths)) {
+    return value ? REDACTED : value;
+  }
   const keyed = redactByKey(key, value);
   if (keyed !== value) return keyed;
 
@@ -84,12 +103,20 @@ export function sanitizeLogPayload(
   seen.add(value);
 
   if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeLogPayload(entry, key, seen));
+    return value.map((entry, index) =>
+      sanitizeLogPayload(entry, key, seen, path ? `${path}.${index}` : String(index), redactPaths),
+    );
   }
 
   const output: Record<string, unknown> = {};
   for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
-    output[childKey] = sanitizeLogPayload(childValue, childKey, seen);
+    output[childKey] = sanitizeLogPayload(
+      childValue,
+      childKey,
+      seen,
+      path ? `${path}.${childKey}` : childKey,
+      redactPaths,
+    );
   }
   return output;
 }
@@ -124,7 +151,7 @@ export function getLogContext(): Record<string, unknown> {
   return logContextStore.getStore() ?? DEFAULT_LOG_CONTEXT;
 }
 
-function createBaseLogger(destination?: DestinationStream): Logger {
+function createBaseLogger(destination?: DestinationStream, redactPaths: readonly string[] = []): Logger {
   let level: pino.LevelWithSilent = "info";
   try {
     level = getConfig().LOG_LEVEL;
@@ -140,7 +167,8 @@ function createBaseLogger(destination?: DestinationStream): Logger {
         return { level: label };
       },
     },
-    timestamp: pino.stdTimeFunctions.isoTime,
+    msgKey: "message",
+    timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
     // Auto-inject traceId / spanId from the active AsyncLocalStorage trace
     // context (Issue #407) so every log line in a traced flow carries the
     // correlation IDs without the caller having to pass them explicitly.
@@ -163,7 +191,9 @@ function createBaseLogger(destination?: DestinationStream): Logger {
         const context = normalizeBindings(
           activeContext ? { ...loggerBindings, ...activeContext } : loggerBindings,
         );
-        const sanitizedArgs = inputArgs.map((arg) => sanitizeLogPayload(arg));
+        const sanitizedArgs = inputArgs.map((arg) =>
+          sanitizeLogPayload(arg, undefined, new WeakSet<object>(), "", redactPaths),
+        );
         const first = sanitizedArgs[0];
         if (
           first &&
@@ -171,9 +201,14 @@ function createBaseLogger(destination?: DestinationStream): Logger {
           !Array.isArray(first) &&
           !(first instanceof Error)
         ) {
-          sanitizedArgs[0] = { ...context, ...(first as Record<string, unknown>) };
+          const fields = first as Record<string, unknown>;
+          sanitizedArgs[0] = {
+            ...context,
+            ...fields,
+            context: { ...context, ...fields },
+          };
         } else {
-          sanitizedArgs.unshift(context);
+          sanitizedArgs.unshift({ ...context, context });
         }
         return method.apply(this, sanitizedArgs as any);
       },
@@ -189,7 +224,9 @@ export function createLogger(
   bindings?: Record<string, unknown>,
   options: LoggerFactoryOptions = {},
 ): Logger {
-  const root = options.destination ? createBaseLogger(options.destination) : baseLogger ?? createBaseLogger();
+  const root = options.destination
+    ? createBaseLogger(options.destination, options.redactPaths)
+    : baseLogger ?? createBaseLogger(undefined, options.redactPaths);
   if (!options.destination && !baseLogger) {
     baseLogger = root;
   }

@@ -10,6 +10,7 @@ import { NetworkHealthBadge } from '../components/dashboard/NetworkHealthBadge';
 import { RecentTasksTable } from '../components/dashboard/RecentTasksTable';
 import { useToast } from '../hooks/useToast';
 import { Skeleton, SkeletonAvatar, SkeletonCard, SkeletonTable } from '../components/common/Skeleton';
+import { GlossaryHelp } from '../components/common/HelpIcon';
 import styles from './dashboard.module.css';
 import type { TimePoint, NetworkStats } from '../types/api';
 
