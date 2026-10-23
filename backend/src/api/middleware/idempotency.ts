@@ -11,8 +11,9 @@
  * router.post('/', idempotencyMiddleware, handler);
  * ```
  *
- * The middleware reads `Idempotency-Key` from the request headers (case-
- * insensitive).  When present:
+ * The middleware reads a UUID v4 `Idempotency-Key` from the request headers
+ * (case-insensitive). Keys are scoped to the wallet in the request body or
+ * wallet header. When present:
  *
  * 1. It queries the idempotency store for a matching key.
  * 2. If found **and not expired**, the stored response is replayed and the
@@ -23,9 +24,7 @@
  *
  * ## Key format
  *
- * Any non-empty string is accepted.  The issue suggests UUID v4 keys; this
- * middleware does not enforce format so callers can use nanoids, UUIDs, or
- * other schemes.
+ * UUID v4 is required. Requests without the header remain backward compatible.
  */
 
 import { Request, Response, NextFunction } from 'express';
@@ -42,26 +41,42 @@ const log = createLogger({ component: 'idempotency-middleware' });
  *               is used.
  */
 export function createIdempotencyMiddleware(store?: IdempotencyStore) {
-  const resolvedStore = store ?? getDefaultIdempotencyStore();
-
   return function idempotencyMiddleware(
     req: Request,
     res: Response,
     next: NextFunction,
   ): void {
-    const key = req.headers['idempotency-key'] as string | undefined;
+    const key = req.get('Idempotency-Key');
 
     // No key → pass through transparently.
-    if (!key || key.trim() === '') {
+    if (key === undefined) {
       return next();
     }
 
     const trimmedKey = key.trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmedKey)) {
+      res.status(400).json({
+        error: {
+          message: 'Idempotency-Key must be a UUID v4',
+          code: 'INVALID_IDEMPOTENCY_KEY',
+        },
+      });
+      return;
+    }
+
+    const walletAddress =
+      (typeof req.body?.walletAddress === 'string' && req.body.walletAddress) ||
+      (typeof req.body?.walletPublicKey === 'string' && req.body.walletPublicKey) ||
+      req.get('X-Wallet-Address') ||
+      req.get('walletpublickey') ||
+      'anonymous';
+    const resolvedStore = store ?? getDefaultIdempotencyStore();
 
     // ── Lookup ─────────────────────────────────────────────────────────────
-    const existing = resolvedStore.get(trimmedKey);
+    const existing = resolvedStore.get(trimmedKey, walletAddress);
     if (existing) {
       log.debug({ key: trimmedKey }, 'replaying idempotent response');
+      res.setHeader('X-Idempotency-Replay', 'true');
       res.status(existing.statusCode);
       try {
         const body = JSON.parse(existing.responseBody);
@@ -88,7 +103,7 @@ export function createIdempotencyMiddleware(store?: IdempotencyStore) {
           // idempotent-safe to replay (e.g. transient 500s).
           const status = res.statusCode;
           if (status >= 200 && status < 400) {
-            resolvedStore.storeResponse(trimmedKey, status, capturedBody);
+            resolvedStore.storeResponse(trimmedKey, status, capturedBody, walletAddress);
           }
         } catch (err) {
           log.error({ err, key: trimmedKey }, 'failed to store idempotent response');

@@ -1,0 +1,112 @@
+/* AgentsCardPage.module.css
+   Styles specific to the card-grid layout of the /agents page.
+   Page-level chrome (header, error box, etc.) stays in AgentsPage.module.css.
+*/
+
+/* ── Card grid ──────────────────────────────────────────────────────────────── */
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+  margin-top: 16px;
+}
+
+/* Mobile: single column below 640px */
+@media (max-width: 639px) {
+  .cardGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Tablet: 2 columns from 640px–1023px (covers 768x1024 and 1024x1366 viewports) */
+@media (min-width: 640px) and (max-width: 1023px) {
+  .cardGrid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+}
+
+/* Desktop: auto-fill with min 280px per card (3+ columns) */
+@media (min-width: 1024px) {
+  .cardGrid {
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  }
+}
+
+/* ── Card skeleton (mirrors AgentRegistryCard layout) ───────────────────────── */
+.cardSkeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  border-radius: var(--radius-xl, 16px);
+  border: 1px solid var(--border-color, var(--border-strong));
+  background: var(--surface-glass-subtle, color-mix(in srgb, var(--text-primary) 3%, transparent));
+}
+
+.cardSkeletonHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.cardSkeletonPills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cardSkeletonMetrics {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-color, var(--border-strong));
+  border-bottom: 1px solid var(--border-color, var(--border-strong));
+}
+
+/* ── View toggle ────────────────────────────────────────────────────────────── */
+.viewToggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-lg, 10px);
+  border: 1px solid var(--border-color, var(--border-strong));
+  background: var(--surface-glass-subtle, transparent);
+  flex-shrink: 0;
+}
+
+.viewToggleBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-md, 8px);
+  background: transparent;
+  color: var(--text-muted, var(--text-secondary));
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.viewToggleBtn:hover {
+  background: var(--surface-glass-subtle, color-mix(in srgb, var(--text-muted) 10%, transparent));
+  color: var(--text-main, var(--text-primary));
+}
+
+.viewToggleBtnActive {
+  background: var(--accent, var(--accent-info));
+  color: var(--text-inverse);
+}
+
+.viewToggleBtnActive:hover {
+  background: var(--accent-info);
+  color: var(--text-inverse);
+}
+
+.viewToggleBtn:focus-visible {
+  outline: 2px solid var(--accent, var(--info-border));
+  outline-offset: 2px;
+}

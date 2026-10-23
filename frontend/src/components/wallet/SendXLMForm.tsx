@@ -197,10 +197,12 @@ export function SendXLMForm() {
             type="text"
             placeholder="GABCD...1234"
             disabled={Boolean(successTx) || submitting}
+            aria-describedby={errors.destination ? 'destination-error' : undefined}
+            aria-invalid={Boolean(errors.destination)}
             {...register('destination')}
           />
           {errors.destination && (
-            <p id="destination-error" className={styles.error} role="alert">
+            <p id="destination-error" className={styles.error} role="alert" aria-live="polite">
               {errors.destination.message}
             </p>
           )}
@@ -218,13 +220,15 @@ export function SendXLMForm() {
             min="0"
             placeholder="0.0"
             disabled={Boolean(successTx) || submitting}
+            aria-describedby={errors.amount ? 'amount-error' : 'amount-helper'}
+            aria-invalid={Boolean(errors.amount)}
             {...register('amount')}
           />
-          <p className={styles.helper}>
+          <p id="amount-helper" className={styles.helper}>
             {t('wallet.send.availableBalance', { balance: parseFloat(balance).toFixed(7) })}
           </p>
           {errors.amount && (
-            <p id="amount-error" className={styles.error} role="alert">
+            <p id="amount-error" className={styles.error} role="alert" aria-live="polite">
               {errors.amount.message}
             </p>
           )}

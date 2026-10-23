@@ -1,0 +1,260 @@
+/* TaskSubmissionForm.module.css
+   Additional styles for the 3-step task submission form.
+   Core wizard chrome (title, buttons, layout) lives in TaskWizard.module.css.
+*/
+
+/* ── Step descriptive text ─────────────────────────────────────────────────── */
+.stepDescription {
+  color: var(--text-muted, var(--text-secondary));
+  font-size: 0.9rem;
+  margin-bottom: 1.25rem;
+  line-height: 1.5;
+}
+
+/* ── Character counter ─────────────────────────────────────────────────────── */
+.charCounterRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  min-height: 1.25rem;
+}
+
+.charCounter {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted, var(--text-secondary));
+  flex-shrink: 0;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+
+.charCounterWarning {
+  color: var(--warning, var(--status-warning-text));
+  font-weight: 600;
+}
+
+.charCounterExceeded {
+  color: var(--danger, var(--status-danger-text));
+  font-weight: 700;
+}
+
+/* ── Input error state ─────────────────────────────────────────────────────── */
+.inputError {
+  border-color: var(--danger, var(--status-danger-border)) !important;
+}
+
+/* ── Agent selection grid ──────────────────────────────────────────────────── */
+.agentGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 640px) {
+  .agentGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.agentOption {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: var(--radius-xl, 12px);
+  border: 1px solid var(--border-color, var(--border-strong));
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  background: var(--surface-glass-subtle, transparent);
+}
+
+.agentOption:hover {
+  border-color: var(--accent, var(--info-border));
+  box-shadow: 0 0 0 1px var(--accent, var(--accent-info));
+}
+
+.agentOptionSelected {
+  border-color: var(--accent, var(--info-border));
+  background: var(--accent-surface, color-mix(in srgb, var(--accent-info) 8%, transparent));
+  box-shadow: 0 0 0 1px var(--accent, var(--accent-info));
+}
+
+.agentOptionHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.checkbox {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  cursor: pointer;
+  accent-color: var(--accent, var(--accent-info));
+}
+
+.agentName {
+  font-weight: 600;
+  font-size: 0.95rem;
+  flex: 1;
+  color: var(--text-main, var(--text-primary));
+}
+
+.recommendedBadge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent, var(--accent-info));
+  color: var(--text-inverse);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.agentCost {
+  font-size: 0.8rem;
+  color: var(--text-muted, var(--text-secondary));
+  padding-left: 26px; /* align under agent name, after checkbox */
+}
+
+.fieldError {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--danger, var(--status-danger-text));
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+}
+
+/* ── Review step sections ──────────────────────────────────────────────────── */
+.reviewSection {
+  margin-bottom: 1.5rem;
+  padding: 16px 20px;
+  border: 1px solid var(--border-color, var(--border-strong));
+  border-radius: var(--radius-xl, 12px);
+  background: var(--surface-glass-subtle, transparent);
+}
+
+.reviewSectionTitle {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-muted, var(--text-secondary));
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 12px;
+}
+
+.reviewDescription {
+  font-size: 0.95rem;
+  color: var(--text-main, var(--text-primary));
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+/* ── Cost breakdown table ──────────────────────────────────────────────────── */
+.costTable {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--border-color, var(--border-strong));
+  border-radius: var(--radius-lg, 8px);
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.costRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-color, var(--border-strong));
+  gap: 1rem;
+}
+
+.costRow:last-child {
+  border-bottom: none;
+}
+
+.costLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-main, var(--text-primary));
+  font-size: 0.9rem;
+}
+
+.costIcon {
+  color: var(--accent, var(--accent-info));
+  flex-shrink: 0;
+}
+
+.costAgentLabel {
+  font-size: 0.75rem;
+  color: var(--text-muted, var(--text-secondary));
+  background: var(--surface-glass-subtle, color-mix(in srgb, var(--text-muted) 10%, transparent));
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.costValue {
+  font-size: 0.9rem;
+  color: var(--text-main, var(--text-primary));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.costRowSubtotal {
+  background: var(--surface-glass-subtle, color-mix(in srgb, var(--text-muted) 5%, transparent));
+}
+
+.costRowSubtotal .costLabel {
+  font-weight: 600;
+  color: var(--text-muted, var(--text-secondary));
+}
+
+.costRowFee {
+  background: var(--surface-glass-subtle, color-mix(in srgb, var(--text-muted) 5%, transparent));
+}
+
+.costRowFee .costLabel {
+  color: var(--text-muted, var(--text-secondary));
+}
+
+.costRowTotal {
+  background: var(--accent-surface, color-mix(in srgb, var(--accent-info) 6%, transparent));
+  padding: 14px 16px;
+}
+
+.costLabelTotal {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-main, var(--text-primary));
+}
+
+.costValueTotal {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--accent, var(--accent-info));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.noAgentsNote {
+  color: var(--text-muted, var(--text-secondary));
+  font-style: italic;
+  font-size: 0.9rem;
+  margin: 0 0 8px;
+}
+
+.costDisclaimer {
+  font-size: 0.78rem;
+  color: var(--text-muted, var(--text-secondary));
+  line-height: 1.4;
+  margin: 0;
+}

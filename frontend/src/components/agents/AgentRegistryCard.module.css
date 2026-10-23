@@ -1,0 +1,290 @@
+/* AgentRegistryCard.module.css — Issue #97 redesign */
+
+/* ── Card container ─────────────────────────────────────────────────────────── */
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  border-radius: var(--radius-xl, 16px);
+  border: 1px solid var(--border-color, var(--border-strong));
+  background: var(--surface-glass-subtle, color-mix(in srgb, var(--text-primary) 3%, transparent));
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.card:hover {
+  border-color: var(--accent, #3b82f6);
+  box-shadow: 0 6px 28px rgba(59, 130, 246, 0.14);
+  transform: translateY(-3px);
+}
+
+/* ── Header: avatar + name block ────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.avatar {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-lg, 10px);
+  border: 1px solid var(--border-color, var(--border-strong));
+  background: var(--surface-glass-subtle, color-mix(in srgb, var(--text-muted) 8%, transparent));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent, var(--accent-info));
+}
+
+.nameBlock {
+  min-width: 0;
+  flex: 1;
+}
+
+.nameRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* Name: large and prominent */
+.name {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: var(--text-main, var(--text-primary));
+  margin: 0 0 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+}
+
+.agentId {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  color: var(--text-muted, #64748b);
+  background: var(--surface-glass-subtle, rgba(148, 163, 184, 0.1));
+  padding: 1px 5px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+}
+
+/* ── Status dot — subtle, next to name ──────────────────────────────────────── */
+.statusDot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-bottom: 3px; /* optical alignment with text baseline */
+}
+
+.statusDotOnline {
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.7);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.statusDotOffline {
+  background: var(--text-muted, #94a3b8);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+/* ── Capability pills ───────────────────────────────────────────────────────── */
+.capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 22px;
+}
+
+.pill {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+/* research = blue */
+.pill--blue {
+  background: color-mix(in srgb, var(--accent-info) 15%, transparent);
+  color: var(--accent-info);
+  border-color: color-mix(in srgb, var(--accent-info) 30%, transparent);
+}
+
+/* risk / audit = orange */
+.pill--orange {
+  background: rgba(251, 146, 60, 0.15);
+  color: #fb923c;
+  border-color: rgba(251, 146, 60, 0.3);
+}
+
+/* coding = green */
+.pill--green {
+  background: color-mix(in srgb, var(--status-success) 15%, transparent);
+  color: var(--status-success-text);
+  border-color: color-mix(in srgb, var(--status-success) 30%, transparent);
+}
+
+/* design = purple */
+.pill--purple {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent-text);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* report = red */
+.pill--red {
+  background: color-mix(in srgb, var(--status-danger) 15%, transparent);
+  color: var(--status-danger-text);
+  border-color: color-mix(in srgb, var(--status-danger) 30%, transparent);
+}
+
+/* yellow kept for legacy compatibility */
+.pill--yellow {
+  background: rgba(251, 191, 36, 0.15);
+  color: #f59e0b;
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.pill--default {
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  color: var(--text-muted, var(--text-secondary));
+  border-color: color-mix(in srgb, var(--text-muted) 20%, transparent);
+}
+
+.noCaps {
+  font-size: 0.8rem;
+  color: var(--text-muted, var(--text-secondary));
+  font-style: italic;
+}
+
+/* ── Price block ────────────────────────────────────────────────────────────── */
+.priceBlock {
+  padding: 10px 0 8px;
+  border-top: 1px solid var(--border-color, #e2e8f0);
+}
+
+.priceMain {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+/* Large, prominent price */
+.priceAmount {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--text-main, var(--text-primary));
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.priceUnit {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent, #3b82f6);
+  letter-spacing: 0.04em;
+}
+
+.priceUsd {
+  font-size: 0.75rem;
+  color: var(--text-muted, #64748b);
+  margin-top: 2px;
+  display: block;
+}
+
+/* ── Reputation row ─────────────────────────────────────────────────────────── */
+.reputationRow {
+  display: flex;
+  align-items: center;
+}
+
+.stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.starFilled {
+  color: var(--status-warning-text);
+  fill: var(--status-warning-text);
+}
+
+.starEmpty {
+  color: var(--border-color, var(--text-muted));
+  fill: none;
+}
+
+.reputationValue {
+  font-size: 0.78rem;
+  color: var(--text-muted, var(--text-secondary));
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Hire CTA — hidden by default, revealed on card hover ───────────────────── */
+.hireCta {
+  width: 100%;
+  padding: 10px;
+  border-radius: var(--radius-lg, 10px);
+  border: none;
+  background: var(--accent, var(--accent-info));
+  color: var(--text-inverse);
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  margin-top: auto;
+
+  /* Hidden by default */
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.18s ease, transform 0.18s ease, background 0.15s ease;
+}
+
+/* Revealed when the card is hovered */
+.card:hover .hireCta {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Also show when button itself has focus (keyboard navigation) */
+.hireCta:focus-visible {
+  opacity: 1;
+  transform: translateY(0);
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 2px;
+}
+
+.hireCta:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.hireCta:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.hireCta:disabled {
+  background: var(--text-muted, #64748b);
+  cursor: not-allowed;
+  opacity: 0;
+}
+
+/* Disabled hire CTA is also revealed on hover, but visually muted */
+.card:hover .hireCta:disabled {
+  opacity: 0.5;
+  transform: translateY(0);
+}
