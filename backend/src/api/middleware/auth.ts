@@ -29,26 +29,36 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
 
   if (token) {
-    // Try validating as session access token
     try {
       const payload = getAuthService().verifyAccessToken(token);
       req.user = payload;
       return next();
     } catch {
-      // If token is not a valid session token, fallback to checking static API_KEYS
       if (keys && keys.has(token)) {
         return next();
       }
+
+      if (keys) {
+        const error = new Error("Unauthorized") as Error & { statusCode?: number };
+        error.statusCode = 401;
+        return next(error);
+      }
+
       res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
       return;
     }
   }
 
   if (!keys) {
-    next();
-    return;
+    return next();
   }
+
+  const error = new Error("Unauthorized") as Error & { statusCode?: number };
+  error.statusCode = 401;
+  return next(error);
 }
+
+export const sessionAuthMiddleware = authMiddleware;
 
 /**
  * Optional session auth middleware: extracts user token if present without rejecting unauthenticated requests.

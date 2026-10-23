@@ -9,10 +9,12 @@ import { createTask, getTask } from "../../../coordinator/taskStore";
 import { createLogger } from "../../../utils/logger";
 import { validate } from "../../middleware/validate";
 import { rateLimitMiddleware } from "../../middleware/rateLimit";
+import { idempotencyMiddleware } from "../../middleware/idempotency";
 import { currentTraceId } from "../../../services/traceContext";
 import { getConfig } from "../../../config";
 
 import { getGlobalJobQueue, type JobQueue, type JobPriority } from "../../../queue";
+import { createCancelTaskRouter } from "../cancel";
 
 // ── Validation config ────────────────────────────────────────────────────────
 const DAILY_TASK_LIMIT = Number(process.env.DAILY_TASK_LIMIT_PER_WALLET ?? 100);
@@ -152,6 +154,9 @@ export function createV1TasksRouter(
     // v1 response format
     res.json({ taskId: req.params.id, status: "cancelled" });
   });
+
+  // POST /api/tasks/:id/cancel — full cancellation with refund (Issue #41)
+  tasksRouter.use("/:id/cancel", createCancelTaskRouter({ queue: jobQueue }));
 
   return tasksRouter;
 }
