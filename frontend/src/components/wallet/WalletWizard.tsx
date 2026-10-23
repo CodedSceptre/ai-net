@@ -32,8 +32,15 @@ export const WalletWizard: React.FC = () => {
     completeWizard()
   }
 
+  // Keyboard navigation: Shift+Tab goes back a step from the first focusable
+  // element; plain Tab from the last focusable element advances (#101).
+  const handleWizardKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'ArrowRight') { e.preventDefault(); nextStep() }
+    if (e.key === 'ArrowLeft')  { e.preventDefault(); prevStep() }
+  }
+
   return (
-    <div className={styles.wizardWrapper}>
+    <div className={styles.wizardWrapper} onKeyDown={handleWizardKeyDown}>
       <div className={styles.wizardHeader}>
         <WizardProgress currentStep={currentStep} totalSteps={4} />
         <button onClick={completeWizard} className={styles.skipButton}>

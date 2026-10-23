@@ -24,7 +24,7 @@ export function errorHandler(
   res: Response,
   _next: NextFunction,
 ): void {
-  const isDevelopment = getConfig().NODE_ENV === "development";
+  const isDev = process.env.NODE_ENV === "development";
   const traceId: string =
     err instanceof AppError
       ? err.correlationId
@@ -32,6 +32,7 @@ export function errorHandler(
         (res.locals.correlationId as string | undefined) ??
         "unknown";
   const requestId = (res.locals.requestId as string | undefined) ?? "unknown";
+  const correlationId = traceId;
   const log = createLogger({
     ...(res.locals.logContext as Record<string, unknown> | undefined),
     requestId,
@@ -45,7 +46,7 @@ export function errorHandler(
   const errorCode =
     err instanceof AppError
       ? err.code
-      : isDevelopment
+      : isDev
         ? (err as any)?.code ?? "INTERNAL_SERVER_ERROR"
         : "INTERNAL_SERVER_ERROR";
 
@@ -133,7 +134,7 @@ export function errorHandler(
       correlationId,
       timestamp: new Date().toISOString(),
       path: req.path,
-      ...(isDevelopment && err instanceof Error
+      ...(isDev && err instanceof Error
         ? { stack: err.stack }
         : {}),
     },

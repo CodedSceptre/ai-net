@@ -12,6 +12,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Star, Zap } from 'lucide-react';
 import type { AgentRecord } from '../../types/api';
+import { GlossaryHelp } from '../common/HelpIcon';
 import styles from './AgentRegistryCard.module.css';
 
 export interface AgentRegistryCardProps {
@@ -125,6 +126,7 @@ export const AgentRegistryCard: React.FC<AgentRegistryCardProps> = ({ agent, onH
           >
             <strong>{agent.price.toFixed(2)}</strong>{' '}
             <span className={styles.xlmUnit}>XLM</span>
+            <GlossaryHelp.XLM />
           </span>
         </div>
 

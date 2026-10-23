@@ -6,6 +6,8 @@ import { useTaskMonitor } from '../hooks/useTaskMonitor';
 import { TaskDetailTimeline } from '../components/dashboard/TaskDetailTimeline';
 import { PaymentTimeline } from '../components/dashboard/PaymentTimeline';
 import { Skeleton, SkeletonText } from '../components/common/Skeleton';
+import { EmptyState } from '../components/common/EmptyState';
+import { TaskFailedIllustration } from '../components/common/illustrations';
 import { AlertCircle, CheckCircle2, Play, RefreshCw } from 'lucide-react';
 
 const CustomNode: React.FC<{ id: string; data: { label: string; status: string } }> = ({ id, data }) => {
@@ -187,14 +189,22 @@ const TaskDetailPage: React.FC = () => {
 
   if (error) {
     return (
-      <div className="glass-panel border-rose-500/30 text-center py-12">
-        <AlertCircle className="text-rose-500 mx-auto mb-4" size={48} />
-        <h2 className="text-xl font-bold text-[var(--text-primary)] mb-2">{t('page.task.errorTitle')}</h2>
-        <p className="text-rose-300/80 mb-6">{error.message}</p>
-        <button onClick={refetch} className="flex items-center gap-2 mx-auto">
-          <RefreshCw size={16} />
-          <span>{t('common.retry')}</span>
-        </button>
+      <div className="glass-panel border-rose-500/30">
+        <EmptyState
+          illustration={<TaskFailedIllustration />}
+          title={t('page.task.errorTitle')}
+          description={error.message}
+          primaryAction={{
+            label: t('common.retry'),
+            onClick: refetch,
+            icon: <RefreshCw size={16} />,
+          }}
+          secondaryAction={{
+            label: 'Contact Support',
+            to: 'mailto:support@ai-net.io',
+          }}
+          variant="card"
+        />
       </div>
     );
   }

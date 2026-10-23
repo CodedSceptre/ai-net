@@ -177,6 +177,15 @@ export function DataTable<T>({
                   key={column.key}
                   className={column.sortable ? styles.sortableHeader : undefined}
                   style={{ width: column.width, minWidth: column.minWidth, resize: 'horizontal' }}
+                  aria-sort={
+                    column.sortable
+                      ? sortKey === column.key
+                        ? sortDirection === 'asc'
+                          ? 'ascending'
+                          : 'descending'
+                        : 'none'
+                      : undefined
+                  }
                 >
                   {column.sortable ? (
                     <button
@@ -223,7 +232,7 @@ export function DataTable<T>({
                       <input
                         type="checkbox"
                         checked={isSelected}
-                        onChange={() => handleSelect(row)}
+                        onChange={() => handleSelect(rowKey, row)}
                         onClick={(event) => event.stopPropagation()}
                         aria-label={`Select row ${String(rowKey)}`}
                       />

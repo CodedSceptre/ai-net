@@ -9,8 +9,11 @@ import type { TFunction } from 'i18next';
 import { useTaskSubmit } from '../../hooks/useTaskSubmit';
 import { useToast } from '../../context/ToastContext';
 import { useTaskDraft } from '../../hooks/useTaskDraft';
+import { useWalletBalance } from '../../hooks/useWalletBalance';
+import { useWallet } from '../../context/WalletContext';
 import { WizardProgress } from '../wallet/WizardProgress';
 import { WizardStep } from '../wallet/WizardStep';
+import { ConfirmDialog } from '../common/ConfirmDialog';
 import styles from './TaskWizard.module.css';
 import formStyles from './TaskSubmissionForm.module.css';
 import type { AgentPreference } from '../../services/taskService';
@@ -76,6 +79,10 @@ export function TaskSubmissionForm() {
   const { load, save, clear } = useTaskDraft();
   const { submitTask, status, error } = useTaskSubmit();
   const pendingNav = useRef<number | null>(null);
+  const { publicKey } = useWallet();
+  const { balance } = useWalletBalance(publicKey);
+  const [showInsufficientBalanceConfirm, setShowInsufficientBalanceConfirm] = useState(false);
+  const [pendingSubmitValues, setPendingSubmitValues] = useState<TaskFormValues | null>(null);
 
   const initialDraft = useMemo(() => load(), [load]);
   const [currentStep, setCurrentStep] = useState<number>(initialDraft?.currentStep ?? 1);
@@ -174,7 +181,7 @@ export function TaskSubmissionForm() {
 
   // ── Submit ─────────────────────────────────────────────────────────────────
 
-  const onSubmit = async (values: TaskFormValues) => {
+  const doSubmit = async (values: TaskFormValues) => {
     try {
       const result = await submitTask({
         prompt: values.description,
@@ -220,6 +227,19 @@ export function TaskSubmissionForm() {
           : {}),
       });
     }
+  };
+
+  const onSubmit = async (values: TaskFormValues) => {
+    const walletBalance = parseFloat(balance ?? '0');
+    const hasInsufficientBalance = walletBalance < costBreakdown.total;
+
+    if (hasInsufficientBalance) {
+      setPendingSubmitValues(values);
+      setShowInsufficientBalanceConfirm(true);
+      return;
+    }
+
+    await doSubmit(values);
   };
 
   const isLoading = status === 'loading' || isSubmitting;
@@ -516,6 +536,28 @@ export function TaskSubmissionForm() {
           {error}
         </div>
       )}
+
+      <ConfirmDialog
+        open={showInsufficientBalanceConfirm}
+        title={t('task.submit.insufficientBalance.title', { defaultValue: 'Insufficient Balance Warning' })}
+        description={t('task.submit.insufficientBalance.description', {
+          total: costBreakdown.total.toFixed(2),
+          balance: parseFloat(balance ?? '0').toFixed(2),
+          defaultValue: `Your estimated task cost is ${costBreakdown.total.toFixed(2)} XLM but your wallet balance is ${parseFloat(balance ?? '0').toFixed(2)} XLM.`,
+        })}
+        consequence={t('task.submit.insufficientBalance.consequence', { defaultValue: 'The task may fail if your balance is too low. Top up your wallet before proceeding, or continue at your own risk.' })}
+        confirmLabel={t('task.submit.insufficientBalance.confirm', { defaultValue: 'Submit Anyway' })}
+        cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}
+        onConfirm={async () => {
+          setShowInsufficientBalanceConfirm(false);
+          if (pendingSubmitValues) await doSubmit(pendingSubmitValues);
+          setPendingSubmitValues(null);
+        }}
+        onCancel={() => {
+          setShowInsufficientBalanceConfirm(false);
+          setPendingSubmitValues(null);
+        }}
+      />
     </main>
   );
 }

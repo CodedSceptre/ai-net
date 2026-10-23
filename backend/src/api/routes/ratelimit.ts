@@ -20,8 +20,10 @@ export function createRateLimitRouter(): Router {
    *         description: The rate limit key (e.g. "tasks:wallet_abc123" or "global:127.0.0.1")
    *       - in: query
    *         name: rule
-   *         schema: { type: string, enum: ["GLOBAL", "TASKS", "AGENTS_REGISTER", "PAYMENTS"] }
-   *         default: "GLOBAL"
+   *         schema:
+   *           type: string
+   *           enum: ["GLOBAL", "TASKS", "AGENTS_REGISTER", "PAYMENTS"]
+   *           default: "GLOBAL"
    *     responses:
    *       200:
    *         description: Rate limit status
