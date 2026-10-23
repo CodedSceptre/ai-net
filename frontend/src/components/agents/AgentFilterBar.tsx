@@ -68,6 +68,13 @@ export function AgentFilterBar({
                   className={`${styles.capChip} ${selected ? styles.capChipActive : ''}`}
                   aria-pressed={selected}
                   onClick={() => toggleCapability(cap)}
+                  onKeyDown={(e) => {
+                    // Delete or Backspace removes a selected filter chip (#101)
+                    if (selected && (e.key === 'Delete' || e.key === 'Backspace')) {
+                      e.preventDefault()
+                      toggleCapability(cap)
+                    }
+                  }}
                 >
                   {cap}
                 </button>

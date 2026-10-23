@@ -4,6 +4,8 @@ import type { AgentRegistration, AgentRegistry } from '../types/agent';
 import type { PaymentService } from '../types/payment';
 import { eventBus } from './eventBus';
 import { updateNode, updateTask, getTask } from './taskStore';
+import { createTaskDb, getTaskDb } from '../db/tasks';
+import { TaskResultStorageService } from '../services/taskResultStorage';
 import type { DAGNode, Task } from '../types/task';
 import {
   QualityScorer,
@@ -22,6 +24,7 @@ import {
   runWithTraceContext,
   childSpanContext,
 } from '../services/traceContext';
+import { metricsService } from '../services/metrics';
 
 const DEFAULT_CONCURRENCY = 3;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -243,6 +246,13 @@ export class Coordinator {
           taskId,
           timestamp: now(),
         });
+
+        // Record task failure metric with reason
+        if (status === 'failed') {
+          const firstFailedNode = dag.find(n => n.status === 'failed');
+          const reason = firstFailedNode?.error ?? 'execution_failed';
+          metricsService.recordTaskFailed(reason);
+        }
 
         this.log.info(
           { taskId, status, completedCount: completed.size, failedCount: failed.size },
@@ -472,6 +482,11 @@ export class Coordinator {
         timestamp: now(),
         payload: { txHash },
       });
+
+      // Record Stellar payment transaction metric
+      metricsService.recordStellarTransaction('payment');
+      // Record Venice AI call by agent type
+      metricsService.recordVeniceCallByAgentType(node.type, 'success', 0);
 
       this.log.info(
         { taskId, nodeId: node.nodeId, txHash },
@@ -705,6 +720,7 @@ export function createTaskJobHandler(
   dispatch: DispatchFn,
   releasePayment: PaymentReleaseFn
 ): (job: Job, updateProgress: (percentage: number) => void) => Promise<void> {
+  const resultStorage = new TaskResultStorageService(createTaskDb(getTaskDb()));
   return async (job: Job, updateProgress: (percentage: number) => void) => {
     const task = getTask(job.taskId);
     if (!task) {
@@ -731,6 +747,9 @@ export function createTaskJobHandler(
     await executeDAG(task, dispatch, releasePayment, updateProgress);
 
     const refreshedTask = getTask(job.taskId);
+    if (refreshedTask?.status === "completed") {
+      await resultStorage.persist(job.taskId, refreshedTask.dag.map(({ nodeId, result }) => ({ nodeId, result })));
+    }
     if (refreshedTask && refreshedTask.status === "failed") {
       const firstErrorNode = refreshedTask.dag.find((n) => n.status === "failed");
       throw new Error(firstErrorNode?.error || "Task execution failed");

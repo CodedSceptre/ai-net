@@ -45,8 +45,8 @@ const envSchema = z.object({
   REGISTER_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(10),
   DAILY_TASK_LIMIT_PER_WALLET: z.coerce.number().int().min(0).default(100),
 
-  HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
-  HEARTBEAT_STALE_THRESHOLD_MINUTES: z.coerce.number().int().positive().default(5),
+  HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+  HEARTBEAT_GRACE_PERIOD_MS: z.coerce.number().int().positive().default(90_000),
   AGENT_OFFLINE_DELETE_HOURS: z.coerce.number().int().positive().default(24),
 
   RECONCILIATION_WEBHOOK_URL: z.string().url().optional(),
