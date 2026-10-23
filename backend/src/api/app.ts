@@ -34,10 +34,12 @@ import {
 import type { DAGNode } from "../types/task";
 import type { AgentRegistry } from "../types/agent";
 import { agentsRouter } from "./routes/agents";
+import { createAgentOnboardingRouter, type AgentOnboardingOptions } from "./routes/agentOnboarding";
 import { healthRouter } from "./routes/health";
 import { metricsRouter } from "./routes/metrics";
 import { createStatsRouter } from "./routes/stats";
 import { createReconciliationRouter, type ReconciliationRouterOptions } from "./routes/reconciliation";
+import { createPaymentsRouter } from "./routes/payments";
 import {
   rateLimitMiddleware,
   registerRateLimitMiddleware,
@@ -54,11 +56,16 @@ import { requestLogger } from "./middleware/requestLogger";
 import { versioningMiddleware } from "./middleware/versioning";
 import { getOpenapiJson, getOpenapiYaml, openapiSpec, swaggerUiOptions } from "./docs";
 import { createAdminQueueRouter } from "./routes/admin";
+import { createEventsRouter } from "./routes/events";
 import { createV1TasksRouter } from "./routes/v1/tasks";
 import { createV2TasksRouter } from "./routes/v2/tasks";
 import { createAuthRouter } from "./routes/auth";
 import { createFlagsRouter } from "./routes/flags";
 import { createVersionsRouter } from "./routes/versions";
+import { createRateLimitRouter } from "./routes/ratelimit";
+import { createEventsRouter } from "./routes/events";
+import { createPaymentsRouter } from "./routes/payments";
+import { createAdminRouter } from "./routes/admin";
 import { type AuthService } from "../services/auth";
 import { createLogger } from "../utils/logger";
 import { AppError } from "../errors";
@@ -78,6 +85,8 @@ export interface AppOptions {
   jobWorker?: JobWorker;
   /** Custom auth service instance */
   authService?: AuthService;
+  /** Soroban registration hook used by the guided agent onboarding flow. */
+  agentOnboarding?: AgentOnboardingOptions;
   /** Enable background queue worker (default: true) */
   enableQueueWorker?: boolean;
   /**
@@ -108,6 +117,11 @@ export function createApp(opts: AppOptions = {}): {
   const logger = createLogger({ module: "api-app" });
   const app = express();
   const httpServer = createServer(app);
+  const eventStore: EventStore = opts.eventStore ?? eventBus.store ?? createEventStore();
+
+  if (config.NODE_ENV !== "test") {
+    void eventBus.connectRedis(config.REDIS_URL);
+  }
 
   app.use(express.json());
   app.use((_req, res, next) => {
@@ -191,9 +205,14 @@ export function createApp(opts: AppOptions = {}): {
   // ── Auth routes ────────────────────────────────────────────────────────────
   app.use("/api/auth", createAuthRouter(opts.authService));
 
+  // ── Admin event replay ─────────────────────────────────────────────────────
+  app.use("/api/events", adminLimiter.middleware, createEventsRouter(eventStore));
+
   // ── Agent routes ───────────────────────────────────────────────────────────
   app.use("/api/agents", publicLimiter.middleware);
   app.post("/api/agents/register", registerRateLimitMiddleware);
+  app.post("/api/agents/onboarding/start", registerRateLimitMiddleware);
+  app.use("/api/agents/onboarding", createAgentOnboardingRouter(opts.agentOnboarding));
   app.use("/api/agents", agentsRouter);
 
   // ── Task routes ────────────────────────────────────────────────────────────
@@ -209,6 +228,7 @@ export function createApp(opts: AppOptions = {}): {
   });
 
   // ── Admin Queue routes ─────────────────────────────────────────────────────
+  app.use("/api/admin", createAdminRouter({ queue: jobQueue, reconciliation: opts.reconciliation }));
   app.use("/api/admin/queue", adminLimiter.middleware, createAdminQueueRouter(jobQueue));
   app.use("/api/admin", adminLimiter.middleware, createAdminQueueRouter(jobQueue));
 
@@ -218,11 +238,16 @@ export function createApp(opts: AppOptions = {}): {
   // ── Versioning lifecycle endpoint (#426) ───────────────────────────────────
   app.use("/api/versions", createVersionsRouter());
 
+  // ── Events and payment history ─────────────────────────────────────────────
+  app.use("/api/events", createEventsRouter());
+  app.use("/api/payments", createPaymentsRouter());
+
   // ── Payment reconciliation routes ──────────────────────────────────────────
   app.use("/api/reconciliation", createReconciliationRouter(opts.reconciliation));
+  app.use("/api/payments", createPaymentsRouter());
 
   // ── Rate-limit status endpoint ─────────────────────────────────────────────
-  app.use("/api/ratelimit", publicLimiter.middleware);
+  app.use("/api/ratelimit", publicLimiter.middleware, createRateLimitRouter());
 
   app.use((_req: Request, res: Response) => {
     res.status(404).json({
@@ -235,7 +260,6 @@ export function createApp(opts: AppOptions = {}): {
   app.use(errorHandler);
 
   // ── WebSocket task stream ──────────────────────────────────────────────────
-  const eventStore: EventStore = opts.eventStore ?? createEventStore();
   const detachStream = attachTaskStream({
     httpServer,
     eventStore,
@@ -256,6 +280,7 @@ export function createApp(opts: AppOptions = {}): {
   function close(callback?: () => void): void {
     jobWorker.stop(opts.jobWorkerStopTimeoutMs ?? 10_000).finally(() => {
       heartbeatService.stop();
+      eventBus.disconnectRedis();
       metricsService.setWebSocketProbe(null);
       detachStream();
       if (httpServer.listening) {

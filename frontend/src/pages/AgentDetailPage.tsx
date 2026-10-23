@@ -17,10 +17,10 @@
 import React, { useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ArrowLeft, Star, Zap, DollarSign, Activity, ExternalLink } from 'lucide-react'
+import { Star, Zap, DollarSign, Activity, ExternalLink } from 'lucide-react'
 
 import { useAgentDetail } from '../hooks/useAgentDetail'
-import { ReputationChart } from '../components/agents/ReputationChart'
+import { useBreadcrumbLabel } from '../components/layout/Breadcrumb'
 import { CopyButton } from '../components/common/CopyButton'
 import { Skeleton, SkeletonText, SkeletonCard } from '../components/common/Skeleton'
 import { EmptyState } from '../components/common/EmptyState'
@@ -139,6 +139,7 @@ const AgentDetailPage: React.FC = () => {
   const navigate = useNavigate()
   const { agent, reputation, reputationHistory, reputationHistoryLoading, agentLoading, reputationLoading, error, notFound } =
     useAgentDetail(id ?? '')
+  useBreadcrumbLabel(agent?.name ?? `Agent ${id ?? ''}`)
 
   const handleHire = useCallback(() => {
     if (!id) return
@@ -179,14 +180,6 @@ const AgentDetailPage: React.FC = () => {
 
   return (
     <div className={styles.page} data-testid="agent-detail-page">
-      {/* Back nav */}
-      <nav className={styles.breadcrumb} aria-label="Breadcrumb">
-        <Link to="/agents" className={styles.backLink}>
-          <ArrowLeft size={16} aria-hidden="true" />
-          {t('nav.agentRegistry', { defaultValue: 'Agent Registry' })}
-        </Link>
-      </nav>
-
       {/* Header */}
       {agentLoading ? (
         <HeaderSkeleton />

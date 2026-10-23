@@ -1,19 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useForm, Controller, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { useTaskSubmit } from '../../hooks/useTaskSubmit';
 import { useToast } from '../../context/ToastContext';
-import { useTaskDraft } from '../../hooks/useTaskDraft';
+import { useTaskDraft, type TaskDraft } from '../../hooks/useTaskDraft';
 import { useWalletBalance } from '../../hooks/useWalletBalance';
 import { useWallet } from '../../context/WalletContext';
 import { WizardProgress } from '../wallet/WizardProgress';
 import { WizardStep } from '../wallet/WizardStep';
 import { ConfirmDialog } from '../common/ConfirmDialog';
+import { DraftRecoveryBanner } from '../tasks/DraftRecoveryBanner';
 import styles from './TaskWizard.module.css';
 import formStyles from './TaskSubmissionForm.module.css';
 import type { AgentPreference } from '../../services/taskService';
@@ -75,6 +76,8 @@ function computeCostBreakdown(agents: AgentPreference[]) {
 export function TaskSubmissionForm() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const agentFromUrl = searchParams.get('agent');
   const { showToast } = useToast();
   const { load, save, clear } = useTaskDraft();
   const { submitTask, status, error } = useTaskSubmit();
@@ -84,8 +87,13 @@ export function TaskSubmissionForm() {
   const [showInsufficientBalanceConfirm, setShowInsufficientBalanceConfirm] = useState(false);
   const [pendingSubmitValues, setPendingSubmitValues] = useState<TaskFormValues | null>(null);
 
-  const initialDraft = useMemo(() => load(), [load]);
-  const [currentStep, setCurrentStep] = useState<number>(initialDraft?.currentStep ?? 1);
+  const [savedDraft, setSavedDraft] = useState<TaskDraft | null>(() => load());
+  const [showDraftBanner, setShowDraftBanner] = useState<boolean>(() => {
+    const d = load();
+    return Boolean(d && (d.prompt || d.agentPreferences?.length > 0 || d.currentStep > 1));
+  });
+
+  const [currentStep, setCurrentStep] = useState<number>(1);
 
   const agentOptions = useMemo(
     () =>
@@ -106,13 +114,14 @@ export function TaskSubmissionForm() {
     handleSubmit,
     control,
     trigger,
-    formState: { errors, isSubmitting, isSubmitted },
+    setValue,
+    formState: { errors, isSubmitting, isSubmitted, isDirty },
   } = useForm<TaskFormValues>({
     mode: 'onChange',
     resolver: zodResolver(taskSchema),
     defaultValues: {
-      description: initialDraft?.prompt ?? '',
-      agentPreferences: (initialDraft?.agentPreferences ?? []) as AgentPreference[],
+      description: '',
+      agentPreferences: [],
     },
   });
 
@@ -130,15 +139,48 @@ export function TaskSubmissionForm() {
     [selectedPreferences],
   );
 
-  // ── Draft persistence ──────────────────────────────────────────────────────
+  // ── Restore / Discard Handlers ─────────────────────────────────────────────
+  const handleRestoreDraft = useCallback(() => {
+    if (!savedDraft) return;
+    setValue('description', savedDraft.prompt, { shouldValidate: true, shouldDirty: true });
+    setValue('agentPreferences', savedDraft.agentPreferences, { shouldValidate: true, shouldDirty: true });
+    setCurrentStep(savedDraft.currentStep);
+    setShowDraftBanner(false);
+    showToast(t('common.restored', { defaultValue: 'Draft restored successfully' }), 'info');
+  }, [savedDraft, setValue, showToast, t]);
+
+  const handleDiscardDraft = useCallback(() => {
+    clear();
+    setSavedDraft(null);
+    setShowDraftBanner(false);
+    showToast(t('common.discarded', { defaultValue: 'Draft discarded' }), 'info');
+  }, [clear, showToast, t]);
+
+  // ── Auto-save to localStorage every 30 seconds while being edited ───────────
   useEffect(() => {
-    save({
-      prompt: descriptionValue,
-      maxBudgetXLM: costBreakdown.total,
-      agentPreferences: selectedPreferences,
-      currentStep,
-    });
-  }, [descriptionValue, selectedPreferences, currentStep, save, costBreakdown.total]);
+    const interval = setInterval(() => {
+      if (isDirty || descriptionValue.trim().length > 0 || selectedPreferences.length > 0) {
+        save({
+          prompt: descriptionValue,
+          maxBudgetXLM: costBreakdown.total,
+          agentPreferences: selectedPreferences,
+          currentStep,
+          selectedAgentId: agentFromUrl || undefined,
+          savedAt: new Date().toISOString(),
+        });
+      }
+    }, 30_000);
+
+    return () => clearInterval(interval);
+  }, [
+    descriptionValue,
+    selectedPreferences,
+    currentStep,
+    costBreakdown.total,
+    isDirty,
+    agentFromUrl,
+    save,
+  ]);
 
   // ── i18n re-validation ─────────────────────────────────────────────────────
   const language = i18n.language;
@@ -171,12 +213,30 @@ export function TaskSubmissionForm() {
   const goNext = async () => {
     const valid = await validateCurrentStep();
     if (valid) {
-      setCurrentStep((step) => Math.min(step + 1, TOTAL_STEPS));
+      const nextStep = Math.min(currentStep + 1, TOTAL_STEPS);
+      setCurrentStep(nextStep);
+      save({
+        prompt: descriptionValue,
+        maxBudgetXLM: costBreakdown.total,
+        agentPreferences: selectedPreferences,
+        currentStep: nextStep,
+        selectedAgentId: agentFromUrl || undefined,
+        savedAt: new Date().toISOString(),
+      });
     }
   };
 
   const goBack = () => {
-    setCurrentStep((step) => Math.max(step - 1, 1));
+    const prevStep = Math.max(currentStep - 1, 1);
+    setCurrentStep(prevStep);
+    save({
+      prompt: descriptionValue,
+      maxBudgetXLM: costBreakdown.total,
+      agentPreferences: selectedPreferences,
+      currentStep: prevStep,
+      selectedAgentId: agentFromUrl || undefined,
+      savedAt: new Date().toISOString(),
+    });
   };
 
   // ── Submit ─────────────────────────────────────────────────────────────────
@@ -312,6 +372,14 @@ export function TaskSubmissionForm() {
   return (
     <main className={styles.wizardWrapper}>
       <h1 className={styles.title}>{t('task.submit.title', { defaultValue: 'Submit a Task' })}</h1>
+
+      {showDraftBanner && savedDraft && (
+        <DraftRecoveryBanner
+          draft={savedDraft}
+          onRestore={handleRestoreDraft}
+          onDiscard={handleDiscardDraft}
+        />
+      )}
 
       <div className={styles.progressHeader}>
         <WizardProgress currentStep={currentStep} totalSteps={TOTAL_STEPS} />

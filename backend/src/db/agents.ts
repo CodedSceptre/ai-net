@@ -5,6 +5,7 @@ import type { ReputationBreakdown } from "../services/qualityScorer.types";
 import { createPool, type SqlitePool } from "./pool";
 import { decodeCursor, encodeCursor, type CursorPage } from "./cursor";
 import { createErrorRegistryStore, getErrorDb } from "./errorRegistry";
+import { poolSettings } from "./poolConfig";
 
 const MIGRATIONS_DIR = path.join(__dirname, "migrations", "agents");
 
@@ -22,6 +23,8 @@ export interface AgentRecord {
   tasksFailed?: number;
   lastActiveAt?: string;
   reputation?: ReputationBreakdown;
+  /** ISO timestamp set by an admin ban. Banned agents never receive tasks. */
+  bannedAt?: string | null;
 }
 
 export interface AgentReputationHistoryRecord {
@@ -42,6 +45,26 @@ export interface AgentCursorOptions {
   status?: string;
 }
 
+export interface AgentRegistrationDraft {
+  draftId: string;
+  agentId: string;
+  stellarPublicKey: string;
+  capabilities?: string[];
+  pricingXLM?: number;
+  endpoint?: string;
+  createdAt: string;
+  lastActivityAt: string;
+  expiresAt: string;
+}
+
+export interface AgentRegistrationDraftStore {
+  create(draft: AgentRegistrationDraft): void;
+  find(draftId: string, now?: string): AgentRegistrationDraft | undefined;
+  update(draft: AgentRegistrationDraft): void;
+  delete(draftId: string): void;
+  deleteExpired(now?: string): number;
+}
+
 let _agentPool: SqlitePool | null = null;
 
 export function ensureAgentTable(db: Database.Database): void {
@@ -59,7 +82,8 @@ export function ensureAgentTable(db: Database.Database): void {
       bondAmountXLM    REAL NOT NULL DEFAULT 0,
       tasksCompleted   INTEGER NOT NULL DEFAULT 0,
       tasksFailed      INTEGER NOT NULL DEFAULT 0,
-      lastActiveAt     TEXT
+      lastActiveAt     TEXT,
+      bannedAt         TEXT
     )
   `);
   db.exec(`
@@ -84,6 +108,7 @@ export function ensureAgentTable(db: Database.Database): void {
     "ALTER TABLE agents ADD COLUMN tasksCompleted INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE agents ADD COLUMN tasksFailed INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE agents ADD COLUMN lastActiveAt TEXT",
+    "ALTER TABLE agents ADD COLUMN bannedAt TEXT",
   ];
   for (const sql of migrations) {
     try {
@@ -95,15 +120,74 @@ export function ensureAgentTable(db: Database.Database): void {
   db.exec("UPDATE agents SET last_seen_at = CAST(strftime('%s', lastSeenAt) AS INTEGER) WHERE last_seen_at = 0");
 }
 
+export function createAgentRegistrationDraftStore(
+  db: Database.Database,
+): AgentRegistrationDraftStore {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_registration_drafts (
+      draftId TEXT PRIMARY KEY,
+      agentId TEXT NOT NULL,
+      stellarPublicKey TEXT NOT NULL,
+      capabilities TEXT,
+      pricingXLM REAL,
+      endpoint TEXT,
+      createdAt TEXT NOT NULL,
+      lastActivityAt TEXT NOT NULL,
+      expiresAt TEXT NOT NULL
+    )
+  `);
+
+  const read = (row: any): AgentRegistrationDraft | undefined => row && ({
+    ...row,
+    capabilities: row.capabilities ? JSON.parse(row.capabilities) : undefined,
+  });
+
+  return {
+    create(draft): void {
+      db.prepare(`
+        INSERT INTO agent_registration_drafts
+          (draftId, agentId, stellarPublicKey, createdAt, lastActivityAt, expiresAt)
+        VALUES (@draftId, @agentId, @stellarPublicKey, @createdAt, @lastActivityAt, @expiresAt)
+      `).run(draft);
+    },
+
+    find(draftId, now = new Date().toISOString()): AgentRegistrationDraft | undefined {
+      db.prepare("DELETE FROM agent_registration_drafts WHERE expiresAt <= ?").run(now);
+      const row = db.prepare(
+        "SELECT * FROM agent_registration_drafts WHERE draftId = ?",
+      ).get(draftId);
+      return read(row);
+    },
+
+    update(draft): void {
+      db.prepare(`
+        UPDATE agent_registration_drafts
+        SET capabilities = @capabilities, pricingXLM = @pricingXLM,
+            endpoint = @endpoint, lastActivityAt = @lastActivityAt, expiresAt = @expiresAt
+        WHERE draftId = @draftId
+      `).run({
+        ...draft,
+        capabilities: draft.capabilities ? JSON.stringify(draft.capabilities) : null,
+      });
+    },
+
+    delete(draftId): void {
+      db.prepare("DELETE FROM agent_registration_drafts WHERE draftId = ?").run(draftId);
+    },
+
+    deleteExpired(now = new Date().toISOString()): number {
+      return db.prepare("DELETE FROM agent_registration_drafts WHERE expiresAt <= ?").run(now).changes;
+    },
+  };
+}
+
 /** Lazily open (or reopen) the pooled agent database. */
 export function getAgentPool(dbPath?: string): SqlitePool {
   if (!_agentPool || _agentPool.closed) {
     const filePath = dbPath ?? path.join(process.cwd(), "agents.db");
     _agentPool = createPool({
       filePath,
-      min: 1,
-      max: 4,
-      acquireTimeoutMs: 5_000,
+      ...poolSettings(),
       onCreate: (db) => {
         migrateToLatest(db, MIGRATIONS_DIR);
       },
@@ -151,6 +235,8 @@ export interface AgentDb {
   countByStellarKey(stellarPublicKey: string): number;
   markAllOffline(): void;
   updateLastSeen(agentId: string): void;
+  /** IDs of agents banned by an administrator. */
+  listBannedAgentIds(): string[];
   markStaleAgents(staleThresholdSeconds?: number): number;
   deleteOfflineAgents(offlineThresholdHours?: number): number;
   // Optional on-chain event handlers used by registry/sync.ts. Not every
@@ -174,8 +260,8 @@ export function createAgentDb(db: Database.Database): AgentDb {
     upsert(agent: AgentRecord): void {
       const rep = agent.reputationScore !== undefined ? Math.max(0.0, Math.min(5.0, agent.reputationScore)) : 2.5;
       db.prepare(`
-        INSERT INTO agents (id, capabilities, pricingXLM, endpoint, stellarPublicKey, reputationScore, lastSeenAt, last_seen_at, status, bondAmountXLM, tasksCompleted, tasksFailed, lastActiveAt)
-        VALUES (@id, @capabilities, @pricingXLM, @endpoint, @stellarPublicKey, @reputationScore, @lastSeenAt, @last_seen_at, @status, @bondAmountXLM, @tasksCompleted, @tasksFailed, @lastActiveAt)
+        INSERT INTO agents (id, capabilities, pricingXLM, endpoint, stellarPublicKey, reputationScore, lastSeenAt, last_seen_at, status, bondAmountXLM, tasksCompleted, tasksFailed, lastActiveAt, bannedAt)
+        VALUES (@id, @capabilities, @pricingXLM, @endpoint, @stellarPublicKey, @reputationScore, @lastSeenAt, @last_seen_at, @status, @bondAmountXLM, @tasksCompleted, @tasksFailed, @lastActiveAt, @bannedAt)
         ON CONFLICT(id) DO UPDATE SET
           capabilities = excluded.capabilities,
           pricingXLM = excluded.pricingXLM,
@@ -187,7 +273,8 @@ export function createAgentDb(db: Database.Database): AgentDb {
           bondAmountXLM = excluded.bondAmountXLM,
           tasksCompleted = excluded.tasksCompleted,
           tasksFailed = excluded.tasksFailed,
-          lastActiveAt = excluded.lastActiveAt
+          lastActiveAt = excluded.lastActiveAt,
+          bannedAt = excluded.bannedAt
       `).run({
         ...agent,
         capabilities: JSON.stringify(agent.capabilities),
@@ -198,6 +285,7 @@ export function createAgentDb(db: Database.Database): AgentDb {
         tasksCompleted: agent.tasksCompleted ?? 0,
         tasksFailed: agent.tasksFailed ?? 0,
         lastActiveAt: agent.lastActiveAt ?? agent.lastSeenAt ?? new Date().toISOString(),
+        bannedAt: agent.bannedAt ?? null,
       });
     },
 
@@ -213,6 +301,7 @@ export function createAgentDb(db: Database.Database): AgentDb {
         tasksCompleted: Number(row.tasksCompleted ?? 0),
         tasksFailed: Number(row.tasksFailed ?? 0),
         lastActiveAt: row.lastActiveAt ?? row.lastSeenAt,
+        bannedAt: row.bannedAt ?? null,
       };
     },
 
@@ -247,6 +336,7 @@ export function createAgentDb(db: Database.Database): AgentDb {
         tasksCompleted: Number(row.tasksCompleted ?? 0),
         tasksFailed: Number(row.tasksFailed ?? 0),
         lastActiveAt: row.lastActiveAt ?? row.lastSeenAt,
+        bannedAt: row.bannedAt ?? null,
       }));
     },
 
@@ -401,13 +491,27 @@ export function createAgentDb(db: Database.Database): AgentDb {
       `).run(now.toISOString(), Math.floor(now.getTime() / 1000), agentId);
     },
 
+    listBannedAgentIds(): string[] {
+      const rows = db
+        .prepare("SELECT id FROM agents WHERE bannedAt IS NOT NULL")
+        .all() as Array<{ id: string }>;
+      return rows.map((row) => row.id);
+    },
+
     markStaleAgents(staleThresholdSeconds: number = 90): number {
+      // Staleness can be recorded in either representation: the epoch column
+      // (last_seen_at, written by upsert) or the ISO timestamp (lastSeenAt).
+      // Check both so raw-SQL fixtures that backdate only one of them are
+      // still detected. datetime() normalises ISO-8601 ("T"/"Z") for comparison.
       const result = db.prepare(`
         UPDATE agents
         SET status = 'offline'
         WHERE status = 'online'
-          AND last_seen_at < ?
-      `).run(Math.floor(Date.now() / 1000) - staleThresholdSeconds);
+          AND (
+            (last_seen_at > 0 AND last_seen_at < ?)
+            OR datetime(lastSeenAt) < datetime('now', '-' || ? || ' seconds')
+          )
+      `).run(Math.floor(Date.now() / 1000) - staleThresholdSeconds, staleThresholdSeconds);
       return result.changes;
     },
 
