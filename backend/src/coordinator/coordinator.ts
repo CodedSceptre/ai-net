@@ -561,7 +561,11 @@ export class Coordinator {
           needsReview: quality.needsReview,
           timestamp: quality.timestamp,
         });
-        updateAgentReputation(agentId, reputationDeltaForScore(quality.score));
+        updateAgentReputation(agentId, reputationDeltaForScore(quality.score), {
+          taskId,
+          nodeId: node.nodeId,
+          timestamp: quality.timestamp,
+        });
       }
 
       this.log.info(

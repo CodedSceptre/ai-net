@@ -192,6 +192,40 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
    *         description: Agent not found
    */
   // GET /api/agents/:id/health
+    /**
+     * @openapi
+     * /api/agents/{id}/reputation/history:
+     *   get:
+     *     summary: Get an agent's reputation history for the last 30 days
+     *     tags: [Agents]
+     *     security: []
+     *     operationId: getAgentReputationHistory
+     *     parameters:
+     *       - in: path
+     *         name: id
+     *         required: true
+     *         schema: { type: string }
+     *     responses:
+     *       200:
+     *         description: Reputation snapshots, oldest first
+     *       404:
+     *         description: Agent not found
+     */
+    router.get("/:id/reputation/history", (req: Request, res: Response, next: NextFunction): void => {
+      try {
+        const db = getDb();
+        if (!db.findById(req.params.id)) {
+          return next(agentNotFound(req.params.id));
+        }
+        const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const history = db.listReputationHistory?.(req.params.id, since) ?? [];
+        res.json(history.map(({ timestamp, ...record }) => ({ ...record, date: timestamp })));
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    // GET /api/agents/:id/health
   router.get("/:id/health", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const agent = getDb().findById(req.params.id);

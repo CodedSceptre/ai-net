@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next'
 import { ArrowLeft, Star, Zap, DollarSign, Activity, ExternalLink } from 'lucide-react'
 
 import { useAgentDetail } from '../hooks/useAgentDetail'
+import { ReputationChart } from '../components/agents/ReputationChart'
 import { CopyButton } from '../components/common/CopyButton'
 import { Skeleton, SkeletonText, SkeletonCard } from '../components/common/Skeleton'
 import { EmptyState } from '../components/common/EmptyState'
@@ -136,7 +137,7 @@ const AgentDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { agent, reputation, agentLoading, reputationLoading, error, notFound } =
+  const { agent, reputation, reputationHistory, reputationHistoryLoading, agentLoading, reputationLoading, error, notFound } =
     useAgentDetail(id ?? '')
 
   const handleHire = useCallback(() => {
@@ -315,6 +316,10 @@ const AgentDetailPage: React.FC = () => {
                 ))}
               </dl>
             )}
+            <ReputationChart
+              history={reputationHistory ?? []}
+              loading={reputationHistoryLoading}
+            />
           </section>
         )}
       </div>
