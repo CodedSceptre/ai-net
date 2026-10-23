@@ -5,6 +5,31 @@ import type { DestinationStream, Logger } from "pino";
 import { getConfig } from "../config";
 import { currentTraceContext } from '../services/traceContext';
 
+// ── Module-level log level overrides (Issue #404) ────────────────────────────
+// Reads LOG_LEVEL_<MODULE> env vars at first use to allow per-module verbosity.
+// e.g. LOG_LEVEL_WORKER=debug, LOG_LEVEL_AGENTCLEANUP=trace
+const moduleLogLevelCache = new Map<string, pino.LevelWithSilent>();
+
+function getModuleLogLevel(module: string): pino.LevelWithSilent | null {
+  const cacheKey = module.toUpperCase();
+  if (moduleLogLevelCache.has(cacheKey)) {
+    return moduleLogLevelCache.get(cacheKey)!;
+  }
+  const envKey = `LOG_LEVEL_${cacheKey.replace(/[^A-Z0-9]/g, '_')}`;
+  const envVal = process.env[envKey];
+  if (envVal && ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'].includes(envVal)) {
+    const level = envVal as pino.LevelWithSilent;
+    moduleLogLevelCache.set(cacheKey, level);
+    return level;
+  }
+  moduleLogLevelCache.set(cacheKey, null as unknown as pino.LevelWithSilent);
+  return null;
+}
+
+// ── PII redaction patterns (Issue #404) ─────────────────────────────────────
+// JWT token regex: header.payload.signature (base64url-encoded parts)
+const JWT_RE = /\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b/g;
+
 const REDACTED = "[REDACTED]";
 const REDACTED_ADDRESS = "[REDACTED_ADDRESS]";
 const DEFAULT_LOG_CONTEXT = {
@@ -35,7 +60,8 @@ function redactString(value: string): string {
     .replace(STELLAR_SECRET_RE, REDACTED)
     .replace(BEARER_RE, `Bearer ${REDACTED}`)
     .replace(KEY_VALUE_SECRET_RE, (_match, key) => `${key}=${REDACTED}`)
-    .replace(STELLAR_ADDRESS_RE, REDACTED_ADDRESS);
+    .replace(STELLAR_ADDRESS_RE, REDACTED_ADDRESS)
+    .replace(JWT_RE, REDACTED);
 }
 
 function redactByKey(key: string | undefined, value: unknown): unknown {
@@ -193,7 +219,18 @@ export function createLogger(
   if (!options.destination && !baseLogger) {
     baseLogger = root;
   }
-  return root.child(normalizeBindings(bindings));
+  const normalizedBindings = normalizeBindings(bindings);
+
+  // Apply per-module log level override if a component is specified (Issue #404)
+  const component = bindings?.component as string | undefined;
+  if (component) {
+    const moduleLevel = getModuleLogLevel(component);
+    if (moduleLevel) {
+      return root.child(normalizedBindings, { level: moduleLevel });
+    }
+  }
+
+  return root.child(normalizedBindings);
 }
 
 const logger = createLogger();
