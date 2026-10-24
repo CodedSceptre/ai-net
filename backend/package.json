@@ -36,7 +36,7 @@
     "pino-http": "10.2.0",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1",
-    "ws": "^8.21.0",
+    "ws": "^8.22.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -50,7 +50,7 @@
     "@types/supertest": "^7.2.1",
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8",
-    "@types/ws": "^8.18.1",
+    "@types/ws": "^8.18.2",
     "@typescript-eslint/eslint-plugin": "^8.72.0",
     "@typescript-eslint/parser": "^8.72.0",
     "eslint": "8.57.0",
