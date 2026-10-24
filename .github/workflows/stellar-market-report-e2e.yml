@@ -1,233 +1,56 @@
-name: Stellar Market Report E2E
-
-# Runs the full market report pipeline E2E test against the LIVE Stellar
-# testnet. This test funds fresh accounts via Friendbot, executes the
-# five-node market report DAG, releases Stellar payments for every agent,
-# and verifies the payment operations through Horizon.
-#
-# Includes:
-#   - Testnet health check before running tests (abort if testnet is down)
-#   - Automatic retry (up to 3 attempts) for transient testnet flakiness
-#   - Flaky test detection and reporting via scripts/detect-flaky-tests.js
+name: Stellar Market Report E2E (weekly)
 
 on:
   schedule:
-    # Daily 04:17 UTC — offset from the contract farm to spread testnet load.
-    - cron: "17 4 * * *"
-  workflow_dispatch: {}
-  push:
-    branches: [main]
-    paths:
-      - "smart-contracts/src/**"
-      - "smart-contracts/tests/e2e/**"
-      - ".github/workflows/stellar-market-report-e2e.yml"
-
-concurrency:
-  group: stellar-e2e-${{ github.ref }}
-  cancel-in-progress: true
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
-  issues: write # to comment on flaky test issues
 
 jobs:
-  stellar-e2e:
-    name: market-report-e2e
+  market-report-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
     env:
+      RUN_STELLAR_E2E_TESTS: 'true'
       STELLAR_NETWORK: testnet
       STELLAR_RPC_URL: https://soroban-testnet.stellar.org
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
-    defaults:
-      run:
-        working-directory: smart-contracts
+      STELLAR_COORDINATOR_SECRET: ${{ secrets.STELLAR_TESTNET_FARM_SECRET }}
+      STELLAR_SECRET_KEY: ${{ secrets.STELLAR_TESTNET_FARM_SECRET }}
+      REGISTRY_CONTRACT_ID: ${{ vars.STELLAR_AGENT_REGISTRY_CONTRACT_ID }}
+      SOROBAN_CLI_BIN: stellar
+      VENICE_API_KEY: testnet-e2e-no-external-inference
+      DATABASE_URL: ./data/stellar-e2e.db
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: smart-contracts/package-lock.json
+          cache-dependency-path: backend/package-lock.json
 
-      - name: Install dependencies
+      - name: Set up Stellar CLI
+        uses: stellar/stellar-cli@v28.1.0
+
+      - name: Install backend dependencies
         run: npm ci
 
-      # ── Testnet health check ────────────────────────────────────────────
-      # Pings Horizon, Friendbot, and the Soroban RPC before running tests.
-      # If all endpoints are down, abort the workflow early with a clear
-      # message — this is a testnet outage, not a code regression.
-      - name: Testnet health check
-        id: health
+      - name: Install smart-contract test dependencies
+        working-directory: smart-contracts
+        run: npm ci
+
+      - name: Verify testnet configuration
         run: |
-          echo "Checking Stellar testnet health…"
-          HORIZON_OK=false
-          FRIENDBOT_OK=false
-          RPC_OK=false
+          test -n "$STELLAR_COORDINATOR_SECRET" || { echo 'STELLAR_TESTNET_FARM_SECRET is required'; exit 1; }
+          test -n "$REGISTRY_CONTRACT_ID" || { echo 'Set the STELLAR_AGENT_REGISTRY_CONTRACT_ID repository variable'; exit 1; }
 
-          # Check Horizon (retry 3 times with 5s backoff)
-          for i in 1 2 3; do
-            if curl -sf --max-time 15 "https://horizon-testnet.stellar.org/" > /dev/null 2>&1; then
-              HORIZON_OK=true
-              break
-            fi
-            echo "Horizon attempt $i failed — retrying in 5s…"
-            sleep 5
-          done
-
-          # Check Friendbot (retry 3 times with 5s backoff)
-          for i in 1 2 3; do
-            if curl -sf --max-time 15 "https://friendbot.stellar.org/" > /dev/null 2>&1; then
-              FRIENDBOT_OK=true
-              break
-            fi
-            echo "Friendbot attempt $i failed — retrying in 5s…"
-            sleep 5
-          done
-
-          # Check Soroban RPC (retry 3 times with 5s backoff)
-          for i in 1 2 3; do
-            if curl -sf --max-time 15 -X POST "https://soroban-testnet.stellar.org/" \
-                 -H "Content-Type: application/json" \
-                 -d '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}' > /dev/null 2>&1; then
-              RPC_OK=true
-              break
-            fi
-            echo "RPC attempt $i failed — retrying in 5s…"
-            sleep 5
-          done
-
-          echo "Horizon:  $HORIZON_OK"
-          echo "Friendbot: $FRIENDBOT_OK"
-          echo "RPC:      $RPC_OK"
-
-          # Require at least 2 of 3 endpoints to be reachable
-          REACHABLE=0
-          [ "$HORIZON_OK" = "true" ] && REACHABLE=$((REACHABLE + 1))
-          [ "$FRIENDBOT_OK" = "true" ] && REACHABLE=$((REACHABLE + 1))
-          [ "$RPC_OK" = "true" ] && REACHABLE=$((REACHABLE + 1))
-
-          if [ "$REACHABLE" -lt 2 ]; then
-            echo "::error::Stellar testnet health check FAILED — only $REACHABLE/3 endpoints reachable. Aborting (testnet outage, not a code regression)."
-            exit 1
-          fi
-
-          echo "✅ Testnet is healthy ($REACHABLE/3 endpoints reachable) — proceeding with tests."
-        continue-on-error: false
-
-      # ── Run E2E tests with retry ──────────────────────────────────────────
-      # Use nick-fields/retry to wrap the E2E test run with up to 3 attempts.
-      # The globalSetup.ts testnet health check runs again inside Jest as a
-      # second guard, and transient errors (429, 503, timeout) are retried
-      # by the retryOnTransientError helper.
-      - name: Run market report E2E test (with retry)
-        id: e2e
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 25
-          max_attempts: 3
-          retry_wait_seconds: 30
-          command: |
-            cd smart-contracts && \
-            npx jest --runInBand --forceExit \
-              --testPathPattern='tests/e2e/market-report.test.ts' \
-              --json --outputFile=../test-results-e2e.json
-        env:
-          RUN_STELLAR_E2E_TESTS: "true"
-          STELLAR_NETWORK: testnet
-          STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
-          STELLAR_COORDINATOR_SECRET: ${{ secrets.STELLAR_COORDINATOR_SECRET }}
-          VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}
-
-      # ── Upload E2E test results (for flake tracking) ──────────────────────
-      - name: Upload E2E test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-e2e-${{ github.run_id }}-${{ github.run_attempt }}
-          path: test-results-e2e.json
-          if-no-files-found: warn
-          retention-days: 14
-
-      # ── Flaky test detection ──────────────────────────────────────────────
-      # Run the flaky test detector across all result artifacts from this run.
-      # Multiple attempt JSONs (from the retry step) are cross-referenced to
-      # detect tests that failed on one attempt but passed on another.
-      - name: Detect flaky tests
-        if: always()
-        run: |
-          # Collect all attempt results into a single directory
-          mkdir -p ../test-results
-          # Copy the latest attempt's results
-          [ -f ../test-results-e2e.json ] && cp ../test-results-e2e.json ../test-results/test-results-e2e-${{ github.run_attempt }}.json
-
-          # Run the flaky test detector
-          cd .. && node scripts/detect-flaky-tests.js \
-            --results-dir ./test-results \
-            --output flaky-tests-report.json \
-            --window-days 7 || true
-        continue-on-error: true
-
-      - name: Upload flaky tests report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flaky-tests-report-${{ github.run_id }}
-          path: |
-            flaky-tests-report.json
-            flaky-tests-history.json
-          if-no-files-found: warn
-          retention-days: 30
-
-      # ── Alert on high flaky rate ──────────────────────────────────────────
-      - name: Check flaky rate alert
-        if: always()
-        run: |
-          if [ -f ../flaky-tests-report.json ]; then
-            FLAKY_RATE=$(jq -r '.flakyRate // 0' ../flaky-tests-report.json)
-            echo "Flaky rate: $FLAKY_RATE%"
-            if (( $(echo "$FLAKY_RATE > 5" | bc -l 2>/dev/null || echo 0) )); then
-              echo "::warning::Flaky rate ($FLAKY_RATE%) exceeds 5% threshold. See flaky-tests-report artifact for details."
-            fi
-          fi
-        continue-on-error: true
-
-      # ── Open issue on failure ─────────────────────────────────────────────
-      - name: Open / update breakage issue on failure
-        if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            let body = "## ⚠️ Stellar Market Report E2E FAILED\n\n";
-            body += "The market report E2E test failed against the live Stellar testnet. ";
-            body += "This may be a testnet outage or a code regression.\n\n";
-            body += `- **Run:** [${context.runId}](${context.payload.repository.html_url}/actions/runs/${context.runId})\n`;
-            body += `- **Commit:** ${context.sha.substring(0, 7)}\n\n`;
-            body += "Inspect the `test-results-e2e` and `flaky-tests-report` artifacts for details.\n";
-            body += "\n_This issue is auto-generated by the Stellar Market Report E2E workflow._";
-
-            const label = "e2e-flaky";
-            const title = "Stellar Market Report E2E breakage";
-            const q = `repo:${context.repo.owner}/${context.repo.repo} ` +
-                      `in:title type:issue is:open label:${label}`;
-            const matches = await github.rest.search.issuesAndPullRequests({ q });
-            const existing = matches.data.items.find((i) => i.title === title);
-            if (existing) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.number,
-                body,
-              });
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
-                labels: [label],
-              });
-            }
+      - name: Run market report E2E against Stellar testnet
+        run: npx jest --config ../tests/e2e/jest.stellar.config.js --runInBand --runTestsByPath ../tests/e2e/market-report-stellar.test.ts
