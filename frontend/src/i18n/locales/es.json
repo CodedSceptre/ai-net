@@ -127,7 +127,7 @@
   "validation.amountPositive": "La cantidad debe ser mayor que 0 — ingresa un número positivo.",
   "validation.insufficientBalance": "El saldo de tu cartera es insuficiente para esta transacción. Añade fondos e inténtalo de nuevo.",
   "validation.promptRequired": "La descripción de la tarea es obligatoria — describe qué quieres que haga la red de agentes.",
-  "validation.promptTooLong": "La descripción no puede superar los 2000 caracteres — acórtala.",
+  "validation.promptTooLong": "La descripción no puede superar los 4000 caracteres — acórtala.",
   "validation.promptTooShort": "La descripción debe tener al menos 20 caracteres — describe tu objetivo en detalle.",
   "validation.minBudget": "El presupuesto mínimo es 0.1 XLM — ingresa una cantidad mayor.",
   "validation.agentRequired": "Selecciona al menos un agente especialista para gestionar tu tarea.",

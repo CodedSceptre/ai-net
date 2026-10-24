@@ -262,6 +262,10 @@ function getDefaultLimiter(): RateLimiter {
   return defaultLimiter;
 }
 
+export function getRateLimiter(): RateLimiter {
+  return getDefaultLimiter();
+}
+
 export const rateLimitMiddleware = (
   req: Request,
   res: Response,

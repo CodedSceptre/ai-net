@@ -15,7 +15,9 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
     "format:fix": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "storybook": "storybook dev -p 6006",
-    "build-storybook": "storybook build -o storybook-static"
+  "build-storybook": "storybook build -o storybook-static",
+    "lhci": "lhci autorun",
+    "budget:check": "lhci autorun --config=./lighthouserc.cjs"
   },
   "dependencies": {
     "@hookform/resolvers": "3.9.1",
@@ -44,6 +46,7 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@axe-core/react": "^4.10.2",
     "@lhci/cli": "^0.15.1",
     "@playwright/test": "^1.45.0",
