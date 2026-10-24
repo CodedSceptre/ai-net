@@ -12,6 +12,9 @@ import { RiskAgent } from './risk';
 import { CodingAgent } from './coding';
 import { DesignAgent } from './design';
 import { ReportAgent } from './report';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger({ component: 'agent-registry' });
 
 export interface AgentRegistryConfig {
   apiBaseUrl?: string;
@@ -68,19 +71,19 @@ export class AgentStartupRegistry {
     );
 
     if (autoRegister) {
-      console.log('[AgentRegistry] Registering all agents...');
+      logger.info({ agentCount: this.agents.length }, 'registering agents');
       
       const registrations = this.agents.map(async ({ instance, capability }) => {
         try {
           await instance.register();
           instance.startHeartbeat();
         } catch (error) {
-          console.error(`[AgentRegistry] Failed to register ${capability} agent:`, error instanceof Error ? error.message : 'unknown');
+          logger.error({ capability, err: error }, 'failed to register agent');
         }
       });
 
       await Promise.all(registrations);
-      console.log(`[AgentRegistry] Registration complete. ${this.agents.length} agents initialized.`);
+      logger.info({ agentCount: this.agents.length }, 'agent registration complete');
     }
   }
 
@@ -149,7 +152,7 @@ export class AgentStartupRegistry {
           results[capability] = true; // Assume healthy if no health check method
         }
       } catch (error) {
-        console.error(`[AgentRegistry] Health check failed for ${capability}:`, error);
+        logger.error({ capability, err: error }, 'agent health check failed');
         results[capability] = false;
       }
     }
