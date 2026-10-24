@@ -27,7 +27,8 @@
   --text-primary: #f5f7fa;
   --text-secondary: #8a93a3;
   --text-muted: #94a3b8;
-  --text-subtle: rgba(148, 163, 184, 0.6);
+  /* Raised from 0.6 to 0.85 — resolves to #808ea1 (5.49:1 on surface-primary), WCAG AA. */
+  --text-subtle: rgba(148, 163, 184, 0.85);
   --text-disabled: rgba(148, 163, 184, 0.35);
   --text-inverse: #ffffff;
 
@@ -36,13 +37,22 @@
   --border-muted: rgba(255, 255, 255, 0.08);
   --border-strong: #475569;
 
+  /* --accent is the brand/glyph color used for icons, borders, and focus outlines.
+     Do NOT use it directly as text on any surface — use --accent-text-interactive instead.
+     White on --accent = 4.23:1 (FAIL AA). Use --accent-btn for primary button backgrounds. */
   --accent: #8b5cf6;
   --accent-hover: #7c3aed;
+  /* Dedicated background for filled primary buttons — white on #7c3aed = 5.70:1 (PASS AA). */
+  --accent-btn: #7c3aed;
   --accent-info: #38bdf8;
   --accent-secondary: #6366f1;
   --accent-secondary-hover: #4f46e5;
   --accent-text: #c4b5fd;
+  /* Use --accent-text-strong for any accent-colored text on dark surfaces.
+     #a78bfa achieves 6.03:1 on surface-raised — WCAG AA for all text sizes. */
   --accent-text-strong: #a78bfa;
+  /* --accent-text-interactive aliases --accent-text-strong for link/interactive text. */
+  --accent-text-interactive: #a78bfa;
   --accent-text-soft: #a5b4fc;
   --accent-text-muted: #818cf8;
   --accent-surface: rgba(99, 102, 241, 0.15);
@@ -73,6 +83,8 @@
   --status-warning-border: rgba(245, 158, 11, 0.3);
   --status-warning-border-strong: rgba(245, 158, 11, 0.4);
   --status-warning-text: #fde68a;
+  /* --status-danger is for backgrounds and borders only (#ef4444 = 4.36:1 on surface-raised,
+     FAIL AA for normal text). Use --status-danger-text for inline error/danger text. */
   --status-danger: #ef4444;
   --status-danger-strong: #b91c1c;
   --status-danger-surface: rgba(239, 68, 68, 0.12);
@@ -81,6 +93,7 @@
   --status-danger-surface-emphasis: rgba(239, 68, 68, 0.25);
   --status-danger-border: rgba(239, 68, 68, 0.3);
   --status-danger-border-strong: rgba(239, 68, 68, 0.4);
+  /* #fca5a5 = 8.65:1 on surface-raised — WCAG AA. Use this for all inline danger text. */
   --status-danger-text: #fca5a5;
   --agent-research: var(--accent-info);
   --agent-risk: var(--status-warning);
