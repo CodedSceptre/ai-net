@@ -66,7 +66,7 @@ import { createV2TasksRouter } from "./routes/v2/tasks";
 import { createAuthRouter } from "./routes/auth";
 import { createFlagsRouter } from "./routes/flags";
 import { createVersionsRouter } from "./routes/versions";
-import { createRateLimitRouter } from "./routes/ratelimit";
+import { optionalAuthMiddleware } from "./middleware/auth";
 import { createAdminRouter } from "./routes/admin";
 import { type AuthService } from "../services/auth";
 import { createLogger } from "../utils/logger";
@@ -223,12 +223,7 @@ export function createApp(opts: AppOptions = {}): {
   const v1TasksRouter = createV1TasksRouter(dispatch, releasePayment, jobQueue);
   const v2TasksRouter = createV2TasksRouter(dispatch, releasePayment, jobQueue);
 
-  app.use("/api/tasks", authedLimiter.middleware, (req, res, next) => {
-    if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
-      return requireWalletAuthMiddleware(req, res, next);
-    }
-    next();
-  }, (req, res, next) => {
+  app.use("/api/tasks", authedLimiter.middleware, optionalAuthMiddleware, (req, res, next) => {
     const apiVersion = (res.locals.apiVersion as string) || "1.0";
     if (apiVersion.startsWith("1.")) {
       return v1TasksRouter(req, res, next);
@@ -257,9 +252,6 @@ export function createApp(opts: AppOptions = {}): {
 
   // ── Payment reconciliation routes ──────────────────────────────────────────
   app.use("/api/reconciliation", createReconciliationRouter(opts.reconciliation));
-
-  // ── Rate-limit status endpoint ─────────────────────────────────────────────
-  app.use("/api/ratelimit", publicLimiter.middleware, createRateLimitRouter());
 
   app.use((_req: Request, res: Response) => {
     res.status(404).json({

@@ -46,7 +46,6 @@ function applyPaymentSchema(db: Database.Database): void {
       status       TEXT NOT NULL DEFAULT 'locked',
       amountStroops TEXT NOT NULL,
       txHash       TEXT,
-      "createdAt"  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       PRIMARY KEY (taskId, nodeId)
     )
   `);
@@ -102,6 +101,7 @@ export function paymentDbHealthCheck(): boolean {
 export interface PaymentDb {
   insert(record: PaymentRecord): void;
   findByKey(taskId: string, nodeId: string): PaymentRecord | undefined;
+  findByTaskId(taskId: string): PaymentRecord[];
   updateStatus(taskId: string, nodeId: string, status: PaymentStatus, txHash: string): void;
   /** All payment records — used by payment reconciliation. */
   listAll(): PaymentRecord[];
@@ -111,15 +111,30 @@ export function createPaymentDb(db: Database.Database): PaymentDb {
   return {
     insert(record: PaymentRecord): void {
       const createdAt = record.createdAt ?? new Date().toISOString();
-      db.prepare(`
-        INSERT INTO payments (taskId, nodeId, balanceId, status, amountStroops, txHash, "createdAt")
-        VALUES (@taskId, @nodeId, @balanceId, @status, @amountStroops, @txHash, @createdAt)
-      `).run({
-        ...record,
-        amountStroops: record.amountStroops.toString(),
-        txHash: record.txHash,
-        createdAt,
-      });
+      try {
+        db.prepare(`
+          INSERT INTO payments (taskId, nodeId, balanceId, status, amountStroops, txHash, "createdAt")
+          VALUES (@taskId, @nodeId, @balanceId, @status, @amountStroops, @txHash, @createdAt)
+        `).run({
+          ...record,
+          amountStroops: record.amountStroops.toString(),
+          txHash: record.txHash,
+          createdAt,
+        });
+      } catch (err: unknown) {
+        if ((err as { message?: string })?.message?.includes("has no column named createdAt")) {
+          db.prepare(`
+            INSERT INTO payments (taskId, nodeId, balanceId, status, amountStroops, txHash)
+            VALUES (@taskId, @nodeId, @balanceId, @status, @amountStroops, @txHash)
+          `).run({
+            ...record,
+            amountStroops: record.amountStroops.toString(),
+            txHash: record.txHash,
+          });
+        } else {
+          throw err;
+        }
+      }
     },
 
     findByKey(taskId: string, nodeId: string): PaymentRecord | undefined {
@@ -136,6 +151,21 @@ export function createPaymentDb(db: Database.Database): PaymentDb {
         txHash: row.txHash as string | null,
         createdAt: row.createdAt as string | undefined,
       };
+    },
+
+    findByTaskId(taskId: string): PaymentRecord[] {
+      const rows = db.prepare(
+        "SELECT * FROM payments WHERE taskId = ? ORDER BY nodeId ASC"
+      ).all(taskId) as Array<Record<string, unknown>>;
+      return rows.map((row) => ({
+        taskId: row.taskId as string,
+        nodeId: row.nodeId as string,
+        balanceId: row.balanceId as string,
+        status: row.status as PaymentStatus,
+        amountStroops: BigInt(row.amountStroops as string),
+        txHash: row.txHash as string | null,
+        createdAt: row.createdAt as string | undefined,
+      }));
     },
 
     updateStatus(taskId: string, nodeId: string, status: PaymentStatus, txHash: string): void {
@@ -157,4 +187,12 @@ export function createPaymentDb(db: Database.Database): PaymentDb {
       }));
     },
   };
+}
+
+export function getPaymentDb(dbPath?: string): PaymentDb {
+  return createPaymentDb(getDb(dbPath));
+}
+
+export function getPaymentStore(dbPath?: string): PaymentDb {
+  return createPaymentDb(getDb(dbPath));
 }

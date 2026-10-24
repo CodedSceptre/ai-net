@@ -51,6 +51,7 @@ export class TokenService {
     familyId: string;
     deviceId: string;
     scope?: string | string[];
+    accessTokenTtlSeconds?: number;
   }): { token: string; expiresIn: number } {
     const now = Math.floor(Date.now() / 1000);
     const expiresIn = params.accessTokenTtlSeconds ?? this.accessTtlSeconds;

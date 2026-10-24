@@ -481,13 +481,13 @@ describe("tasks migrations", () => {
       db.close();
     });
 
-    it("getPendingMigrations returns all 4 on a fresh database", () => {
+    it("getPendingMigrations returns all migrations on a fresh database", () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const Db = require("better-sqlite3");
       const db = new Db(":memory:");
       const pending = getPendingMigrations(db, DIRS.tasks);
-      expect(pending).toHaveLength(4);
-      expect(pending.map((m: Migration) => m.version)).toEqual([1, 2, 3, 4]);
+      expect(pending).toHaveLength(9);
+      expect(pending.map((m: Migration) => m.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
       db.close();
     });
 
@@ -521,11 +521,11 @@ describe("all 3 databases load migrations from disk without errors", () => {
     expect(() => loadMigrations(DIRS.tasks)).not.toThrow();
   });
 
-  it("total migration count across all 3 databases is 7 (1+2+4)", () => {
+  it("total migration count across all 3 databases is 19 (6+4+9)", () => {
     const total =
       loadMigrations(DIRS.agents).length +
       loadMigrations(DIRS.payments).length +
       loadMigrations(DIRS.tasks).length;
-    expect(total).toBe(7);
+    expect(total).toBe(19);
   });
 });
