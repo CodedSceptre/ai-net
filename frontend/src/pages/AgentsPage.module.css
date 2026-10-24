@@ -12,6 +12,15 @@
   margin-bottom: 20px;
 }
 
+.searchSection {
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 .title {
   font-size: 1.8rem;
   font-weight: 700;
