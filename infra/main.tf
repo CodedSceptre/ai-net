@@ -8,7 +8,7 @@ terraform {
     }
     archive = {
       source  = "hashicorp/archive"
-      version = "~> 2.7"
+      version = "~> 2.4"
     }
   }
 
@@ -109,6 +109,7 @@ module "iam" {
   s3_bucket_arns = [
     module.s3.task_results_bucket_arn,
     module.s3.redis_backups_bucket_arn,
+    module.s3.database_backups_bucket_arn,
   ]
   secrets_arns = module.secrets.secret_arns
 }

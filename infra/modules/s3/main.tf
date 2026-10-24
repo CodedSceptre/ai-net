@@ -79,16 +79,16 @@ resource "aws_s3_bucket_lifecycle_configuration" "redis_backups" {
   }
 }
 
-# ── CloudWatch log archive bucket ────────────────────────────────────────────
+# ── SQLite Database Backups ───────────────────────────────────────────────────
 
-resource "aws_s3_bucket" "log_archive" {
-  bucket = "ai-net-${var.environment}-log-archive-${data.aws_caller_identity.current.account_id}"
+resource "aws_s3_bucket" "database_backups" {
+  bucket = "ai-net-${var.environment}-database-backups-${data.aws_caller_identity.current.account_id}"
 
-  tags = { Name = "ai-net-${var.environment}-log-archive" }
+  tags = { Name = "ai-net-${var.environment}-database-backups" }
 }
 
-resource "aws_s3_bucket_server_side_encryption_configuration" "log_archive" {
-  bucket = aws_s3_bucket.log_archive.id
+resource "aws_s3_bucket_server_side_encryption_configuration" "database_backups" {
+  bucket = aws_s3_bucket.database_backups.id
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
@@ -96,63 +96,54 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "log_archive" {
   }
 }
 
-resource "aws_s3_bucket_public_access_block" "log_archive" {
-  bucket                  = aws_s3_bucket.log_archive.id
+resource "aws_s3_bucket_public_access_block" "database_backups" {
+  bucket                  = aws_s3_bucket.database_backups.id
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
 
-resource "aws_s3_bucket_policy" "log_archive" {
-  bucket = aws_s3_bucket.log_archive.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid       = "AllowCloudWatchLogsToCheckBucket"
-        Effect    = "Allow"
-        Principal = { Service = "logs.${var.aws_region}.amazonaws.com" }
-        Action    = "s3:GetBucketAcl"
-        Resource  = aws_s3_bucket.log_archive.arn
-        Condition = {
-          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
-          ArnLike      = { "aws:SourceArn" = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*" }
-        }
-      },
-      {
-        Sid       = "AllowCloudWatchLogsToWriteExports"
-        Effect    = "Allow"
-        Principal = { Service = "logs.${var.aws_region}.amazonaws.com" }
-        Action    = "s3:PutObject"
-        Resource  = "${aws_s3_bucket.log_archive.arn}/cloudwatch/*"
-        Condition = {
-          StringEquals = {
-            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
-            "s3:x-amz-acl"      = "bucket-owner-full-control"
-          }
-          ArnLike = { "aws:SourceArn" = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*" }
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_s3_bucket_lifecycle_configuration" "log_archive" {
-  bucket = aws_s3_bucket.log_archive.id
+resource "aws_s3_bucket_lifecycle_configuration" "database_backups" {
+  bucket = aws_s3_bucket.database_backups.id
 
   rule {
-    id     = "transition-and-expire-log-archives"
+    id     = "expire-verified-database-backups"
     status = "Enabled"
+    expiration { days = 90 }
+  }
+}
 
-    filter { prefix = "cloudwatch/" }
+resource "aws_s3_bucket" "backup_verification" {
+  bucket = "ai-net-${var.environment}-backup-verification-${data.aws_caller_identity.current.account_id}"
 
-    transition {
-      days          = 30
-      storage_class = "GLACIER"
+  tags = { Name = "ai-net-${var.environment}-backup-verification" }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "backup_verification" {
+  bucket = aws_s3_bucket.backup_verification.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
     }
+  }
+}
 
-    expiration { days = 365 }
+resource "aws_s3_bucket_public_access_block" "backup_verification" {
+  bucket                  = aws_s3_bucket.backup_verification.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "backup_verification" {
+  bucket = aws_s3_bucket.backup_verification.id
+
+  rule {
+    id     = "expire-verification-fixtures"
+    status = "Enabled"
+    expiration { days = 90 }
   }
 }
 
