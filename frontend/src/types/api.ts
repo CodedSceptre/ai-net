@@ -52,6 +52,20 @@ export interface TaskSubmitResponse {
   status: string;
 }
 
+export interface TaskEstimateBreakdownItem {
+  agent: AgentPreference;
+  costXLM: number;
+}
+
+export interface TaskEstimate {
+  currency: 'XLM';
+  breakdown: TaskEstimateBreakdownItem[];
+  subtotalXLM: number;
+  platformFeeXLM: number;
+  platformFeeRate: number;
+  estimatedCostXLM: number;
+}
+
 export interface AgentRecord {
   id: string;
   name: string;

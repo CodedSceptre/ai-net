@@ -7,6 +7,11 @@ import { NotFoundError, ValidationError, UnauthorizedError, AppError } from "../
 import { cacheMiddleware } from "../middleware/cache";
 import { invalidateAgentsCache } from "../../cache/invalidation";
 import { ttlForRoute } from "../../config";
+import { requireWalletAuthMiddleware } from "../middleware/auth";
+import {
+  calculateReputationBreakdown,
+  computeReputationDelta,
+} from "../../services/qualityScorer";
 
 const AgentCursorListSchema = z.object({
   cursor: z.string().optional(),
@@ -33,6 +38,18 @@ const RegisterAgentSchema = z.object({
   stellarPublicKey: z.string().regex(STELLAR_PUBLIC_KEY_REGEX, "Invalid Stellar public key format"),
 });
 
+/** Sybil resistance cap: agents registerable per Stellar account (Issue #497). */
+const MAX_AGENTS_PER_STELLAR_ACCOUNT = 2;
+
+/** Body for POST /api/agents/:id/task-result (Issue #497). */
+const TaskResultSchema = z
+  .object({
+    outcome: z.enum(["success", "failure"]),
+    qualityScore: z.number().min(0).max(100).optional(),
+    latencyMs: z.number().min(0).optional(),
+  })
+  .strict();
+
 const DEFAULT_HEALTH_TIMEOUT_MS = 3_000;
 const HORIZON_URL = process.env.STELLAR_HORIZON_URL || "https://horizon-testnet.stellar.org";
 const horizon = new Horizon.Server(HORIZON_URL);
@@ -41,6 +58,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
   const router = Router();
   const healthTimeoutMs = options.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
   const getDb = () => options.db ?? createAgentDb(getAgentDb());
+  const agentNotFound = (id: string) => new AppError(`Agent '${id}' not found`, 404, "AGENT_NOT_FOUND");
 
   /**
    * @openapi
@@ -161,10 +179,106 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
     try {
       const agent = getDb().findById(req.params.id);
       if (!agent) {
-        res.status(404).json({ error: "Agent not found" });
-        return;
+        return next(agentNotFound(req.params.id));
       }
-      res.json(agent);
+      res.json({
+        ...agent,
+        reputation: calculateReputationBreakdown({
+          reputationScore: agent.reputationScore,
+          tasksCompleted: agent.tasksCompleted,
+          tasksFailed: agent.tasksFailed,
+          bondAmountXLM: agent.bondAmountXLM,
+        }),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * @openapi
+   * /api/agents/{id}/task-result:
+   *   post:
+   *     summary: Report a task outcome and update agent reputation
+   *     description: >
+   *       Applies the Issue #497 reputation update rules: success raises the
+   *       score based on quality and latency with a bounded bond multiplier;
+   *       failure applies a fixed penalty. Response includes the full
+   *       reputation breakdown after the update.
+   *     tags: [Agents]
+   *     security: []
+   *     operationId: recordAgentTaskResult
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema: { type: string }
+   *         example: "agent_crypto_analyst_01"
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [outcome]
+   *             properties:
+   *               outcome:
+   *                 type: string
+   *                 enum: [success, failure]
+   *               qualityScore:
+   *                 type: number
+   *                 minimum: 0
+   *                 maximum: 100
+   *               latencyMs:
+   *                 type: number
+   *                 minimum: 0
+   *     responses:
+   *       200:
+   *         description: Reputation updated
+   *       404:
+   *         description: Agent not found
+   */
+  // POST /api/agents/:id/task-result
+  router.post("/:id/task-result", (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      const parse = TaskResultSchema.safeParse(req.body);
+      if (!parse.success) {
+        throw new ValidationError(
+          "Invalid task result data",
+          { issues: parse.error.flatten() },
+          res.locals.correlationId as string | undefined,
+        );
+      }
+
+      const db = getDb();
+      const agent = db.findById(req.params.id);
+      if (!agent) {
+        return next(agentNotFound(req.params.id));
+      }
+
+      const { outcome, qualityScore, latencyMs } = parse.data;
+      const delta = computeReputationDelta({
+        outcome,
+        qualityScore,
+        latencyMs,
+        bondAmountXLM: agent.bondAmountXLM ?? 0,
+        currentReputation: agent.reputationScore,
+      });
+      db.updateReputationWithStats(req.params.id, delta, outcome);
+
+      const updated = db.findById(req.params.id);
+      const reputationScore = updated?.reputationScore ?? agent.reputationScore;
+      res.json({
+        agentId: req.params.id,
+        reputationDelta: delta,
+        reputationScore,
+        reputation: calculateReputationBreakdown({
+          reputationScore,
+          tasksCompleted: updated?.tasksCompleted,
+          tasksFailed: updated?.tasksFailed,
+          bondAmountXLM: updated?.bondAmountXLM,
+        }),
+      });
     } catch (error) {
       next(error);
     }
@@ -191,12 +305,45 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
    *         description: Agent not found
    */
   // GET /api/agents/:id/health
+    /**
+     * @openapi
+     * /api/agents/{id}/reputation/history:
+     *   get:
+     *     summary: Get an agent's reputation history for the last 30 days
+     *     tags: [Agents]
+     *     security: []
+     *     operationId: getAgentReputationHistory
+     *     parameters:
+     *       - in: path
+     *         name: id
+     *         required: true
+     *         schema: { type: string }
+     *     responses:
+     *       200:
+     *         description: Reputation snapshots, oldest first
+     *       404:
+     *         description: Agent not found
+     */
+    router.get("/:id/reputation/history", (req: Request, res: Response, next: NextFunction): void => {
+      try {
+        const db = getDb();
+        if (!db.findById(req.params.id)) {
+          return next(agentNotFound(req.params.id));
+        }
+        const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const history = db.listReputationHistory?.(req.params.id, since) ?? [];
+        res.json(history.map(({ timestamp, ...record }) => ({ ...record, date: timestamp })));
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    // GET /api/agents/:id/health
   router.get("/:id/health", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const agent = getDb().findById(req.params.id);
       if (!agent) {
-        res.status(404).json({ error: "Agent not found" });
-        return;
+        return next(agentNotFound(req.params.id));
       }
 
       const startedAt = Date.now();
@@ -242,13 +389,17 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
    *     responses:
    *       201:
    *         description: Agent registered successfully
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/Agent'
    *       400:
    *         description: Validation error or Stellar account verification failure
    *       429:
    *         description: Registration rate limit exceeded
    */
   // POST /api/agents/register
-  router.post("/register", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  router.post("/register", requireWalletAuthMiddleware, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const correlationId = res.locals.correlationId as string | undefined;
       const parse = RegisterAgentSchema.safeParse(req.body);
@@ -261,6 +412,9 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
       }
 
       const data = parse.data;
+      if (data.stellarPublicKey !== req.user?.sub) {
+        return next(new UnauthorizedError("Wallet JWT must match stellarPublicKey", undefined, correlationId));
+      }
 
       // Verify Stellar account exists
       if (process.env.SKIP_STELLAR_ACCOUNT_VERIFY !== "true") {
@@ -285,6 +439,16 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
       }
 
       const db = getDb();
+
+      // Sybil resistance — cap agents per Stellar account (Issue #497)
+      if (db.countByStellarKey(data.stellarPublicKey) >= MAX_AGENTS_PER_STELLAR_ACCOUNT) {
+        res.status(400).json({
+          error: `Agent limit per Stellar account reached (max ${MAX_AGENTS_PER_STELLAR_ACCOUNT} agents per key)`,
+        });
+        return;
+      }
+
+      const existing = db.findById(data.agentId);
       const agent = {
         id: data.agentId,
         capabilities: data.capabilities,
@@ -293,7 +457,9 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
         stellarPublicKey: data.stellarPublicKey,
         reputationScore: 0,
         lastSeenAt: new Date().toISOString(),
-        status: "online" as const,
+        // A banned agent stays banned across re-registration (#33).
+        status: existing?.bannedAt ? ("offline" as const) : ("online" as const),
+        bannedAt: existing?.bannedAt ?? null,
       };
 
       db.upsert(agent);
@@ -346,16 +512,25 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
    *               $ref: '#/components/schemas/RateLimitError'
    */
   // POST /api/agents/:id/heartbeat
-  router.post("/:id/heartbeat", heartbeatRateLimitMiddleware, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  router.post("/:id/heartbeat", requireWalletAuthMiddleware, heartbeatRateLimitMiddleware, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const db = getDb();
       const agent = db.findById(req.params.id);
       if (!agent) {
-        res.status(404).json({ error: "Agent not found" });
+        return next(agentNotFound(req.params.id));
+      }
+      if (agent.bannedAt) {
+        res.status(403).json({
+          error: "AGENT_BANNED",
+          message: "This agent has been banned by an administrator.",
+        });
         return;
       }
+      if (agent.stellarPublicKey !== req.user?.sub) {
+        return next(new UnauthorizedError("Wallet JWT does not own this agent", undefined, res.locals.correlationId as string | undefined));
+      }
 
-      db.upsert({ ...agent, lastSeenAt: new Date().toISOString(), status: "online" });
+      db.updateLastSeen(req.params.id);
       const updated = db.findById(req.params.id);
 
       // Await invalidation so the updated lastSeenAt is visible on the next GET
@@ -425,14 +600,17 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
    *               $ref: '#/components/schemas/NotFoundError'
    */
   // DELETE /api/agents/:id
-  router.delete("/:id", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  router.delete("/:id", requireWalletAuthMiddleware, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const correlationId = res.locals.correlationId as string | undefined;
       const db = getDb();
       const agent = db.findById(req.params.id);
       if (!agent) {
-        res.status(404).json({ error: "Agent not found" });
-        return;
+        return next(agentNotFound(req.params.id));
+      }
+
+      if (agent.stellarPublicKey !== req.user?.sub) {
+        throw new UnauthorizedError("Wallet JWT does not own this agent", undefined, correlationId);
       }
 
       const signature = req.headers["x-signature"] as string | undefined;

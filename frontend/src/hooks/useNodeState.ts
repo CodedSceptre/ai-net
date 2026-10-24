@@ -1,8 +1,16 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import type { DAGNode, DAGEvent, NodeStatus } from "../types/api";
+
+export interface ExtendedDAGNode extends DAGNode {
+  startTime?: string;
+  endTime?: string;
+  duration?: string;
+  cost?: string;
+}
 
 export const useNodeState = (_taskId: string) => {
   const [nodes, setNodes] = useState<DAGNode[]>([]);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   const updateNodeFromEvent = useCallback((event: DAGEvent) => {
     if (!event.nodeId) return;
@@ -14,60 +22,62 @@ export const useNodeState = (_taskId: string) => {
             n.nodeId === event.nodeId
               ? {
                   ...n,
-                  status: "running",
-                  startedAt: event.timestamp,
-                  completedAt: undefined,
-                  durationMs: undefined,
+                  status: "running" as NodeStatus,
+                  startTime: event.timestamp,
                 }
               : n,
           );
 
-        case "node_completed":
+        case "node_completed": {
           const payload = event.payload as any;
-          return prev.map((n) =>
-            n.nodeId === event.nodeId
-              ? {
-                  ...n,
-                  status: "completed",
-                  result: payload,
-                  completedAt: event.timestamp,
-                  durationMs:
-                    typeof payload?.durationMs === "number"
-                      ? payload.durationMs
-                      : n.startedAt
-                        ? Math.max(
-                            0,
-                            Date.parse(event.timestamp) -
-                              Date.parse(n.startedAt),
-                          )
-                        : undefined,
-                }
-              : n,
-          );
+          return prev.map((n) => {
+            if (n.nodeId !== event.nodeId) return n;
 
-        case "node_failed":
-          const failurePayload = event.payload as any;
-          const errMessage = failurePayload?.error || "Node execution failed";
+            let duration = (n as ExtendedDAGNode).duration;
+            if (payload?.duration) {
+              duration =
+                typeof payload.duration === "number"
+                  ? `${(payload.duration / 1000).toFixed(2)}s`
+                  : String(payload.duration);
+            } else if (payload?.executionTimeMs) {
+              duration = `${(payload.executionTimeMs / 1000).toFixed(2)}s`;
+            } else if ((n as ExtendedDAGNode).startTime) {
+              const start = new Date(
+                (n as ExtendedDAGNode).startTime!,
+              ).getTime();
+              const end = new Date(event.timestamp).getTime();
+              if (end >= start) {
+                duration = `${((end - start) / 1000).toFixed(2)}s`;
+              }
+            }
+
+            const cost = payload?.cost || (n as ExtendedDAGNode).cost;
+
+            return {
+              ...n,
+              status: "completed" as NodeStatus,
+              result: payload,
+              endTime: event.timestamp,
+              duration,
+              cost,
+            };
+          });
+        }
+
+        case "node_failed": {
+          const payload = event.payload as any;
+          const errMessage = payload?.error || "Node execution failed";
           return prev.map((n) =>
             n.nodeId === event.nodeId
               ? {
                   ...n,
-                  status: "failed",
+                  status: "failed" as NodeStatus,
                   error: errMessage,
-                  completedAt: event.timestamp,
-                  durationMs:
-                    typeof failurePayload?.durationMs === "number"
-                      ? failurePayload.durationMs
-                      : n.startedAt
-                        ? Math.max(
-                            0,
-                            Date.parse(event.timestamp) -
-                              Date.parse(n.startedAt),
-                          )
-                        : undefined,
+                  endTime: event.timestamp,
                 }
               : n,
           );
+        }
 
         default:
           return prev;
@@ -106,8 +116,16 @@ export const useNodeState = (_taskId: string) => {
     [nodes],
   );
 
+  const selectedNode = useMemo(() => {
+    if (!selectedNodeId) return undefined;
+    return nodes.find((n) => n.nodeId === selectedNodeId);
+  }, [nodes, selectedNodeId]);
+
   return {
     nodes,
+    selectedNodeId,
+    setSelectedNodeId,
+    selectedNode,
     updateNodeFromEvent,
     getNodeStatus,
     getCompletedNodes,
