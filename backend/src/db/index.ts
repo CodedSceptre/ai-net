@@ -3,6 +3,7 @@ import path from "path";
 import { createLogger } from "../utils/logger";
 import { migrateToLatest } from "./migrator";
 import { createPool, type SqlitePool } from "./pool";
+import { poolSettings } from "./poolConfig";
 
 const MIGRATIONS_DIR = path.join(__dirname, "migrations", "payments");
 
@@ -15,6 +16,8 @@ export interface PaymentRecord {
   status: PaymentStatus;
   amountStroops: bigint;
   txHash: string | null;
+  /** ISO-8601 timestamp at which the payment was first recorded. */
+  createdAt?: string;
 }
 
 const logger = createLogger({ component: "payment-db" });
@@ -43,6 +46,7 @@ function applyPaymentSchema(db: Database.Database): void {
       status       TEXT NOT NULL DEFAULT 'locked',
       amountStroops TEXT NOT NULL,
       txHash       TEXT,
+      "createdAt"  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       PRIMARY KEY (taskId, nodeId)
     )
   `);
@@ -54,9 +58,7 @@ export function getPaymentPool(dbPath?: string): SqlitePool {
     const filePath = dbPath ?? path.join(process.cwd(), "payments.db");
     _pool = createPool({
       filePath,
-      min: 1,
-      max: 4,
-      acquireTimeoutMs: 5_000,
+      ...poolSettings(),
       onCreate: (db) => {
         applyPaymentSchema(db);
         migrateToLatest(db, MIGRATIONS_DIR);
@@ -108,13 +110,15 @@ export interface PaymentDb {
 export function createPaymentDb(db: Database.Database): PaymentDb {
   return {
     insert(record: PaymentRecord): void {
+      const createdAt = record.createdAt ?? new Date().toISOString();
       db.prepare(`
-        INSERT INTO payments (taskId, nodeId, balanceId, status, amountStroops, txHash)
-        VALUES (@taskId, @nodeId, @balanceId, @status, @amountStroops, @txHash)
+        INSERT INTO payments (taskId, nodeId, balanceId, status, amountStroops, txHash, "createdAt")
+        VALUES (@taskId, @nodeId, @balanceId, @status, @amountStroops, @txHash, @createdAt)
       `).run({
         ...record,
         amountStroops: record.amountStroops.toString(),
         txHash: record.txHash,
+        createdAt,
       });
     },
 
@@ -130,6 +134,7 @@ export function createPaymentDb(db: Database.Database): PaymentDb {
         status: row.status as PaymentStatus,
         amountStroops: BigInt(row.amountStroops as string),
         txHash: row.txHash as string | null,
+        createdAt: row.createdAt as string | undefined,
       };
     },
 
@@ -148,6 +153,7 @@ export function createPaymentDb(db: Database.Database): PaymentDb {
         status: row.status as PaymentStatus,
         amountStroops: BigInt(row.amountStroops as string),
         txHash: row.txHash as string | null,
+        createdAt: row.createdAt as string | undefined,
       }));
     },
   };

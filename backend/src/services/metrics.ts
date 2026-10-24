@@ -17,12 +17,15 @@
  * without touching a database, a socket, or the clock.
  */
 
+import fs from "fs";
 import os from "os";
+import path from "path";
 import { PerformanceObserver } from "perf_hooks";
 
 import { getConfig } from "../config";
 import { createLogger } from "../utils/logger";
 import { getCacheMetrics } from "../cache/metrics";
+import { databasePoolMetrics } from "../db/metrics";
 import type {
   AgentMetrics,
   CpuMetrics,
@@ -547,6 +550,20 @@ export class MetricsService {
 
   private webSocketProbe: (() => WebSocketProbeResult) | null = null;
 
+  private getLastBackupAgeHours(): number {
+    const markerPath = process.env.BACKUP_TIMESTAMP_FILE ?? path.join(
+      process.env.DB_DIR ?? process.cwd(),
+      ".last-backup-timestamp",
+    );
+    try {
+      const timestampSeconds = Number(fs.readFileSync(markerPath, "utf8").trim());
+      if (!Number.isFinite(timestampSeconds) || timestampSeconds <= 0) return -1;
+      return Math.max(0, (this.clock() / 1000 - timestampSeconds) / 3600);
+    } catch {
+      return -1;
+    }
+  }
+
   constructor(options: MetricsCollectorOptions = {}) {
     const config = readMetricsConfig();
     this.cacheTtlMs = options.cacheTtlMs ?? config.cacheTtlMs;
@@ -703,6 +720,8 @@ export class MetricsService {
   private veniceCallsByAgentType = new Map<string, number>();
   /** stellar_transactions_total by type — key: type, value: count. */
   private stellarTransactionsByType = new Map<string, number>();
+  private taskResultCompressionRatioTotal = 0;
+  private taskResultCompressionCount = 0;
   /** active_websocket_connections gauge — live count set externally. */
   private activeWsConnections = 0;
   /** agent_health_status by agent_id — key: agentId, value: 1|0. */
@@ -778,6 +797,12 @@ export class MetricsService {
     this.stellarTransactionsByType.set(key, (this.stellarTransactionsByType.get(key) ?? 0) + 1);
   }
 
+  recordTaskResultCompressionRatio(ratio: number): void {
+    if (!Number.isFinite(ratio) || ratio < 0) return;
+    this.taskResultCompressionRatioTotal += ratio;
+    this.taskResultCompressionCount += 1;
+  }
+
   /** Set active WebSocket connections gauge (called by stream layer). */
   setActiveWsConnections(count: number): void {
     this.activeWsConnections = Math.max(0, count);
@@ -828,6 +853,7 @@ export class MetricsService {
     }
 
     const lines: string[] = [];
+    const poolMetrics = databasePoolMetrics();
 
     // ── 0. ainet_up gauge ─────────────────────────────────────────────────────
     lines.push("# HELP ainet_up Whether the ai-net backend is running");
@@ -912,6 +938,14 @@ export class MetricsService {
       }
     }
 
+    lines.push("");
+    lines.push("# HELP task_result_compression_ratio Average compressed-to-original result size ratio");
+    lines.push("# TYPE task_result_compression_ratio gauge");
+    const compressionRatio = this.taskResultCompressionCount === 0
+      ? 0
+      : this.taskResultCompressionRatioTotal / this.taskResultCompressionCount;
+    lines.push(`task_result_compression_ratio ${compressionRatio}`);
+
     // ── 8. active_websocket_connections gauge ─────────────────────────────────
     // Prefer the live probe result from the stream layer; fall back to our counter.
     const wsProbeResult = this.webSocketProbe?.();
@@ -920,6 +954,11 @@ export class MetricsService {
     lines.push("# HELP active_websocket_connections Number of active WebSocket connections");
     lines.push("# TYPE active_websocket_connections gauge");
     lines.push(`active_websocket_connections ${wsCount}`);
+
+    lines.push("");
+    lines.push("# HELP last_backup_age_hours Age of the last successful database backup in hours; -1 means no timestamp is available");
+    lines.push("# TYPE last_backup_age_hours gauge");
+    lines.push(`last_backup_age_hours ${this.getLastBackupAgeHours()}`);
 
     // ── 9. agent_health_status{agent_id} gauge ────────────────────────────────
     lines.push("");
@@ -932,6 +971,31 @@ export class MetricsService {
       for (const [agentId, status] of this.agentHealthStatuses.entries()) {
         lines.push(`agent_health_status{agent_id="${agentId}"} ${status}`);
       }
+    }
+
+    // ── SQLite connection pool health ───────────────────────────────────────
+    lines.push("");
+    lines.push("# HELP db_pool_active_connections Active SQLite reader connections");
+    lines.push("# TYPE db_pool_active_connections gauge");
+    lines.push("# HELP db_pool_idle_connections Idle SQLite reader connections");
+    lines.push("# TYPE db_pool_idle_connections gauge");
+    lines.push("# HELP db_pool_waiting_queue_size Callers waiting for an SQLite reader");
+    lines.push("# TYPE db_pool_waiting_queue_size gauge");
+    lines.push("# HELP db_pool_acquire_wait_seconds SQLite reader acquisition wait time");
+    lines.push("# TYPE db_pool_acquire_wait_seconds histogram");
+    for (const [database, pool] of Object.entries(poolMetrics)) {
+      const labels = `{database="${database}"}`;
+      lines.push(`db_pool_active_connections${labels} ${pool.activeConnections}`);
+      lines.push(`db_pool_idle_connections${labels} ${pool.idleConnections}`);
+      lines.push(`db_pool_waiting_queue_size${labels} ${pool.pendingAcquires}`);
+      let cumulative = 0;
+      for (const [bound, count] of Object.entries(pool.acquireWaitBuckets)) {
+        cumulative = count;
+        lines.push(`db_pool_acquire_wait_seconds_bucket{database="${database}",le="${bound}"} ${cumulative}`);
+      }
+      lines.push(`db_pool_acquire_wait_seconds_bucket{database="${database}",le="+Inf"} ${pool.acquireWaitCount}`);
+      lines.push(`db_pool_acquire_wait_seconds_sum${labels} ${pool.acquireWaitSumSeconds}`);
+      lines.push(`db_pool_acquire_wait_seconds_count${labels} ${pool.acquireWaitCount}`);
     }
 
     // ── Legacy metric families (keep for backward compat with existing dashboard) ──
@@ -976,7 +1040,7 @@ export class MetricsService {
       status: "ok",
       uptimeSeconds: Math.max(0, Math.floor((this.clock() - this.startedAtMs) / 1000)),
       lastScrapeTimestamp: this.lastScrapeTimestamp,
-      metricFamiliesCount: 17, // 9 new + 8 legacy families
+      metricFamiliesCount: 18, // 10 new + 8 legacy families
       registeredOnce: this.registeredOnce,
     };
   }
@@ -995,6 +1059,8 @@ export class MetricsService {
     this.tasksFailedByReason.clear();
     this.veniceCallsByAgentType.clear();
     this.stellarTransactionsByType.clear();
+    this.taskResultCompressionRatioTotal = 0;
+    this.taskResultCompressionCount = 0;
     this.activeWsConnections = 0;
     this.agentHealthStatuses.clear();
     this.resetCache();

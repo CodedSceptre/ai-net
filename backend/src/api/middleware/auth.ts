@@ -60,6 +60,25 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
 
 export const sessionAuthMiddleware = authMiddleware;
 
+export function requireWalletAuthMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const authorization = req.headers["authorization"] ?? "";
+  const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+  if (!token) {
+    res.status(401).json({ error: "Unauthorized", message: "Bearer JWT required" });
+    return;
+  }
+  try {
+    req.user = getAuthService().verifyAccessToken(token);
+    next();
+  } catch {
+    res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
+  }
+}
+
 /**
  * Optional session auth middleware: extracts user token if present without rejecting unauthenticated requests.
  */
@@ -130,6 +149,33 @@ function readPresentedKey(req: Request): string {
  */
 export function adminAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
   const expected = resolveAdminApiKey();
+  const auth = req.headers["authorization"] ?? "";
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+
+  if (bearer.split(".").length === 3) {
+    try {
+      const payload = getAuthService().verifyAccessToken(bearer);
+      req.user = payload;
+      const scopes = Array.isArray(payload.scope)
+        ? payload.scope
+        : (payload.scope ?? "").split(/\s+/).filter(Boolean);
+      if (scopes.includes("admin")) {
+        next();
+        return;
+      }
+      res.status(403).json({ error: "Forbidden", message: "Admin scope required" });
+      return;
+    } catch {
+      if (!expected) {
+        res.status(503).json({
+          error: "Admin API not configured",
+          message: "Set ADMIN_API_KEY to enable admin endpoints.",
+        });
+        return;
+      }
+    }
+  }
+
   if (!expected) {
     res.status(403).json({
       error: "Forbidden",
@@ -138,7 +184,9 @@ export function adminAuthMiddleware(req: Request, res: Response, next: NextFunct
     return;
   }
 
-  const presented = readPresentedKey(req);
+  const presented = req.headers["x-admin-api-key"]
+    ? readPresentedKey(req)
+    : bearer;
   if (!presented || !timingSafeEquals(presented, expected)) {
     res.status(403).json({ error: "Forbidden" });
     return;

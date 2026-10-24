@@ -153,6 +153,11 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: JSON Web Token for authenticated user sessions
+    AdminApiKey:
+      type: apiKey
+      in: header
+      name: X-Admin-API-Key
+      description: Administrative API key for protected operations
   headers:
     X-RateLimit-Limit:
       description: The maximum number of requests allowed in the current period.
@@ -316,8 +321,9 @@ components:
           example:
             summary: Liquidity increased by 14% week-over-week.
         error:
-          type: string
-          nullable: true
+          type:
+            - string
+            - "null"
           example: null
           description: Error message if the node execution failed.
     CreateTaskResponse:
@@ -500,12 +506,16 @@ components:
       type: object
       required:
         - status
-        - lastSeenAt
+        - agentId
+        - timestamp
       properties:
         status:
           type: string
           example: ok
-        lastSeenAt:
+        agentId:
+          type: string
+          example: agent_crypto_analyst_01
+        timestamp:
           type: string
           format: date-time
           example: 2026-08-25T17:30:00.000Z
@@ -683,19 +693,23 @@ components:
           type: integer
           example: 3
         nextRunAt:
-          type: string
+          type:
+            - string
+            - "null"
           format: date-time
-          nullable: true
         lockedAt:
-          type: string
+          type:
+            - string
+            - "null"
           format: date-time
-          nullable: true
         lockedBy:
-          type: string
-          nullable: true
+          type:
+            - string
+            - "null"
         error:
-          type: string
-          nullable: true
+          type:
+            - string
+            - "null"
         createdAt:
           type: string
           format: date-time
@@ -830,6 +844,172 @@ components:
         details:
           type: object
           description: Optional structured validation errors or error context
+    Error:
+      type: object
+      properties:
+        error:
+          oneOf:
+            - type: string
+            - type: object
+              properties:
+                message:
+                  type: string
+                code:
+                  type: string
+              additionalProperties: true
+        message:
+          type: string
+        code:
+          type: string
+      additionalProperties: true
+    PaymentRecord:
+      type: object
+      required:
+        - taskId
+        - nodeId
+        - balanceId
+        - status
+        - amountStroops
+        - txHash
+      properties:
+        taskId:
+          type: string
+        nodeId:
+          type: string
+        balanceId:
+          type: string
+        status:
+          type: string
+          enum:
+            - locked
+            - released
+            - refunded
+        amountStroops:
+          type: string
+          pattern: ^[0-9]+$
+        txHash:
+          type:
+            - string
+            - "null"
+    ReconciliationReport:
+      type: object
+      required:
+        - id
+        - runAt
+        - triggeredBy
+        - status
+        - summary
+        - discrepancies
+      properties:
+        id:
+          type: string
+        runAt:
+          type: string
+          format: date-time
+        triggeredBy:
+          type: string
+          enum:
+            - manual
+            - scheduled
+            - release
+        status:
+          type: string
+          enum:
+            - consistent
+            - discrepancies_found
+        summary:
+          type: object
+          required:
+            - totalLocalRecords
+            - totalOnChainBalances
+            - matched
+            - discrepancies
+            - missingOnChain
+            - missingLocal
+            - amountMismatch
+          properties:
+            totalLocalRecords:
+              type: integer
+            totalOnChainBalances:
+              type: integer
+            matched:
+              type: integer
+            discrepancies:
+              type: integer
+            missingOnChain:
+              type: integer
+            missingLocal:
+              type: integer
+            amountMismatch:
+              type: integer
+        discrepancies:
+          type: array
+          items:
+            type: object
+            required:
+              - type
+              - balanceId
+              - severity
+              - description
+            properties:
+              type:
+                type: string
+                enum:
+                  - missing_on_chain
+                  - missing_local
+                  - amount_mismatch
+              balanceId:
+                type: string
+              taskId:
+                type: string
+              nodeId:
+                type: string
+              severity:
+                type: string
+                enum:
+                  - info
+                  - warning
+                  - critical
+              description:
+                type: string
+              localAmountStroops:
+                type: string
+              onChainAmountStroops:
+                type: string
+              expectedAmountStroops:
+                type: string
+    ContractEvent:
+      type: object
+      required:
+        - contractId
+        - eventType
+        - version
+        - payload
+        - ledgerSeq
+        - txHash
+        - occurredAt
+        - indexedAt
+      properties:
+        id:
+          type: integer
+        contractId:
+          type: string
+        eventType:
+          type: string
+        version:
+          type: integer
+        payload:
+          type: string
+        ledgerSeq:
+          type: integer
+        txHash:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+        indexedAt:
+          type: string
+          format: date-time
     ValidationError:
       type: object
       required:
@@ -933,8 +1113,9 @@ components:
               type: string
               example: device_macbook_pro
             deviceName:
-              type: string
-              nullable: true
+              type:
+                - string
+                - "null"
               example: Chrome on macOS
             expiresAt:
               type: string
@@ -1401,6 +1582,25 @@ paths:
         network's Stellar claimable-balance payment flow.
       responses:
         "200":
+          description: Rate limit status
+        "400":
+          description: Missing key parameter
+        "404":
+          description: Key not found in rate limiter cache
+  /api/payments:
+    get:
+      summary: List all payment records
+      operationId: listPayments
+      tags:
+        - Payments
+      security: []
+      description: >
+        Returns the full local payment history — every locked, released, and
+        refunded record. Records are ordered by taskId + nodeId (composite
+        primary key). This is the reconciliation source of truth for the
+        network's Stellar claimable-balance payment flow.
+      responses:
+        "200":
           description: Payment record list
           content:
             application/json:
@@ -1690,10 +1890,6 @@ paths:
                 $ref: "#/components/schemas/TokenRefreshResponse"
         "401":
           description: Invalid, expired, or reused refresh token
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/UnauthorizedError"
   /api/auth/revoke:
     post:
       summary: Revoke session
@@ -1952,10 +2148,6 @@ paths:
       responses:
         "201":
           description: Agent registered successfully
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Agent"
         "400":
           description: Validation error or Stellar account verification failure
         "429":
@@ -2185,7 +2377,7 @@ paths:
       tags:
         - Admin
       security:
-        - adminApiKey: []
+        - AdminApiKey: []
       parameters:
         - in: path
           name: id

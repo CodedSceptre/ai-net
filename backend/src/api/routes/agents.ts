@@ -7,7 +7,7 @@ import { NotFoundError, ValidationError, UnauthorizedError, AppError } from "../
 import { cacheMiddleware } from "../middleware/cache";
 import { invalidateAgentsCache } from "../../cache/invalidation";
 import { ttlForRoute } from "../../config";
-import { authMiddleware } from "../middleware/auth";
+import { requireWalletAuthMiddleware } from "../middleware/auth";
 import {
   calculateReputationBreakdown,
   computeReputationDelta,
@@ -365,7 +365,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
    *         description: Registration rate limit exceeded
    */
   // POST /api/agents/register
-  router.post("/register", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  router.post("/register", requireWalletAuthMiddleware, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const correlationId = res.locals.correlationId as string | undefined;
       const parse = RegisterAgentSchema.safeParse(req.body);
@@ -378,6 +378,9 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
       }
 
       const data = parse.data;
+      if (data.stellarPublicKey !== req.user?.sub) {
+        return next(new UnauthorizedError("Wallet JWT must match stellarPublicKey", undefined, correlationId));
+      }
 
       // Verify Stellar account exists
       if (process.env.SKIP_STELLAR_ACCOUNT_VERIFY !== "true") {
@@ -475,7 +478,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
    *               $ref: '#/components/schemas/RateLimitError'
    */
   // POST /api/agents/:id/heartbeat
-  router.post("/:id/heartbeat", authMiddleware, heartbeatRateLimitMiddleware, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  router.post("/:id/heartbeat", requireWalletAuthMiddleware, heartbeatRateLimitMiddleware, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const db = getDb();
       const agent = db.findById(req.params.id);
@@ -488,6 +491,9 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
           message: "This agent has been banned by an administrator.",
         });
         return;
+      }
+      if (agent.stellarPublicKey !== req.user?.sub) {
+        return next(new UnauthorizedError("Wallet JWT does not own this agent", undefined, res.locals.correlationId as string | undefined));
       }
 
       db.updateLastSeen(req.params.id);
@@ -560,13 +566,17 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
    *               $ref: '#/components/schemas/NotFoundError'
    */
   // DELETE /api/agents/:id
-  router.delete("/:id", authMiddleware, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  router.delete("/:id", requireWalletAuthMiddleware, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const correlationId = res.locals.correlationId as string | undefined;
       const db = getDb();
       const agent = db.findById(req.params.id);
       if (!agent) {
         return next(agentNotFound(req.params.id));
+      }
+
+      if (agent.stellarPublicKey !== req.user?.sub) {
+        throw new UnauthorizedError("Wallet JWT does not own this agent", undefined, correlationId);
       }
 
       const signature = req.headers["x-signature"] as string | undefined;
