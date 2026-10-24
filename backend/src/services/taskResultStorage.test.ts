@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import Database from "better-sqlite3";
 import { mkdtemp, readFile, rm } from "fs/promises";
 import os from "os";
@@ -65,7 +66,7 @@ describe("TaskResultStorageService", () => {
   it("stores large results as files and returns a signed download URL", async () => {
     const { database, db } = createDb();
     const storage = new TaskResultStorageService(db, { directory, signingSecret: "test-secret" });
-    const result = { content: "x".repeat(1024 * 1024) };
+    const result = { content: crypto.randomBytes(1024 * 1024 + 1024).toString("base64") };
 
     await storage.persist("task-result-test", result);
 

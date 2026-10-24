@@ -1,4 +1,4 @@
-openapi: 3.1.0
+openapi: 3.0.3
 info:
   title: ai-net Backend API
   version: 0.1.0
@@ -321,9 +321,8 @@ components:
           example:
             summary: Liquidity increased by 14% week-over-week.
         error:
-          type:
-            - string
-            - "null"
+          type: string
+          nullable: true
           example: null
           description: Error message if the node execution failed.
     CreateTaskResponse:
@@ -463,6 +462,81 @@ components:
             $ref: "#/components/schemas/TaskListItem"
         pagination:
           $ref: "#/components/schemas/TaskListPagination"
+    ReceiptPaymentItem:
+      type: object
+      required:
+        - nodeId
+        - agentName
+        - amountXLM
+        - amountStroops
+        - status
+      properties:
+        nodeId:
+          type: string
+          example: node_research_1
+        agentName:
+          type: string
+          example: research-agent
+        amountXLM:
+          type: number
+          format: float
+          example: 0.5
+        amountStroops:
+          type: string
+          example: "5000000"
+        status:
+          type: string
+          enum: [locked, released, refunded]
+          example: released
+        txHash:
+          type: string
+          nullable: true
+          example: 3389e9f0f73b854c73070bdaecd86ba21b8f803b0f4779d1ab0b893f4ec1c788
+        horizonLink:
+          type: string
+          nullable: true
+          example: https://horizon-testnet.stellar.org/transactions/3389e9f0f73b854c73070bdaecd86ba21b8f803b0f4779d1ab0b893f4ec1c788
+    TaskReceipt:
+      type: object
+      required:
+        - taskId
+        - requesterAddress
+        - completionTimestamp
+        - taskStatus
+        - payments
+        - totalAmountPaid
+      properties:
+        taskId:
+          type: string
+          example: task_ab12cd34ef56
+        requesterAddress:
+          type: string
+          example: GBZXN7PIRZGNMHGA728XZVOG2GUFIDLAZ6AF2I2MD2OCYTAF2K1K4AAA
+        completionTimestamp:
+          type: string
+          format: date-time
+          example: 2026-08-25T17:05:00.000Z
+        taskStatus:
+          type: string
+          example: completed
+        prompt:
+          type: string
+          example: Research Stellar smart contract security best practices
+        payments:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReceiptPaymentItem"
+        totalAmountPaid:
+          type: number
+          format: float
+          example: 1.5
+        totalAmountPaidStroops:
+          type: string
+          example: "15000000"
+        generatedAt:
+          type: string
+          format: date-time
+          example: 2026-08-25T17:05:02.000Z
     Agent:
       type: object
       required:
@@ -697,23 +771,19 @@ components:
           type: integer
           example: 3
         nextRunAt:
-          type:
-            - string
-            - "null"
+          type: string
           format: date-time
+          nullable: true
         lockedAt:
-          type:
-            - string
-            - "null"
+          type: string
           format: date-time
+          nullable: true
         lockedBy:
-          type:
-            - string
-            - "null"
+          type: string
+          nullable: true
         error:
-          type:
-            - string
-            - "null"
+          type: string
+          nullable: true
         createdAt:
           type: string
           format: date-time
@@ -892,9 +962,8 @@ components:
           type: string
           pattern: ^[0-9]+$
         txHash:
-          type:
-            - string
-            - "null"
+          type: string
+          nullable: true
     ReconciliationReport:
       type: object
       required:
@@ -1117,9 +1186,8 @@ components:
               type: string
               example: device_macbook_pro
             deviceName:
-              type:
-                - string
-                - "null"
+              type: string
+              nullable: true
               example: Chrome on macOS
             expiresAt:
               type: string
@@ -1440,6 +1508,52 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: Cannot cancel task in 'running' status
+  "/api/tasks/{id}/receipt":
+    get:
+      summary: Get payment receipt for a completed task
+      description: Generates and returns a formal payment receipt for a completed task, available as JSON or PDF.
+      tags:
+        - Tasks
+      security:
+        - WalletAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Task ID
+          example: task_ab12cd34ef56
+        - in: header
+          name: Accept
+          required: false
+          schema:
+            type: string
+            enum: [application/json, application/pdf]
+          description: Desired receipt format. Defaults to application/json.
+      responses:
+        "200":
+          description: Task payment receipt returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskReceipt"
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "403":
+          description: Access denied — requester address does not match task owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForbiddenError"
+        "404":
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotFoundError"
   "/tasks/{id}/stream":
     get:
       summary: WebSocket Live Task Execution Stream (ws://)
@@ -1572,25 +1686,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  /api/payments:
-    get:
-      summary: List all payment records
-      operationId: listPayments
-      tags:
-        - Payments
-      security: []
-      description: >
-        Returns the full local payment history — every locked, released, and
-        refunded record. Records are ordered by taskId + nodeId (composite
-        primary key). This is the reconciliation source of truth for the
-        network's Stellar claimable-balance payment flow.
-      responses:
-        "200":
-          description: Rate limit status
-        "400":
-          description: Missing key parameter
-        "404":
-          description: Key not found in rate limiter cache
   /api/payments:
     get:
       summary: List all payment records

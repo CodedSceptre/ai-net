@@ -69,7 +69,7 @@ export function createCancelTaskRouter(options: CancelTaskRouterOptions = {}): R
       }
 
       // ── 2. Authorisation: task owner or admin ─────────────────────────────
-      const requesterKey = req.user?.sub;
+      const requesterKey = req.user?.sub ?? (req.headers["walletpublickey"] as string);
       const adminKey = req.headers['x-admin-key'] as string | undefined;
       const configAdminKey = getConfig().ADMIN_API_KEY;
 

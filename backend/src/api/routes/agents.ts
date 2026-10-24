@@ -7,10 +7,12 @@ import { NotFoundError, ValidationError, UnauthorizedError, AppError } from "../
 import { cacheMiddleware } from "../middleware/cache";
 import { invalidateAgentsCache } from "../../cache/invalidation";
 import { ttlForRoute } from "../../config";
-,import { requireWalletAuthMiddleware } from "../middleware/auth";
+import { requireWalletAuthMiddleware } from "../middleware/auth";
+import { getTaskDb, createTaskDb } from "../../db/tasks";
 import {
   calculateReputationBreakdown,
   computeReputationDelta,
+  getAgentQualityMetrics,
 } from "../../services/qualityScorer";
 
 const AgentCursorListSchema = z.object({

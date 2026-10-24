@@ -128,7 +128,7 @@ async function reassignOpenTasksForAgent(
 ): Promise<void> {
   try {
     // Import lazily to avoid circular dependency with coordinator
-    const { getTaskDb, createTaskDb } = await import('../db/tasks');
+    const { getTaskDb, createTaskDb } = await import('../db/tasks.js');
     const taskDb = createTaskDb(getTaskDb());
 
     // listByAgent is optional on the AgentDb interface; guard against absence
@@ -144,7 +144,7 @@ async function reassignOpenTasksForAgent(
     let reassigned = 0;
     for (const task of openTasks as Array<{ id: string }>) {
       try {
-        taskDb.updateStatus(task.id, 'pending');
+        taskDb.updateStatus(task.id, 'queued');
         reassigned++;
       } catch (taskErr) {
         log.warn({ agentId, taskId: task.id, err: taskErr }, 'failed to reassign task; skipping');

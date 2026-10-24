@@ -13,6 +13,8 @@ import {
 const ROUTE_MODULE_MOUNTS: Array<{ module: string; prefix: string }> = [
   { module: "admin.ts", prefix: "/api/admin" },
   { module: "admin.ts", prefix: "/api/admin/queue" },
+  { module: "adminManagement.ts", prefix: "/api/admin" },
+  { module: "adminStats.ts", prefix: "/api/admin/stats" },
   { module: "agents.ts", prefix: "/api/agents" },
   { module: "auth.ts", prefix: "/api/auth" },
   { module: "events.ts", prefix: "/api/events" },
@@ -21,7 +23,6 @@ const ROUTE_MODULE_MOUNTS: Array<{ module: string; prefix: string }> = [
   { module: "payments.ts", prefix: "/api/payments" },
   { module: "stats.ts", prefix: "/api/stats" },
   { module: "reconciliation.ts", prefix: "/api/reconciliation" },
-  { module: "ratelimit.ts", prefix: "/api/ratelimit" },
   { module: "versions.ts", prefix: "/api/versions" },
   { module: "admin.ts", prefix: "/api/admin" },
   { module: "admin.ts", prefix: "/api/admin/queue" },

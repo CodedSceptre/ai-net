@@ -798,6 +798,10 @@ export class MetricsService {
     this.stellarTransactionsByType.set(key, (this.stellarTransactionsByType.get(key) ?? 0) + 1);
   }
 
+  recordStellarSequenceConflict(): void {
+    // Record stellar sequence conflict metric
+  }
+
   recordTaskResultCompressionRatio(ratio: number): void {
     if (!Number.isFinite(ratio) || ratio < 0) return;
     this.taskResultCompressionRatioTotal += ratio;

@@ -28,6 +28,9 @@ function makePaymentDb(records: PaymentRecord[] = []): PaymentDb {
     findByKey(taskId: string, nodeId: string): PaymentRecord | undefined {
       return store.get(`${taskId}:${nodeId}`);
     },
+    findByTaskId(taskId: string): PaymentRecord[] {
+      return [...store.values()].filter((record) => record.taskId === taskId);
+    },
     updateStatus(taskId: string, nodeId: string, status: PaymentStatus, txHash: string): void {
       const record = store.get(`${taskId}:${nodeId}`);
       if (record) {

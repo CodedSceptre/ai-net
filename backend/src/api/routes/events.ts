@@ -196,7 +196,7 @@ export function createEventsRouter(eventStore?: EventStore): Router {
     const validEvents: StoredEvent[] = [];
 
     for (const event of events) {
-      const validation = validateEvent(event);
+      const validation = validateEvent(event as any);
       if (!validation.valid) {
         warnings.push({
           taskSeq: event.taskSeq,
