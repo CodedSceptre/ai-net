@@ -1,64 +1,79 @@
-variable "primary_region" {
-  description = "AWS region for the active deployment."
+variable "aws_region" {
+  description = "AWS region for all resources"
   type        = string
   default     = "us-east-1"
 }
 
-variable "standby_region" {
-  description = "AWS region for the standby deployment."
+variable "environment" {
+  description = "Deployment environment (staging | production)"
   type        = string
-  default     = "us-west-2"
+  validation {
+    condition     = contains(["staging", "production"], var.environment)
+    error_message = "environment must be 'staging' or 'production'."
+  }
+}
+
+variable "vpc_cidr" {
+  description = "CIDR block for the VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "backend_image" {
+  description = "Docker image URI for the backend service (ECR or Docker Hub)"
+  type        = string
+}
+
+variable "backend_cpu" {
+  description = "CPU units for the backend ECS task (1024 = 1 vCPU)"
+  type        = number
+  default     = 512
+}
+
+variable "backend_memory" {
+  description = "Memory (MiB) for the backend ECS task"
+  type        = number
+  default     = 1024
+}
+
+variable "desired_count" {
+  description = "Desired number of ECS backend tasks"
+  type        = number
+  default     = 1
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class"
+  type        = string
+  default     = "db.t3.micro"
+}
+
+variable "db_name" {
+  description = "Name of the PostgreSQL database"
+  type        = string
+  default     = "ainet"
+}
+
+variable "db_username" {
+  description = "Master username for the RDS instance"
+  type        = string
+  default     = "ainet_admin"
+}
+
+variable "domain_name" {
+  description = "Primary domain name (e.g. ai-net.example.com)"
+  type        = string
+  default     = ""
 }
 
 variable "hosted_zone_id" {
-  description = "Existing public Route53 hosted zone ID."
+  description = "Route53 hosted zone ID for domain_name"
   type        = string
+  default     = ""
 }
 
-variable "record_name" {
-  description = "DNS name to fail over, such as api.example.com."
+variable "acm_certificate_arn" {
+  description = "ACM certificate ARN (us-east-1) for CloudFront HTTPS"
   type        = string
-}
-
-variable "primary_endpoint_dns" {
-  description = "Public DNS name of the primary region load balancer."
-  type        = string
-}
-
-variable "standby_endpoint_dns" {
-  description = "Public DNS name of the standby region load balancer."
-  type        = string
-}
-
-variable "health_check_path" {
-  description = "HTTPS path used by Route53 health checks."
-  type        = string
-  default     = "/health"
-}
-
-variable "health_check_port" {
-  description = "HTTPS port used by Route53 health checks."
-  type        = number
-  default     = 443
-}
-
-variable "primary_backup_bucket_name" {
-  description = "Globally unique bucket name for SQLite backups in the primary region."
-  type        = string
-}
-
-variable "standby_backup_bucket_name" {
-  description = "Globally unique bucket name for replicated SQLite backups in the standby region."
-  type        = string
-}
-
-variable "backup_prefix" {
-  description = "S3 prefix containing completed SQLite backups to replicate."
-  type        = string
-  default     = "backups/"
-
-  validation {
-    condition     = length(var.backup_prefix) > 0 && endswith(var.backup_prefix, "/")
-    error_message = "backup_prefix must be a non-empty S3 prefix ending in '/'."
-  }
+  default     = ""
 }

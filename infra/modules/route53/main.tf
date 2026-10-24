@@ -1,57 +1,40 @@
-resource "aws_route53_health_check" "primary" {
-  fqdn              = var.primary_endpoint_dns
-  port              = var.health_check_port
-  type              = "HTTPS"
-  resource_path     = var.health_check_path
-  request_interval  = 30
-  failure_threshold = 1
-  enable_sni        = true
+# Route53 records are created only when hosted_zone_id is supplied.
 
-  tags = {
-    Name = "${var.record_name}-primary-health"
+resource "aws_route53_record" "api" {
+  count   = var.hosted_zone_id != "" ? 1 : 0
+  zone_id = var.hosted_zone_id
+  name    = "api.${var.domain_name}"
+  type    = "A"
+
+  alias {
+    name                   = var.alb_dns_name
+    zone_id                = var.alb_zone_id
+    evaluate_target_health = true
   }
 }
 
-resource "aws_route53_health_check" "standby" {
-  fqdn              = var.standby_endpoint_dns
-  port              = var.health_check_port
-  type              = "HTTPS"
-  resource_path     = var.health_check_path
-  request_interval  = 30
-  failure_threshold = 1
-  enable_sni        = true
+resource "aws_route53_record" "frontend" {
+  count   = var.hosted_zone_id != "" ? 1 : 0
+  zone_id = var.hosted_zone_id
+  name    = var.domain_name
+  type    = "A"
 
-  tags = {
-    Name = "${var.record_name}-standby-health"
+  alias {
+    name                   = var.cloudfront_domain
+    zone_id                = var.cloudfront_zone_id
+    evaluate_target_health = false
   }
 }
 
-resource "aws_route53_record" "primary" {
-  zone_id        = var.hosted_zone_id
-  name           = var.record_name
-  type           = "CNAME"
-  ttl            = 30
-  set_identifier = "primary"
+resource "aws_route53_record" "frontend_www" {
+  count   = var.hosted_zone_id != "" ? 1 : 0
+  zone_id = var.hosted_zone_id
+  name    = "www.${var.domain_name}"
+  type    = "A"
 
-  failover_routing_policy {
-    type = "PRIMARY"
+  alias {
+    name                   = var.cloudfront_domain
+    zone_id                = var.cloudfront_zone_id
+    evaluate_target_health = false
   }
-
-  health_check_id = aws_route53_health_check.primary.id
-  records         = [var.primary_endpoint_dns]
-}
-
-resource "aws_route53_record" "standby" {
-  zone_id        = var.hosted_zone_id
-  name           = var.record_name
-  type           = "CNAME"
-  ttl            = 30
-  set_identifier = "standby"
-
-  failover_routing_policy {
-    type = "SECONDARY"
-  }
-
-  health_check_id = aws_route53_health_check.standby.id
-  records         = [var.standby_endpoint_dns]
 }

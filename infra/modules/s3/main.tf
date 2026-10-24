@@ -1,70 +1,18 @@
-terraform {
-  required_providers {
-    aws = {
-      source                = "hashicorp/aws"
-      configuration_aliases = [aws.primary, aws.standby]
-    }
-  }
+# ── Task Results Bucket ───────────────────────────────────────────────────────
+
+resource "aws_s3_bucket" "task_results" {
+  bucket = "ai-net-${var.environment}-task-results-${data.aws_caller_identity.current.account_id}"
+
+  tags = { Name = "ai-net-${var.environment}-task-results" }
 }
 
-resource "aws_s3_bucket" "primary" {
-  provider = aws.primary
-  bucket   = var.primary_bucket_name
-
-  tags = {
-    Name = "ai-net-primary-database-backups"
-  }
+resource "aws_s3_bucket_versioning" "task_results" {
+  bucket = aws_s3_bucket.task_results.id
+  versioning_configuration { status = "Enabled" }
 }
 
-resource "aws_s3_bucket" "standby" {
-  provider = aws.standby
-  bucket   = var.standby_bucket_name
-
-  tags = {
-    Name = "ai-net-standby-database-backups"
-  }
-}
-
-resource "aws_s3_bucket_versioning" "primary" {
-  provider = aws.primary
-  bucket   = aws_s3_bucket.primary.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_versioning" "standby" {
-  provider = aws.standby
-  bucket   = aws_s3_bucket.standby.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "primary" {
-  provider                = aws.primary
-  bucket                  = aws_s3_bucket.primary.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_public_access_block" "standby" {
-  provider                = aws.standby
-  bucket                  = aws_s3_bucket.standby.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "primary" {
-  provider = aws.primary
-  bucket   = aws_s3_bucket.primary.id
-
+resource "aws_s3_bucket_server_side_encryption_configuration" "task_results" {
+  bucket = aws_s3_bucket.task_results.id
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
@@ -72,10 +20,40 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "primary" {
   }
 }
 
-resource "aws_s3_bucket_server_side_encryption_configuration" "standby" {
-  provider = aws.standby
-  bucket   = aws_s3_bucket.standby.id
+resource "aws_s3_bucket_public_access_block" "task_results" {
+  bucket                  = aws_s3_bucket.task_results.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
 
+resource "aws_s3_bucket_lifecycle_configuration" "task_results" {
+  bucket = aws_s3_bucket.task_results.id
+
+  rule {
+    id     = "expire-old-results"
+    status = "Enabled"
+    expiration { days = 90 }
+    noncurrent_version_expiration { noncurrent_days = 30 }
+  }
+}
+
+# ── Redis Backups Bucket ──────────────────────────────────────────────────────
+
+resource "aws_s3_bucket" "redis_backups" {
+  bucket = "ai-net-${var.environment}-redis-backups-${data.aws_caller_identity.current.account_id}"
+
+  tags = { Name = "ai-net-${var.environment}-redis-backups" }
+}
+
+resource "aws_s3_bucket_versioning" "redis_backups" {
+  bucket = aws_s3_bucket.redis_backups.id
+  versioning_configuration { status = "Enabled" }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "redis_backups" {
+  bucket = aws_s3_bucket.redis_backups.id
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
@@ -83,112 +61,120 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "standby" {
   }
 }
 
-resource "aws_iam_role" "replication" {
-  provider = aws.primary
-  name     = "ai-net-s3-backup-replication"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = {
-        Service = "s3.amazonaws.com"
-      }
-      Action = "sts:AssumeRole"
-    }]
-  })
+resource "aws_s3_bucket_public_access_block" "redis_backups" {
+  bucket                  = aws_s3_bucket.redis_backups.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
-resource "aws_iam_role_policy" "replication" {
-  provider = aws.primary
-  name     = "ai-net-s3-backup-replication"
-  role     = aws_iam_role.replication.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetReplicationConfiguration",
-          "s3:ListBucket"
-        ]
-        Resource = aws_s3_bucket.primary.arn
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetObjectVersionForReplication",
-          "s3:GetObjectVersionAcl",
-          "s3:GetObjectVersionTagging"
-        ]
-        Resource = "${aws_s3_bucket.primary.arn}/*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:ReplicateObject",
-          "s3:ReplicateDelete",
-          "s3:ReplicateTags"
-        ]
-        Resource = "${aws_s3_bucket.standby.arn}/*"
-      }
-    ]
-  })
-}
-
-resource "aws_s3_bucket_replication_configuration" "backups" {
-  provider   = aws.primary
-  depends_on = [aws_s3_bucket_versioning.primary, aws_s3_bucket_versioning.standby]
-
-  role   = aws_iam_role.replication.arn
-  bucket = aws_s3_bucket.primary.id
+resource "aws_s3_bucket_lifecycle_configuration" "redis_backups" {
+  bucket = aws_s3_bucket.redis_backups.id
 
   rule {
-    id       = "replicate-sqlite-backups"
-    priority = 1
-    status   = "Enabled"
+    id     = "expire-old-backups"
+    status = "Enabled"
+    expiration { days = 30 }
+  }
+}
 
-    filter {
-      prefix = var.backup_prefix
-    }
+# ── SQLite Database Backups ───────────────────────────────────────────────────
 
-    delete_marker_replication {
-      status = "Disabled"
-    }
+resource "aws_s3_bucket" "database_backups" {
+  bucket = "ai-net-${var.environment}-database-backups-${data.aws_caller_identity.current.account_id}"
 
-    destination {
-      bucket        = aws_s3_bucket.standby.arn
-      storage_class = "STANDARD"
+  tags = { Name = "ai-net-${var.environment}-database-backups" }
+}
 
-      metrics {
-        status = "Enabled"
-
-        event_threshold {
-          minutes = 15
-        }
-      }
+resource "aws_s3_bucket_server_side_encryption_configuration" "database_backups" {
+  bucket = aws_s3_bucket.database_backups.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
     }
   }
 }
 
-resource "aws_cloudwatch_metric_alarm" "replication_lag" {
-  provider            = aws.primary
-  alarm_name          = "ai-net-backup-replication-lag"
-  alarm_description   = "S3 backup replication latency exceeded the 15-minute RPO target."
-  namespace           = "AWS/S3"
-  metric_name         = "ReplicationLatency"
-  statistic           = "Maximum"
-  period              = 300
-  evaluation_periods  = 1
-  datapoints_to_alarm = 1
-  threshold           = 900
-  comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
+resource "aws_s3_bucket_public_access_block" "database_backups" {
+  bucket                  = aws_s3_bucket.database_backups.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
 
-  dimensions = {
-    SourceBucket      = aws_s3_bucket.primary.id
-    DestinationBucket = aws_s3_bucket.standby.id
-    RuleId            = aws_s3_bucket_replication_configuration.backups.rule[0].id
+resource "aws_s3_bucket_lifecycle_configuration" "database_backups" {
+  bucket = aws_s3_bucket.database_backups.id
+
+  rule {
+    id     = "expire-verified-database-backups"
+    status = "Enabled"
+    expiration { days = 90 }
   }
 }
+
+resource "aws_s3_bucket" "backup_verification" {
+  bucket = "ai-net-${var.environment}-backup-verification-${data.aws_caller_identity.current.account_id}"
+
+  tags = { Name = "ai-net-${var.environment}-backup-verification" }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "backup_verification" {
+  bucket = aws_s3_bucket.backup_verification.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "backup_verification" {
+  bucket                  = aws_s3_bucket.backup_verification.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "backup_verification" {
+  bucket = aws_s3_bucket.backup_verification.id
+
+  rule {
+    id     = "expire-verification-fixtures"
+    status = "Enabled"
+    expiration { days = 90 }
+  }
+}
+
+# ── Frontend Static Assets Bucket ────────────────────────────────────────────
+
+resource "aws_s3_bucket" "frontend" {
+  bucket = "ai-net-${var.environment}-frontend-${data.aws_caller_identity.current.account_id}"
+
+  tags = { Name = "ai-net-${var.environment}-frontend" }
+}
+
+resource "aws_s3_bucket_versioning" "frontend" {
+  bucket = aws_s3_bucket.frontend.id
+  versioning_configuration { status = "Enabled" }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "frontend" {
+  bucket = aws_s3_bucket.frontend.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "frontend" {
+  bucket                  = aws_s3_bucket.frontend.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+data "aws_caller_identity" "current" {}

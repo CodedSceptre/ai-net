@@ -1,75 +1,311 @@
-# Multi-region disaster recovery
+# Database Backup & Disaster Recovery
 
-The Terraform in [`infra/`](../infra/) establishes the DNS and backup
-replication building blocks for a primary deployment in `us-east-1` and a
-standby deployment in `us-west-2`. It does not create application compute,
-load balancers, database backup jobs, VPCs, or application secrets; those
-existing regional resources must be supplied before applying this configuration.
+This document covers the automated backup strategy, S3 retention policy, encryption details, alerting, and disaster recovery (DR) procedures for all three ai-net production SQLite databases.
 
-## Architecture and recovery targets
+**Resolves [#125](https://github.com/Chrisnec265/ai-net/issues/125)**
 
-- Route53 HTTPS health checks request `/health` from each regional load
-  balancer every 30 seconds. The primary CNAME failover record uses a failure
-  threshold of one check, and both failover records have a 30-second TTL.
-  DNS failover is therefore designed to start within 60 seconds; actual client
-  recovery depends on resolver caching and the standby service being healthy.
-- S3 Cross-Region Replication copies versioned objects under `backups/` from
-  the primary bucket to a private, encrypted bucket in the standby region.
-  A CloudWatch alarm reports replication latency above 15 minutes.
-- The RPO target is under 15 minutes only when the application writes a
-  consistent SQLite backup to the source bucket at least every 15 minutes and
-  replication is healthy. The RTO target is under five minutes only when the
-  standby application is already deployed, configured, and able to restore
-  from a recent replicated backup. These targets are operational objectives,
-  not guarantees made by Terraform alone.
+---
 
-S3 replication applies to objects created after the replication configuration
-is enabled. Seed or separately copy any existing backups before relying on the
-standby bucket.
+## Overview
 
-## Provisioning
+| Database | File | Purpose |
+|---|---|---|
+| `payments.db` | `$DB_DIR/payments.db` | Stellar payment records and escrow state |
+| `agents.db` | `$DB_DIR/agents.db` | Agent registry and heartbeat data |
+| `tasks.db` | `$DB_DIR/tasks.db` | Task execution state and event log |
 
-1. Deploy and verify the application load balancer and `/health` endpoint in
-   both regions. The endpoint must be reachable by Route53 health checkers over
-   public HTTPS on port 443.
-2. Create or identify the public Route53 hosted zone. Choose a non-apex DNS
-   name for the failover record because Route53 CNAME records cannot be used at
-   a zone apex.
-3. Copy [`infra/terraform.tfvars.example`](../infra/terraform.tfvars.example)
-   to an untracked `infra/terraform.tfvars` and set the actual hosted zone,
-   endpoint DNS names, and globally unique bucket names. Region defaults are
-   `us-east-1` and `us-west-2`.
-4. From `infra/`, run `terraform init`, inspect `terraform plan`, then apply
-   only after review. Use AWS credentials with permissions to manage Route53,
-   S3, IAM, and CloudWatch in both regions. Keep Terraform state in an encrypted,
-   access-controlled remote backend in production.
-5. Configure the application backup job to write consistent SQLite backup
-   objects beneath the configured `backup_prefix` at least every 15 minutes.
-   The application and its credentials are not provisioned by this module.
-6. Configure alert delivery for the `ai-net-backup-replication-lag` CloudWatch
-   alarm and provision the Route53/S3 health views in the operations alerting
-   system.
+---
 
-## Failover exercise and operations
+## Recovery Objectives
 
-1. Verify both regional endpoints return a healthy response:
-   `curl --fail https://<regional-endpoint>/health`.
-2. In a controlled maintenance window, make the primary `/health` endpoint
-   fail or block its Route53 health-check traffic. Do not disable or delete the
-   health check in production as a substitute for verifying the real endpoint.
-3. Query the configured name repeatedly with `dig <record_name>`. Confirm it
-   resolves to the standby CNAME after Route53 detects the primary failure;
-   check the returned TTL is no greater than 30 seconds.
-4. Verify a newly uploaded backup object appears in the standby bucket and
-   monitor the replication-latency alarm. Restore a copy to a non-production
-   standby environment and confirm the database opens and the application
-   becomes healthy.
-5. Restore primary health. Route53 should return traffic to the primary after
-   health checks recover. Confirm application state before ending the exercise.
+| Objective | Target |
+|---|---|
+| **RTO** (Recovery Time Objective) | **4 hours** — The system must be restored and accepting traffic within 4 hours of a declared disaster |
+| **RPO** (Recovery Point Objective) | **24 hours** — Maximum acceptable data loss is one day's worth of transactions |
 
-During a real regional outage, confirm the standby is healthy and its latest
-replicated backup is within the RPO before directing production traffic to it.
-If automatic health-check failover is unsuitable for the incident, use the
-Route53 failover record as the controlled DNS entry point and follow the
-organization's incident approval process. Record detection, DNS propagation,
-restore, and data-loss timings after each exercise.
+These objectives are achievable because backups run daily at 02:00 UTC and full restoration from S3 to a running instance takes approximately 30–60 minutes.
+
+---
+
+## Backup Strategy
+
+### Schedule
+
+Production backups run **daily at 02:00 UTC**. A separate GitHub Actions
+workflow verifies synthetic SQLite backups weekly and can upload the verified
+artifacts to the Terraform-managed backup verification bucket when its OIDC
+role and `BACKUP_VERIFY_AWS_ROLE_ARN` / `BACKUP_VERIFY_TEST_BUCKET` repository
+variables are configured. Deploy production backups via one of:
+
+**Option A — cron (on the backend host):**
+
+```cron
+0 2 * * * /app/backend/scripts/backup-databases.sh >> /var/log/ai-net-backup.log 2>&1
+```
+
+**Option B — AWS EventBridge + Lambda:**
+
+1. Create a Lambda function that runs the backup logic (or invokes the script via SSM Run Command on the EC2 instance).
+2. Set an EventBridge rule: `cron(0 2 * * ? *)` targeting the Lambda.
+3. Configure a Dead Letter Queue (DLQ) on the Lambda to capture failures.
+
+### Backup Method
+
+Each database is backed up using `sqlite3 .backup` which produces a consistent point-in-time snapshot without locking the database for more than a few milliseconds. The backup is then gzip-compressed and uploaded to S3.
+
+### S3 Bucket Layout
+
+```
+s3://<S3_BACKUP_BUCKET>/
+└── backups/sqlite/
+    └── 20241015T020000Z/
+        ├── 20241015T020000Z-payments.db.gz
+        ├── 20241015T020000Z-agents.db.gz
+        ├── 20241015T020000Z-tasks.db.gz
+        └── manifest.json
+```
+
+The manifest contains the SHA-256 checksum of each compressed file, the S3 key, the database name, and the timestamp. Always verify checksums during restoration.
+
+### S3 Retention Policy
+
+The Terraform-managed SQLite backup bucket expires objects after 90 days. The
+workflow test bucket is isolated from production data and also uses a 90-day
+lifecycle. For local verification, use disposable fixture databases and a
+temporary output directory; this mode needs no AWS credentials:
+
+```bash
+DB_DIR=/tmp/ai-net-backup-fixtures \
+  ./backend/scripts/backup-databases.sh --local --integrity-check \
+  --output-dir /tmp/ai-net-verified-backups
+```
+
+Configure a 90-day lifecycle rule on the backup bucket:
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "ai-net-sqlite-backup-retention",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "backups/sqlite/" },
+      "Expiration": { "Days": 90 }
+    }
+  ]
+}
+```
+
+Apply via AWS CLI:
+
+```bash
+aws s3api put-bucket-lifecycle-configuration \
+  --bucket "${S3_BACKUP_BUCKET}" \
+  --lifecycle-configuration file://docs/s3-lifecycle-policy.json
+```
+
+### Encryption
+
+Backups are encrypted at rest using **AES-256**:
+
+- **Default**: S3-managed keys (`--sse AES256`)
+- **Enhanced**: KMS-managed key — set `ENCRYPTION_KEY_ARN` in the environment to use `aws:kms` encryption. This provides an audit trail of every key usage in CloudTrail.
+
+Encryption is enforced in the upload step of `backend/scripts/backup-databases.sh`.
+
+---
+
+## Running the Backup Script
+
+```bash
+# Copy environment defaults
+cp .env.example .env
+# Set: S3_BACKUP_BUCKET, DB_DIR, SLACK_WEBHOOK_URL (optional), ALERT_EMAIL (optional)
+
+# Test with dry run (no S3 uploads)
+cd backend
+./scripts/backup-databases.sh --dry-run
+
+# Production run
+./scripts/backup-databases.sh
+```
+
+### Required Environment Variables
+
+| Variable | Description | Required |
+|---|---|---|
+| `S3_BACKUP_BUCKET` | S3 bucket name | ✅ Yes for S3 mode; not required for `--local` |
+| `DB_DIR` | Directory containing `.db` files | ✅ Yes (default: `/app/data`) |
+| `S3_BACKUP_PREFIX` | S3 key prefix | No (default: `backups/sqlite`) |
+| `SLACK_WEBHOOK_URL` | Slack webhook for failure alerts | No |
+| `ALERT_EMAIL` | Email for failure alerts via SES | No |
+| `ENCRYPTION_KEY_ARN` | KMS key ARN for enhanced encryption | No |
+
+---
+
+## Alerting on Backup Failure
+
+The script sends alerts to **both Slack and email** when:
+
+- `S3_BACKUP_BUCKET` is not configured
+- A `.db` file is missing or unreadable
+- An S3 upload fails
+- The manifest upload fails
+
+**Slack message format:**
+
+```
+🚨 ai-net DB Backup Alert
+Backup partially failed — 20241015T020000Z
+One or more databases could not be backed up. Check the backup host logs.
+```
+
+For Lambda-based deployments, also configure a CloudWatch alarm on the Lambda's error metric to page on-call via SNS.
+
+---
+
+## Disaster Recovery Procedure
+
+### Prerequisites
+
+- AWS CLI configured with access to the backup S3 bucket
+- SQLite 3 installed on the target host
+- The target `DB_DIR` exists and is writable
+
+### Step 1 — Identify the Recovery Point
+
+List available backups to find the most recent (or the specific point-in-time needed):
+
+```bash
+aws s3 ls s3://${S3_BACKUP_BUCKET}/backups/sqlite/ | sort | tail -5
+```
+
+Note the timestamp of the desired backup (e.g. `20241015T020000Z`).
+
+### Step 2 — Download the Manifest
+
+```bash
+TIMESTAMP="20241015T020000Z"
+aws s3 cp \
+  "s3://${S3_BACKUP_BUCKET}/backups/sqlite/${TIMESTAMP}/manifest.json" \
+  ./manifest.json
+cat manifest.json
+```
+
+### Step 3 — Download and Verify the Backups
+
+```bash
+for DB in payments agents tasks; do
+  aws s3 cp \
+    "s3://${S3_BACKUP_BUCKET}/backups/sqlite/${TIMESTAMP}/${TIMESTAMP}-${DB}.db.gz" \
+    "./${TIMESTAMP}-${DB}.db.gz"
+
+  # Verify SHA-256 against manifest
+  EXPECTED=$(jq -r ".files[] | select(.database==\"${DB}.db\") | .sha256" manifest.json)
+  ACTUAL=$(sha256sum "${TIMESTAMP}-${DB}.db.gz" | awk '{print $1}')
+
+  if [[ "${EXPECTED}" != "${ACTUAL}" ]]; then
+    echo "❌ CHECKSUM MISMATCH for ${DB}.db — abort and try another backup!"
+    exit 1
+  fi
+  echo "✅ ${DB}.db checksum verified"
+done
+```
+
+### Step 4 — Decompress and Restore
+
+```bash
+DB_DIR="/app/data"
+
+for DB in payments agents tasks; do
+  # Stop the backend first to avoid write conflicts
+  # sudo systemctl stop ai-net-backend  # or docker compose stop backend
+
+  gunzip -c "${TIMESTAMP}-${DB}.db.gz" > "${DB_DIR}/${DB}.db"
+  echo "Restored ${DB}.db to ${DB_DIR}/${DB}.db"
+done
+```
+
+### Step 5 — Verify Data Integrity
+
+Run a quick integrity check on each restored database:
+
+```bash
+for DB in payments agents tasks; do
+  echo "Checking ${DB}.db..."
+  sqlite3 "${DB_DIR}/${DB}.db" "PRAGMA integrity_check;"
+  sqlite3 "${DB_DIR}/${DB}.db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table';"
+done
+```
+
+### Step 6 — Restart the Backend
+
+```bash
+# Direct
+cd backend && npm run dev
+
+# Docker Compose
+docker compose up -d backend
+```
+
+### Step 7 — Smoke Test
+
+```bash
+curl -f http://localhost:3000/health
+curl -f http://localhost:3000/api/agents
+```
+
+If the health check passes and agents are returned, the restore is complete.
+
+---
+
+## Quarterly DR Drill
+
+Schedule a DR drill at the beginning of each quarter. The drill tests the full restore procedure against a **staging** environment.
+
+### Drill Procedure
+
+1. **Announce** the drill in `#incidents` Slack at least 24 hours before (staging only — no production impact).
+2. **Download** the most recent backup to a staging host following Steps 1–4 above.
+3. **Verify** checksums pass.
+4. **Restore** to staging `DB_DIR`.
+5. **Run** `npm run db:migrate` to confirm schema version matches.
+6. **Smoke test** the staging backend API.
+7. **Record** the drill outcome (RTO achieved, any blockers) in `docs/dr-drill-log.md`.
+8. **Update** this document if any step needs improvement.
+
+### Drill Log
+
+| Date | Performed By | Backup Used | RTO Achieved | Notes |
+|---|---|---|---|---|
+| _(Add entries after each drill)_ | | | | |
+
+---
+
+## S3 Bucket Setup Reference
+
+```bash
+# Create the backup bucket (if not already exists)
+aws s3api create-bucket \
+  --bucket "${S3_BACKUP_BUCKET}" \
+  --region us-east-1 \
+  --create-bucket-configuration LocationConstraint=us-east-1
+
+# Enable versioning (allows recovery from accidental overwrites)
+aws s3api put-bucket-versioning \
+  --bucket "${S3_BACKUP_BUCKET}" \
+  --versioning-configuration Status=Enabled
+
+# Block all public access
+aws s3api put-public-access-block \
+  --bucket "${S3_BACKUP_BUCKET}" \
+  --public-access-block-configuration \
+    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+```
+
+---
+
+## Related
+
+- Backup script: `backend/scripts/backup-databases.sh`
+- Database migrations: `backend/src/db/migrations/`
+- DB connection layer: `backend/src/db/index.ts`
