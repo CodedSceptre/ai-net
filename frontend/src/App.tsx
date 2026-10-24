@@ -100,32 +100,72 @@ const RoutedContent: React.FC = () => {
           path="/*"
           element={
             <AppShell>
-              <Suspense fallback={<SuspenseProgress />}>
-                <RouteTransition>
-                  <Routes>
-                    <Route
-                      path="/dashboard"
-                      element={
-                        <RouteErrorBoundary label="Dashboard">
-                          <ProtectedRoute>
-                            <DashboardPage />
-                          </ProtectedRoute>
-                        </RouteErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/wallet"
-                      element={
-                        <RouteErrorBoundary label="Wallet">
-                          <ProtectedRoute>
-                            <WalletPage />
-                          </ProtectedRoute>
-                        </RouteErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/payments"
-                      element={
+              <Suspense fallback={<RouteLoadingFallback />}>
+                <Routes>
+                  <Route
+                    path="/dashboard"
+                    element={
+                      <RouteErrorBoundary label="Dashboard">
+                        <ProtectedRoute>
+                          <DashboardPage />
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/wallet"
+                    element={
+                      <RouteErrorBoundary label="Wallet">
+                        <ProtectedRoute>
+                          <WalletPage />
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/payments"
+                    element={
+                      <ProtectedRoute>
+                        <PaymentsPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route path="/marketplace" element={<Navigate to="/agents" replace />} />
+                  <Route path="/tasks" element={<Navigate to="/tasks/history" replace />} />
+                  <Route
+                    path="/notifications"
+                    element={
+                      <ProtectedRoute>
+                        <NotificationsPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route path="/forbidden" element={<ForbiddenPage />} />
+                  <Route path="/server-error" element={<ServerErrorPage />} />
+                  <Route
+                    path="/agents"
+                    element={
+                      <RouteErrorBoundary label="Agents">
+                        <ProtectedRoute>
+                          <AgentsPage />
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route path="/forbidden" element={<ForbiddenPage />} />
+                  <Route path="/server-error" element={<ServerErrorPage />} />
+                  <Route
+                    path="/agents/:id"
+                    element={
+                      <ProtectedRoute>
+                        <AgentDetailPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/tasks/new"
+                    element={
+                      <RouteErrorBoundary label="New Task">
                         <ProtectedRoute>
                           <PaymentsPage />
                         </ProtectedRoute>

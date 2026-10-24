@@ -37,7 +37,7 @@ export class TokenService {
     sessionMaxTtlSeconds?: number;
   }) {
     this.jwtSecret = options?.jwtSecret ?? process.env.AUTH_JWT_SECRET ?? "ai-net-auth-secret";
-    this.accessTtlSeconds = options?.accessTtlSeconds ?? 900; // 15 mins
+    this.accessTtlSeconds = options?.accessTtlSeconds ?? 86_400;
     this.refreshTtlSeconds = options?.refreshTtlSeconds ?? 604800; // 7 days
     this.sessionMaxTtlSeconds = options?.sessionMaxTtlSeconds ?? 2592000; // 30 days
   }
@@ -53,7 +53,8 @@ export class TokenService {
     scope?: string | string[];
   }): { token: string; expiresIn: number } {
     const now = Math.floor(Date.now() / 1000);
-    const exp = now + this.accessTtlSeconds;
+    const expiresIn = params.accessTokenTtlSeconds ?? this.accessTtlSeconds;
+    const exp = now + expiresIn;
     const jti = crypto.randomUUID();
 
     const header = { alg: "HS256", typ: "JWT" };
@@ -80,7 +81,7 @@ export class TokenService {
 
     return {
       token: `${dataToSign}.${encodedSignature}`,
-      expiresIn: this.accessTtlSeconds,
+      expiresIn,
     };
   }
 

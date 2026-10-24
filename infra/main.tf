@@ -120,8 +120,10 @@ module "secrets" {
 }
 
 module "logging" {
-  source      = "./modules/logging"
-  environment = var.environment
+  source             = "./modules/logging"
+  environment        = var.environment
+  archive_bucket_name = module.s3.log_archive_bucket_name
+  archive_bucket_arn  = module.s3.log_archive_bucket_arn
 }
 
 # ── Data sources ──────────────────────────────────────────────────────────────

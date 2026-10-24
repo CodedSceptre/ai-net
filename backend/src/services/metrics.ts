@@ -726,6 +726,7 @@ export class MetricsService {
   private activeWsConnections = 0;
   /** agent_health_status by agent_id — key: agentId, value: 1|0. */
   private agentHealthStatuses = new Map<string, number>();
+  private agentQualityScores = new Map<string, number>();
 
   /** Record completed task duration in seconds. */
   recordTaskCompletion(durationSeconds: number, _status: string = "completed"): void {
@@ -820,6 +821,10 @@ export class MetricsService {
    */
   setAgentHealthStatus(agentId: string, healthy: boolean): void {
     this.agentHealthStatuses.set(agentId, healthy ? 1 : 0);
+  }
+
+  setAgentQualityScore(agentId: string, score: number): void {
+    this.agentQualityScores.set(agentId, Math.max(0, Math.min(100, score)));
   }
 
   /** Remove an agent's health entry (e.g. on deregistration). */
@@ -1063,6 +1068,7 @@ export class MetricsService {
     this.taskResultCompressionCount = 0;
     this.activeWsConnections = 0;
     this.agentHealthStatuses.clear();
+    this.agentQualityScores.clear();
     this.resetCache();
   }
 

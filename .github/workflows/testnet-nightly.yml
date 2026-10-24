@@ -112,6 +112,35 @@ jobs:
         if: env.configured != 'true'
         run: echo "Testnet farm secret not configured — skipping nightly farm."
 
+      # ── Flaky test detection ──────────────────────────────────────────────
+      # Run the flaky test detector across farm run results. The farm's Jest
+      # output is captured as JSON and cross-referenced across retry attempts
+      # to detect tests that passed on retry (flaky).
+      - name: Detect flaky tests
+        if: always() && env.configured == 'true'
+        run: |
+          mkdir -p ../test-results
+          # Copy farm report for flaky analysis if available
+          [ -f testnet-farm-output/testnet-farm-report.json ] && \
+            cp testnet-farm-output/testnet-farm-report.json ../test-results/test-results-farm-${{ github.run_id }}.json
+
+          cd .. && node scripts/detect-flaky-tests.js \
+            --results-dir ./test-results \
+            --output flaky-tests-report.json \
+            --window-days 7 || true
+        continue-on-error: true
+
+      - name: Upload flaky tests report
+        if: always() && env.configured == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-tests-report-${{ github.run_id }}
+          path: |
+            flaky-tests-report.json
+            flaky-tests-history.json
+          if-no-files-found: warn
+          retention-days: 30
+
       # ── Publish the report artifact ──────────────────────────────────────
       - name: Upload farm report artifact
         if: env.configured == 'true'

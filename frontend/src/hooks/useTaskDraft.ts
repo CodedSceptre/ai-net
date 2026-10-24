@@ -14,11 +14,11 @@ export interface TaskDraft {
 export const TASK_DRAFT_STORAGE_KEY = 'draft_v1_task_form';
 export const LEGACY_TASK_DRAFT_STORAGE_KEY = 'task_draft_v1';
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 3;
 const DEFAULT_BUDGET = 0.1;
 
 const hasStorage = (): boolean =>
-  typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+  typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined';
 
 /**
  * Read the persisted task wizard draft. Returns `null` when nothing is stored
@@ -27,9 +27,7 @@ const hasStorage = (): boolean =>
 export function loadTaskDraft(): TaskDraft | null {
   if (!hasStorage()) return null;
   try {
-    const raw =
-      window.localStorage.getItem(TASK_DRAFT_STORAGE_KEY) ??
-      window.localStorage.getItem(LEGACY_TASK_DRAFT_STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(TASK_DRAFT_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<TaskDraft>;
 
@@ -68,7 +66,7 @@ export function loadTaskDraft(): TaskDraft | null {
 export function saveTaskDraft(draft: TaskDraft): void {
   if (!hasStorage()) return;
   try {
-    window.localStorage.setItem(TASK_DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    window.sessionStorage.setItem(TASK_DRAFT_STORAGE_KEY, JSON.stringify(draft));
   } catch {
     // Ignore write failures (e.g. sandboxed iframe or quota exceeded).
   }
@@ -77,8 +75,7 @@ export function saveTaskDraft(draft: TaskDraft): void {
 export function clearTaskDraft(): void {
   if (!hasStorage()) return;
   try {
-    window.localStorage.removeItem(TASK_DRAFT_STORAGE_KEY);
-    window.localStorage.removeItem(LEGACY_TASK_DRAFT_STORAGE_KEY);
+    window.sessionStorage.removeItem(TASK_DRAFT_STORAGE_KEY);
   } catch {
     // Ignore removal failures.
   }

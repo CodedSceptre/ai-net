@@ -106,6 +106,25 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
   return (
     <div className="toast-container" aria-live="polite" aria-atomic="false">
       {toasts.map((toast) => (
+        <div key={toast.id} className={`toast toast--${toast.type}`} role="alert" aria-live="polite">
+          <span className="toast__icon">{icons[toast.type]}</span>
+          <span className="toast__message">{toast.message}</span>
+          {toast.action && (
+            <button
+              type="button"
+              className="toast__action"
+              onClick={() => {
+                toast.action?.onClick();
+                onDismiss(toast.id);
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
+          <button type="button" className="toast__dismiss" onClick={() => onDismiss(toast.id)} aria-label={t('a11y.dismissNotification')}>
+            ×
+          </button>
+        </div>
         <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />
       ))}
     </div>

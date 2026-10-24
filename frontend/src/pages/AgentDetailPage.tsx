@@ -137,7 +137,7 @@ const AgentDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { agent, reputation, agentLoading, reputationLoading, error, notFound } =
+  const { agent, reputation, reputationHistory, reputationHistoryLoading, agentLoading, reputationLoading, error, notFound } =
     useAgentDetail(id ?? '')
   useBreadcrumbLabel(agent?.name ?? `Agent ${id ?? ''}`)
 
@@ -309,6 +309,10 @@ const AgentDetailPage: React.FC = () => {
                 ))}
               </dl>
             )}
+            <ReputationChart
+              history={reputationHistory ?? []}
+              loading={reputationHistoryLoading}
+            />
           </section>
         )}
       </div>

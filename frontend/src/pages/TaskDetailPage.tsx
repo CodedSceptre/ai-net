@@ -276,6 +276,16 @@ const TaskDetailPage: React.FC = () => {
         />
       </div>
 
+      {/* Pipeline Step Indicator */}
+      {nodes.length > 0 && (
+        <div className="glass-panel">
+          <PipelineStepIndicator
+            nodes={nodes}
+            pipelineStart={task?.createdAt}
+          />
+        </div>
+      )}
+
       {/* Combined Panels */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         <div className="lg:col-span-3">

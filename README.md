@@ -262,6 +262,7 @@ npm run test:e2e
 
 ## Documentation
 
+- [Freighter Wallet Setup](docs/WALLET_SETUP.md): Dedicated testnet account, funding, and wallet connection instructions.
 - [Developer Setup Guide](docs/DEVELOPER_SETUP.md): Fast onboarding from clean clone to running local node, testnet deployments, Freighter wallet setup, and testing.
 - [Architecture Specification](docs/architecture/index.md): System context, component architecture, Mermaid sequence diagrams, and security model.
 - [REST API Reference](docs/API_REFERENCE.md): Comprehensive per-endpoint documentation, error codes taxonomy, authentication headers, and runnable curl examples.

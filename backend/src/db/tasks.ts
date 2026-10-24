@@ -133,7 +133,7 @@ export interface TaskDb {
   getEventHistory(taskId: string): TaskEvent[];
   failRunningTasks(): void;
   insertQualityScore(record: QualityScoreRecord): void;
-  listQualityScores(agentId?: string, limit?: number): QualityScoreRecord[];
+  listQualityScores(agentId?: string, limit?: number, since?: string): QualityScoreRecord[];
 }
 
 function taskFromRow(row: any): Task {
@@ -396,8 +396,8 @@ export function createTaskDb(db: Database.Database): TaskDb {
     insertQualityScore(record: QualityScoreRecord): void {
       db.prepare(
         `
-        INSERT INTO quality_scores (taskId, nodeId, agentId, agentType, score, completeness, relevance, format, needsReview, timestamp)
-        VALUES (@taskId, @nodeId, @agentId, @agentType, @score, @completeness, @relevance, @format, @needsReview, @timestamp)
+        INSERT INTO quality_scores (taskId, nodeId, agentId, agentType, score, completeness, relevance, format, needsReview, responseTimeMs, timestamp)
+        VALUES (@taskId, @nodeId, @agentId, @agentType, @score, @completeness, @relevance, @format, @needsReview, @responseTimeMs, @timestamp)
       `,
       ).run({
         taskId: record.taskId,
@@ -409,22 +409,26 @@ export function createTaskDb(db: Database.Database): TaskDb {
         relevance: record.relevance,
         format: record.format,
         needsReview: record.needsReview ? 1 : 0,
+        responseTimeMs: record.responseTimeMs ?? null,
         timestamp: record.timestamp,
       });
     },
 
-    listQualityScores(agentId?: string, limit: number = 500): QualityScoreRecord[] {
-      const rows = (
-        agentId
-          ? db
-              .prepare(
-                "SELECT * FROM quality_scores WHERE agentId = ? ORDER BY id ASC LIMIT ?",
-              )
-              .all(agentId, limit)
-          : db
-              .prepare("SELECT * FROM quality_scores ORDER BY id ASC LIMIT ?")
-              .all(limit)
-      ) as Array<{
+    listQualityScores(agentId?: string, limit: number = 500, since?: string): QualityScoreRecord[] {
+      const filters: string[] = [];
+      const params: Array<string | number> = [];
+      if (agentId) {
+        filters.push("agentId = ?");
+        params.push(agentId);
+      }
+      if (since) {
+        filters.push("timestamp >= ?");
+        params.push(since);
+      }
+      const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+      const rows = db.prepare(
+        `SELECT * FROM quality_scores ${where} ORDER BY timestamp ASC, id ASC LIMIT ?`,
+      ).all(...params, limit) as Array<{
         taskId: string;
         nodeId: string;
         agentId: string | null;
@@ -434,6 +438,7 @@ export function createTaskDb(db: Database.Database): TaskDb {
         relevance: number;
         format: number;
         needsReview: number;
+        responseTimeMs: number | null;
         timestamp: string;
       }>;
 
@@ -447,6 +452,7 @@ export function createTaskDb(db: Database.Database): TaskDb {
         relevance: r.relevance,
         format: r.format,
         needsReview: r.needsReview === 1,
+        responseTimeMs: r.responseTimeMs == null ? undefined : Number(r.responseTimeMs),
         timestamp: r.timestamp,
       }));
     },

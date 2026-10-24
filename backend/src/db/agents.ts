@@ -27,6 +27,13 @@ export interface AgentRecord {
   bannedAt?: string | null;
 }
 
+export interface AgentReputationHistoryRecord {
+  taskId: string;
+  nodeId: string;
+  score: number;
+  timestamp: string;
+}
+
 export interface AgentCursorOptions {
   /** Opaque cursor from a previous page's nextCursor field. */
   cursor?: string;
@@ -78,6 +85,21 @@ export function ensureAgentTable(db: Database.Database): void {
       lastActiveAt     TEXT,
       bannedAt         TEXT
     )
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS reputation_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agentId TEXT NOT NULL,
+      taskId TEXT NOT NULL,
+      nodeId TEXT NOT NULL,
+      score REAL NOT NULL,
+      timestamp TEXT NOT NULL,
+      FOREIGN KEY (agentId) REFERENCES agents(id) ON DELETE CASCADE
+    )
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_reputation_history_agent_timestamp
+    ON reputation_history (agentId, timestamp)
   `);
   const migrations = [
     "ALTER TABLE agents ADD COLUMN last_seen_at INTEGER NOT NULL DEFAULT 0",
@@ -203,7 +225,12 @@ export interface AgentDb {
    */
   listCursor(options?: AgentCursorOptions): CursorPage<AgentRecord>;
   delete(id: string): void;
-  updateReputation(id: string, delta: number): void;
+  updateReputation(
+    id: string,
+    delta: number,
+    event?: { taskId: string; nodeId: string; timestamp: string },
+  ): void;
+  listReputationHistory?(id: string, since: string): AgentReputationHistoryRecord[];
   updateReputationWithStats(id: string, delta: number, outcome?: 'success' | 'failure'): void;
   countByStellarKey(stellarPublicKey: string): number;
   markAllOffline(): void;
@@ -380,12 +407,37 @@ export function createAgentDb(db: Database.Database): AgentDb {
       db.prepare("DELETE FROM agents WHERE id = ?").run(id);
     },
 
-    updateReputation(id: string, delta: number): void {
-      db.prepare(`
-        UPDATE agents
-        SET reputationScore = MAX(0.0, MIN(5.0, reputationScore + ?))
-        WHERE id = ?
-      `).run(delta, id);
+    updateReputation(
+      id: string,
+      delta: number,
+      event?: { taskId: string; nodeId: string; timestamp: string },
+    ): void {
+      db.transaction(() => {
+        const result = db.prepare(`
+          UPDATE agents
+          SET reputationScore = MAX(0.0, MIN(5.0, reputationScore + ?))
+          WHERE id = ?
+        `).run(delta, id);
+        if (result.changes === 0 || !event) return;
+
+        const agent = db.prepare("SELECT reputationScore FROM agents WHERE id = ?").get(id) as
+          | { reputationScore: number }
+          | undefined;
+        if (!agent) return;
+        db.prepare(`
+          INSERT INTO reputation_history (agentId, taskId, nodeId, score, timestamp)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(id, event.taskId, event.nodeId, agent.reputationScore, event.timestamp);
+      })();
+    },
+
+    listReputationHistory(id: string, since: string): AgentReputationHistoryRecord[] {
+      return db.prepare(`
+        SELECT taskId, nodeId, score, timestamp
+        FROM reputation_history
+        WHERE agentId = ? AND timestamp >= ?
+        ORDER BY timestamp ASC, id ASC
+      `).all(id, since) as AgentReputationHistoryRecord[];
     },
 
     updateReputationWithStats(id: string, delta: number, outcome?: 'success' | 'failure'): void {

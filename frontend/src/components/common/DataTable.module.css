@@ -1,3 +1,11 @@
+/* ── Outer wrapper (contains table + pagination) ─────────────────────────── */
+.outerWrapper {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 .wrapper {
   position: relative;
   width: 100%;
@@ -65,6 +73,8 @@
   min-width: 6rem;
 }
 
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
 .stickyHeader th {
   position: sticky;
   top: 0;
@@ -104,6 +114,8 @@
   outline-offset: 2px;
 }
 
+/* ── Rows ────────────────────────────────────────────────────────────────── */
+
 .row {
   border-top: 1px solid color-mix(in srgb, var(--text-muted) 12%, transparent);
   transition: background 0.15s ease;
@@ -133,6 +145,8 @@
   text-align: center;
 }
 
+/* ── Empty state ─────────────────────────────────────────────────────────── */
+
 .emptyWrap {
   display: flex;
   justify-content: center;
@@ -140,6 +154,35 @@
   min-height: 8rem;
   color: var(--text-muted);
 }
+
+.skeletonCell {
+  display: block;
+  height: 14px;
+  border-radius: 6px;
+  background: var(--skeleton-base, rgba(30, 41, 59, 0.8));
+  background-image: linear-gradient(
+    90deg,
+    var(--skeleton-base, rgba(30, 41, 59, 0.8)) 0%,
+    var(--skeleton-shine, rgba(51, 65, 85, 0.8)) 40%,
+    var(--skeleton-base, rgba(30, 41, 59, 0.8)) 80%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+/* Vary skeleton widths for a natural look */
+.skeletonRow td:nth-child(1) .skeletonCell { width: 60%; }
+.skeletonRow td:nth-child(2) .skeletonCell { width: 80%; }
+.skeletonRow td:nth-child(3) .skeletonCell { width: 50%; }
+.skeletonRow td:nth-child(4) .skeletonCell { width: 70%; }
+.skeletonRow td:nth-child(n+5) .skeletonCell { width: 55%; }
+
+@keyframes skeleton-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+/* ── Virtualisation meta ─────────────────────────────────────────────────── */
 
 .virtualizationMeta {
   padding: 0.5rem 0.75rem;
@@ -213,4 +256,107 @@
   .mobileCards .row > .selectionCell::before {
     content: none;
   }
+}
+
+/* ── Pagination ──────────────────────────────────────────────────────────── */
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-top: none;
+  border-radius: 0 0 0.75rem 0.75rem;
+  background: rgba(15, 23, 42, 0.75);
+  font-size: 0.82rem;
+  color: var(--text-muted, #94a3b8);
+}
+
+.paginationLeft {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.paginationInfo {
+  white-space: nowrap;
+}
+
+.pageSizeLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.pageSizeSelect {
+  appearance: none;
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 6px;
+  color: var(--text-primary, #f5f7fa);
+  font-size: 0.82rem;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.pageSizeSelect:focus {
+  outline: 2px solid var(--accent, #8b5cf6);
+  outline-offset: 1px;
+}
+
+.paginationControls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pageButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #8a93a3);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.pageButton:hover:not(:disabled) {
+  background: rgba(148, 163, 184, 0.1);
+  color: var(--text-primary, #f5f7fa);
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+.pageButton:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.pageButtonActive {
+  background: var(--accent-surface, rgba(99, 102, 241, 0.2));
+  border-color: var(--accent-border, rgba(99, 102, 241, 0.4));
+  color: var(--accent-text-strong, #a78bfa);
+  font-weight: 600;
+}
+
+.pageEllipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 30px;
+  font-size: 0.82rem;
+  color: var(--text-muted, #94a3b8);
+  pointer-events: none;
+  user-select: none;
 }

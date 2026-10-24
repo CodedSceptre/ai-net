@@ -4,6 +4,8 @@ Comprehensive reference for the **AI-Net Decentralized AI Agent Network API**.
 Covers authentication, error taxonomy, rate limits, idempotency, versioning,
 request/response schemas, and copy-paste `curl` examples for every endpoint.
 
+For API versioning rules, historical changes, deprecations, and migration examples, see the [API Changelog](./API_CHANGELOG.md).
+
 ---
 
 ## Table of Contents

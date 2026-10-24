@@ -8,6 +8,7 @@ import { join } from 'path';
 import { performance } from 'perf_hooks';
 import { request as httpRequest } from 'http';
 import type { AddressInfo } from 'net';
+import { taskFactory } from '../factories';
 
 type Percentile = 'p50' | 'p95' | 'p99';
 type EndpointName = 'list' | 'submit' | 'stream';
@@ -145,15 +146,14 @@ async function main(): Promise<void> {
     const streamTaskId = 'task_performance_stream';
     const walletPublicKey = PERF_WALLET;
     const now = new Date().toISOString();
-    taskStoreModule.createTask({
+    taskStoreModule.createTask(taskFactory.create({
       id: streamTaskId,
       prompt: 'Performance stream fixture',
       walletPublicKey,
       status: 'queued',
-      dag: [],
       createdAt: now,
       updatedAt: now,
-    });
+    }));
     eventStore.append({
       ...eventTypesModule.makeTaskCompleted(streamTaskId, now),
       taskSeq: 0,

@@ -147,7 +147,9 @@
   .fade-in,
   .slide-up,
   .scale-in,
-  .pulse {
+  .pulse,
+  .step-pulse,
+  .connector-fill {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
