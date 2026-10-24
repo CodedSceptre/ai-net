@@ -1,5 +1,5 @@
-import { Component, ErrorInfo, ReactNode } from 'react';
-import ServerErrorPage from '../../pages/ServerErrorPage';
+import { Component, ErrorInfo, ReactNode } from "react";
+import ServerErrorPage from "../../pages/ServerErrorPage";
 
 const GITHUB_ISSUES_URL = 'https://github.com/CodedSceptre/ai-net/issues/new';
 
@@ -26,7 +26,49 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     if (import.meta.env.DEV) {
-      console.error('ErrorBoundary caught an error:', error, errorInfo);
+      console.error("ErrorBoundary caught an error:", error, errorInfo);
+    }
+  }
+
+  public render() {
+    if (this.state.hasError) {
+      return (
+        <ServerErrorPage
+          error={this.state.error}
+          onRetry={() => this.setState({ hasError: false, error: null })}
+        />
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+export interface RouteErrorBoundaryProps {
+  label?: string;
+  children?: ReactNode;
+}
+
+export class RouteErrorBoundary extends Component<
+  RouteErrorBoundaryProps,
+  State
+> {
+  public state: State = {
+    hasError: false,
+    error: null,
+  };
+
+  public static getDerivedStateFromError(error: Error): State {
+    return { hasError: true, error };
+  }
+
+  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    if (import.meta.env.DEV) {
+      console.error(
+        `RouteErrorBoundary [${this.props.label ?? "Route"}] caught an error:`,
+        error,
+        errorInfo,
+      );
     }
   }
 
