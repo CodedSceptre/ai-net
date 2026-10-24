@@ -1,396 +1,155 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# monitoring/alert-rules.yml — Canary health alert definitions
-#
-# This file defines the CloudWatch alarm configurations that are created by
-# the ECS Terraform module (infra/modules/ecs/main.tf) and referenced by the
-# staging-deploy.yml workflow.
-#
-# Schema
-# ──────
-# Each entry under `alarms` maps to one CloudWatch MetricAlarm resource.
-# The Terraform module reads the canonical alarm names from its own outputs;
-# this file serves as the human-readable source of truth for:
-#  • what is being measured
-#  • why the threshold was chosen
-#  • what action to take when the alarm fires
-#
-# Canary decision logic (staging-deploy.yml)
-# ──────────────────────────────────────────
-# The workflow polls CloudWatch every 60 s for 10 minutes.
-# Two consecutive failing checks → automatic rollback.
-# Checks:
-#  1. CloudWatch alarm state (ALARM on any of the alarms below)
-#  2. Canary 5xx rate ≥ 2× stable 5xx rate (or > 10/min absolute)
-#  3. Canary p99 latency > 2 000 ms
-#  4. Canary unhealthy host count > 0
-# ─────────────────────────────────────────────────────────────────────────────
+# Prometheus alert rules for ai-net
+# Loaded by prometheus.yml when running the monitoring Docker Compose profile.
 
-# Global defaults applied to all alarms unless overridden per alarm
-defaults:
-  evaluation_periods: 2
-  period_seconds: 60
-  treat_missing_data: notBreaching
-  # Set to an SNS topic ARN in the environment's tfvars to receive pages
-  alarm_actions_sns_arn: ""
+groups:
+  - name: ai-net-backend
+    interval: 30s
+    rules:
+      # ── Service availability ─────────────────────────────────────────────
+      - alert: BackendDown
+        expr: ainet_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ai-net backend is down"
+          description: "The ai-net backend has been unreachable for more than 1 minute."
 
-alarms:
+      # ── High HTTP error rate ─────────────────────────────────────────────
+      - alert: HighHttpErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP 5xx error rate"
+          description: "More than 5% of HTTP requests are returning 5xx errors over the last 5 minutes (current: {{ $value | humanizePercentage }})."
 
-  # ── Canary ALB 5xx error rate ───────────────────────────────────────────────
-  canary_5xx_rate:
-    name_template: "{prefix}-canary-5xx-rate"
-    description: |
-      Canary target group is returning HTTP 5xx responses at a rate that
-      suggests the new version is broken.  The staging-deploy workflow will
-      automatically roll back when this alarm fires during the canary health
-      observation window (10 min × 60 s checks).
-    namespace: AWS/ApplicationELB
-    metric_name: HTTPCode_Target_5XX_Count
-    dimensions:
-      - name: LoadBalancer
-        value_from: alb_arn_suffix
-      - name: TargetGroup
-        value_from: canary_target_group_arn_suffix
-    statistic: Sum
-    period_seconds: 60
-    evaluation_periods: 2
-    # Fire when more than 5 server errors accumulate over two consecutive
-    # 60-second windows.  This is deliberately low for staging — tighten for
-    # production once baseline traffic is established.
-    threshold: 5
-    comparison_operator: GreaterThanThreshold
-    treat_missing_data: notBreaching
-    severity: critical
-    runbook: |
-      1. Check canary task logs: CloudWatch Logs /ecs/{prefix}/canary
-      2. Inspect recent commits on main for the introduced change.
-      3. If the workflow has not already rolled back, trigger a manual rollback
-         via workflow_dispatch → action=rollback.
-      4. Investigate root cause before re-deploying.
+      - alert: CriticalHttpErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.20
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical HTTP 5xx error rate"
+          description: "More than 20% of HTTP requests are returning 5xx errors (current: {{ $value | humanizePercentage }})."
 
-  # ── Canary unhealthy host count ─────────────────────────────────────────────
-  canary_unhealthy_hosts:
-    name_template: "{prefix}-canary-unhealthy-hosts"
-    description: |
-      One or more canary ECS tasks failed the ALB health check at
-      /health.  This usually means the container crashed on startup, is
-      OOM-killed, or has a mis-configured dependency (database, Venice AI,
-      Stellar RPC).
-    namespace: AWS/ApplicationELB
-    metric_name: UnHealthyHostCount
-    dimensions:
-      - name: LoadBalancer
-        value_from: alb_arn_suffix
-      - name: TargetGroup
-        value_from: canary_target_group_arn_suffix
-    statistic: Maximum
-    period_seconds: 60
-    evaluation_periods: 2
-    threshold: 0
-    comparison_operator: GreaterThanThreshold
-    treat_missing_data: notBreaching
-    severity: critical
-    runbook: |
-      1. Check canary task health in the ECS console or:
-           aws ecs describe-services --cluster {cluster} --services {canary_service}
-      2. Review container logs for the failing tasks:
-           /ecs/{prefix}/canary
-      3. Check /health endpoint responds 200:
-           curl -s http://<alb_dns>/health
-      4. Roll back via workflow_dispatch → action=rollback if the window
-         has not yet expired.
+      # ── HTTP latency ─────────────────────────────────────────────────────
+      - alert: HighHttpLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP p95 latency"
+          description: "95th percentile HTTP request latency exceeds 2 seconds (current: {{ $value }}s)."
 
-  # ── Canary p99 latency ───────────────────────────────────────────────────────
-  canary_p99_latency:
-    name_template: "{prefix}-canary-p99-latency"
-    description: |
-      Canary backend p99 response time exceeded 2 000 ms.  This may indicate
-      a slow database query, a blocking I/O regression, or a Venice AI
-      circuit-breaker firing more often than the stable version.
+      # ── Queue depth ──────────────────────────────────────────────────────
+      - alert: QueueDepthHigh
+        expr: ainet_queue_pending > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job queue depth is high"
+          description: "The job queue has more than 100 pending jobs for over 5 minutes (current: {{ $value }})."
 
-      Note: the staging-deploy workflow evaluates this metric inline via
-      get-metric-statistics rather than relying on this alarm; the alarm here
-      exists for out-of-band Grafana / PagerDuty alerting.
-    namespace: AWS/ApplicationELB
-    metric_name: TargetResponseTime
-    extended_statistic: p99
-    dimensions:
-      - name: LoadBalancer
-        value_from: alb_arn_suffix
-      - name: TargetGroup
-        value_from: canary_target_group_arn_suffix
-    # ALB reports TargetResponseTime in seconds; threshold is in seconds here
-    threshold: 2.0
-    comparison_operator: GreaterThanThreshold
-    period_seconds: 60
-    evaluation_periods: 2
-    treat_missing_data: notBreaching
-    severity: warning
-    runbook: |
-      1. Compare canary vs stable latency dashboards in Grafana
-         (ainet_http_request_duration_milliseconds{deploy_slot="canary"}).
-      2. Check if a slow dependency (SQLite, Venice AI, Stellar Horizon) is
-         the bottleneck using the ainet_dependency_* metrics.
-      3. Roll back if the latency increase is unacceptable:
-         workflow_dispatch → action=rollback.
+      - alert: QueueDepthCritical
+        expr: ainet_queue_pending > 500
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Job queue depth is critical"
+          description: "The job queue has more than 500 pending jobs (current: {{ $value }})."
 
-  # ── Canary payment failure rate ──────────────────────────────────────────────
-  canary_payment_failures:
-    name_template: "{prefix}-canary-payment-failures"
-    description: |
-      Rate of failed Stellar payment operations on the canary version.
-      Payment failures directly affect the agent economy; even a small
-      increase warrants immediate investigation.
+      # ── Database connection pools ────────────────────────────────────────
+      - alert: DatabasePoolWaitingQueueHigh
+        expr: db_pool_waiting_queue_size > 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SQLite connection pool is saturated"
+          description: "Database {{ $labels.database }} has more than 5 callers waiting for a connection for 1 minute."
 
-      This alarm uses a custom CloudWatch metric emitted by the backend
-      (ainet_payment_failed_total pushed via PutMetricData).  It will stay
-      in INSUFFICIENT_DATA if the canary has not yet processed any payments.
-    namespace: ai-net/backend
-    metric_name: payment_failed_count
-    dimensions:
-      - name: Environment
-        value: staging
-      - name: DeploySlot
-        value: canary
-    statistic: Sum
-    period_seconds: 60
-    evaluation_periods: 2
-    # Trigger if canary records more than 3 payment failures per minute
-    threshold: 3
-    comparison_operator: GreaterThanThreshold
-    treat_missing_data: notBreaching
-    severity: critical
-    runbook: |
-      1. Inspect payment logs:
-           aws logs filter-log-events \
-             --log-group-name /ecs/{prefix}/canary \
-             --filter-pattern '"payment" "error"'
-      2. Check Stellar Horizon connectivity from the canary tasks.
-      3. Verify STELLAR_SECRET_KEY and STELLAR_NETWORK_PASSPHRASE secrets
-         were not changed between the stable and canary task definitions.
-      4. Roll back immediately via workflow_dispatch → action=rollback.
+      # ── Task failures ────────────────────────────────────────────────────
+      - alert: HighTaskFailureRate
+        expr: |
+          (
+            sum(rate(tasks_failed_total[5m]))
+            /
+            (sum(rate(tasks_submitted_total[5m])) > 0)
+          ) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High task failure rate"
+          description: "More than 10% of submitted tasks are failing (current: {{ $value | humanizePercentage }})."
 
-  # ── Stable service unhealthy hosts (baseline) ────────────────────────────────
-  stable_unhealthy_hosts:
-    name_template: "{prefix}-stable-unhealthy-hosts"
-    description: |
-      One or more stable ECS tasks failed the ALB health check.  This is
-      not a canary-specific alarm but a baseline indicator that the stable
-      pool is degraded — used as context when comparing canary vs stable
-      error rates in the workflow.
-    namespace: AWS/ApplicationELB
-    metric_name: UnHealthyHostCount
-    dimensions:
-      - name: LoadBalancer
-        value_from: alb_arn_suffix
-      - name: TargetGroup
-        value_from: stable_target_group_arn_suffix
-    statistic: Maximum
-    period_seconds: 60
-    evaluation_periods: 3
-    threshold: 0
-    comparison_operator: GreaterThanThreshold
-    treat_missing_data: notBreaching
-    severity: warning
-    runbook: |
-      1. Inspect stable task logs: /ecs/{prefix}/stable
-      2. Check stable service health:
-           aws ecs describe-services --cluster {cluster} --services {stable_service}
-      3. Consider pausing new canary deployments until stable is healthy.
+      # ── Agent health ─────────────────────────────────────────────────────
+      - alert: AgentUnhealthy
+        expr: agent_health_status == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent {{ $labels.agent_id }} is unhealthy"
+          description: "Agent {{ $labels.agent_id }} has been reporting unhealthy status for more than 2 minutes."
 
-  # ── ECS CPU utilisation (canary) ─────────────────────────────────────────────
-  canary_cpu_utilisation:
-    name_template: "{prefix}-canary-cpu-high"
-    description: |
-      Canary ECS service average CPU utilisation exceeded 85 % for two
-      consecutive minutes.  A new version that is significantly more
-      CPU-intensive than the stable version should be investigated before
-      full promotion.
-    namespace: AWS/ECS
-    metric_name: CPUUtilization
-    dimensions:
-      - name: ClusterName
-        value_from: ecs_cluster_name
-      - name: ServiceName
-        value_from: canary_service_name
-    statistic: Average
-    period_seconds: 60
-    evaluation_periods: 2
-    threshold: 85
-    comparison_operator: GreaterThanThreshold
-    treat_missing_data: notBreaching
-    severity: warning
-    runbook: |
-      1. Check if the canary CPU spike is transient (startup JIT / caching) or
-         sustained.
-      2. Profile the new version locally under representative load.
-      3. If CPU remains elevated, roll back and investigate before re-deploying.
+      - alert: AllAgentsOffline
+        expr: sum(agent_health_status) == 0 and count(agent_health_status) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "All registered agents are offline"
+          description: "Every registered agent is reporting an unhealthy status."
 
-  # ── ECS memory utilisation (canary) ──────────────────────────────────────────
-  canary_memory_utilisation:
-    name_template: "{prefix}-canary-memory-high"
-    description: |
-      Canary ECS service average memory utilisation exceeded 85 %.
-      Approaching the task memory limit can cause OOM kills, which will
-      surface as unhealthy hosts on the canary target group.
-    namespace: AWS/ECS
-    metric_name: MemoryUtilization
-    dimensions:
-      - name: ClusterName
-        value_from: ecs_cluster_name
-      - name: ServiceName
-        value_from: canary_service_name
-    statistic: Average
-    period_seconds: 60
-    evaluation_periods: 2
-    threshold: 85
-    comparison_operator: GreaterThanThreshold
-    treat_missing_data: notBreaching
-    severity: warning
-    runbook: |
-      1. Check recent container restarts in the ECS console.
-      2. Compare heap usage between stable and canary versions via
-         ainet_process_heap_bytes{deploy_slot="canary"} in Grafana.
-      3. Increase task memory in var.task_memory if the increase is expected,
-         or roll back if it is a regression.
+      # ── Venice AI ────────────────────────────────────────────────────────
+      - alert: VeniceAIHighErrorRate
+        expr: |
+          (
+            sum(rate(venice_ai_calls_total{status="error"}[5m]))
+            /
+            sum(rate(venice_ai_calls_total[5m]))
+          ) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High Venice AI error rate"
+          description: "More than 10% of Venice AI calls are failing (current: {{ $value | humanizePercentage }})."
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Composite alarm — referenced directly by staging-deploy.yml as the primary
-# rollback trigger.  The workflow checks both individual alarms and this
-# composite to give a single ALARM/OK signal.
-# ─────────────────────────────────────────────────────────────────────────────
-composite_alarms:
-  canary_health_composite:
-    name_template: "{prefix}-canary-health"
-    description: |
-      Composite alarm that fires when any critical canary health signal is in
-      ALARM state.  The staging-deploy workflow polls this alarm during the
-      10-minute observation window and triggers an automatic rollback if it
-      enters ALARM state.
-    alarm_rule_template: |
-      ALARM("{prefix}-canary-5xx-rate")
-      OR ALARM("{prefix}-canary-unhealthy-hosts")
-      OR ALARM("{prefix}-canary-payment-failures")
-    severity: critical
+      # ── WebSocket connections ─────────────────────────────────────────────
+      - alert: WebSocketConnectionsHigh
+        expr: active_websocket_connections > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High number of active WebSocket connections"
+          description: "More than 100 active WebSocket connections for 5 minutes (current: {{ $value }})."
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Dashboard panels — describes what should appear in the Grafana / CloudWatch
-# canary health dashboard.  These are informational; they do not provision
-# resources directly.
-# ─────────────────────────────────────────────────────────────────────────────
-dashboard_panels:
-
-  canary_vs_stable_5xx:
-    title: "5xx Rate — Canary vs Stable"
-    type: timeseries
-    metrics:
-      - namespace: AWS/ApplicationELB
-        metric: HTTPCode_Target_5XX_Count
-        dimensions:
-          TargetGroup: "{canary_tg_arn_suffix}"
-        label: canary 5xx/min
-        stat: Sum
-        period: 60
-      - namespace: AWS/ApplicationELB
-        metric: HTTPCode_Target_5XX_Count
-        dimensions:
-          TargetGroup: "{stable_tg_arn_suffix}"
-        label: stable 5xx/min
-        stat: Sum
-        period: 60
-    annotations:
-      - label: "2× rollback threshold"
-        type: line
-
-  canary_vs_stable_p99:
-    title: "p99 Latency (ms) — Canary vs Stable"
-    type: timeseries
-    metrics:
-      - namespace: AWS/ApplicationELB
-        metric: TargetResponseTime
-        dimensions:
-          TargetGroup: "{canary_tg_arn_suffix}"
-        label: canary p99 ms
-        extended_stat: p99
-        period: 60
-        unit_multiplier: 1000   # ALB reports seconds; display in ms
-      - namespace: AWS/ApplicationELB
-        metric: TargetResponseTime
-        dimensions:
-          TargetGroup: "{stable_tg_arn_suffix}"
-        label: stable p99 ms
-        extended_stat: p99
-        period: 60
-        unit_multiplier: 1000
-    annotations:
-      - label: "2 000 ms rollback ceiling"
-        value: 2000
-        type: line
-
-  canary_unhealthy_hosts:
-    title: "Unhealthy Host Count — Canary"
-    type: timeseries
-    metrics:
-      - namespace: AWS/ApplicationELB
-        metric: UnHealthyHostCount
-        dimensions:
-          TargetGroup: "{canary_tg_arn_suffix}"
-        label: canary unhealthy hosts
-        stat: Maximum
-        period: 60
-
-  traffic_weights:
-    title: "ALB Traffic Split"
-    type: gauge
-    description: |
-      Shows the current effective traffic split between the stable and canary
-      target groups.  During a normal deployment this should read 90/10.
-      During promotion it briefly reads 0/100 then resets to 90/10.
-    note: |
-      ALB does not expose target group weights as a CloudWatch metric.
-      Use the AWS CLI to query live state:
-        aws elbv2 describe-listeners --listener-arns {http_listener_arn} \
-          --query 'Listeners[0].DefaultActions[0].ForwardConfig'
-
-  payment_failures:
-    title: "Payment Failures — Canary vs Stable"
-    type: timeseries
-    metrics:
-      - namespace: ai-net/backend
-        metric: payment_failed_count
-        dimensions:
-          DeploySlot: canary
-        label: canary payment failures/min
-        stat: Sum
-        period: 60
-      - namespace: ai-net/backend
-        metric: payment_failed_count
-        dimensions:
-          DeploySlot: stable
-        label: stable payment failures/min
-        stat: Sum
-        period: 60
-
-  canary_cpu_memory:
-    title: "CPU & Memory — Canary ECS Service"
-    type: timeseries
-    metrics:
-      - namespace: AWS/ECS
-        metric: CPUUtilization
-        dimensions:
-          ClusterName: "{ecs_cluster_name}"
-          ServiceName: "{canary_service_name}"
-        label: canary CPU %
-        stat: Average
-        period: 60
-      - namespace: AWS/ECS
-        metric: MemoryUtilization
-        dimensions:
-          ClusterName: "{ecs_cluster_name}"
-          ServiceName: "{canary_service_name}"
-        label: canary Memory %
-        stat: Average
-        period: 60
-    annotations:
-      - label: "85% warning threshold"
-        value: 85
-        type: line
+      # ── Memory pressure ──────────────────────────────────────────────────
+      - alert: HighMemoryUsage
+        expr: |
+          ainet_process_memory_heap_used_bytes / ainet_process_memory_heap_total_bytes > 0.90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High heap memory usage"
+          description: "Node.js heap usage exceeds 90% for 5 minutes."
