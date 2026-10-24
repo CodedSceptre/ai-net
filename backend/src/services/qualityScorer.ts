@@ -597,12 +597,10 @@ export function reputationDeltaForScore(score: number, neutralScore = 50, maxDel
 export function updateAgentReputation(
   agentId: string,
   delta: number,
-  outcome?: 'success' | 'failure',
+  event?: { taskId: string; nodeId: string; timestamp: string },
 ): void {
   try {
-    const db = createAgentDb(getAgentDb());
-    if (outcome) db.updateReputationWithStats(agentId, delta, outcome);
-    else db.updateReputation(agentId, delta);
+    createAgentDb(getAgentDb()).updateReputation(agentId, delta, event);
   } catch (err) {
     // Non-fatal: an agent absent from the local registry must not fail the DAG.
     log.warn({ err, agentId }, 'failed to update agent reputation');
