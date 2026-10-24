@@ -25,12 +25,12 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
-import { createTaskDb, getTaskDb } from '../../../db/tasks';
-import { getGlobalJobQueue, type JobQueue } from '../../../queue';
-import { createLogger } from '../../../utils/logger';
-import { getConfig } from '../../../config';
-import { PaymentService } from '../../../payment/payment';
-import { getDb } from '../../../db/index';
+import { createTaskDb, getTaskDb } from '../../db/tasks';
+import { getGlobalJobQueue, type JobQueue } from '../../queue';
+import { createLogger } from '../../utils/logger';
+import { getConfig } from '../../config';
+import { PaymentService } from '../../payment/payment';
+import { getDb } from '../../db/index';
 import { Keypair } from '@stellar/stellar-sdk';
 
 const log = createLogger({ component: 'cancel-task' });

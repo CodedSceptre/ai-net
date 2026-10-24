@@ -79,6 +79,10 @@ export function createAuthRouter(authService?: AuthService): Router {
    *               $ref: '#/components/schemas/TokenRefreshResponse'
    *       401:
    *         description: Invalid, expired, or reused refresh token
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/UnauthorizedError'
    */
   router.post("/refresh", validate(refreshTokenSchema), (req: Request, res: Response, next: NextFunction) => {
     try {

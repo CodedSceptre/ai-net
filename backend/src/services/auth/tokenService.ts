@@ -8,6 +8,7 @@ export interface AccessTokenPayload {
   iat: number; // seconds
   exp: number; // seconds
   jti: string; // unique token identifier
+  scope?: string | string[];
 }
 
 function base64UrlEncode(strOrBuffer: string | Buffer): string {
@@ -49,7 +50,7 @@ export class TokenService {
     sessionId: string;
     familyId: string;
     deviceId: string;
-    accessTokenTtlSeconds?: number;
+    scope?: string | string[];
   }): { token: string; expiresIn: number } {
     const now = Math.floor(Date.now() / 1000);
     const expiresIn = params.accessTokenTtlSeconds ?? this.accessTtlSeconds;
@@ -65,6 +66,7 @@ export class TokenService {
       iat: now,
       exp,
       jti,
+      ...(params.scope ? { scope: params.scope } : {}),
     };
 
     const encodedHeader = base64UrlEncode(JSON.stringify(header));
