@@ -17,8 +17,11 @@ import {
 import { tracingService } from "../services/tracing";
 import { currentTraceId } from "../services/traceContext";
 import { getConfig } from "../config";
+import { SequenceNumberManager } from "./sequenceManager";
+import { metricsService } from "../services/metrics";
 
 const MAX_RETRIES = 5;
+const MAX_SEQUENCE_CONFLICT_RETRIES = 3;
 
 /**
  * Determines whether a Horizon submission error is safe to retry.
@@ -71,6 +74,24 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Returns true when the Horizon error indicates a sequence-number conflict.
+ * This happens when two transactions were built from the same account state
+ * concurrently and one of them was submitted after the other already advanced
+ * the sequence number.
+ */
+function isBadSeq(err: unknown): boolean {
+  const extras =
+    (
+      err as {
+        response?: {
+          data?: { extras?: { result_codes?: { transaction?: string } } };
+        };
+      }
+    )?.response?.data?.extras?.result_codes?.transaction ?? "";
+  return extras === "tx_bad_seq" || /tx_bad_seq|bad sequence/i.test(String((err as { message?: string })?.message ?? ""));
+}
+
 export interface PaymentServiceHooks {
   /**
    * Invoked after a payment is successfully released on-chain so callers can
@@ -96,6 +117,8 @@ export interface PaymentServiceHooks {
 export class PaymentService {
   private server: Server;
   private networkPassphrase: string;
+  /** Serialises Stellar submissions per source account to prevent tx_bad_seq. */
+  private sequenceManager = new SequenceNumberManager();
 
   constructor(
     private db: PaymentDb,
@@ -149,45 +172,60 @@ export class PaymentService {
       : null;
 
     try {
-      const amountStroops = xlmToStroops(amountXLM);
-      const amountStr = stroopsToXlm(amountStroops);
+      const balanceId = await this.withSequenceRetry(
+        coordinatorKeypair.publicKey(),
+        async () => {
+          const amountStroops = xlmToStroops(amountXLM);
+          const amountStr = stroopsToXlm(amountStroops);
 
-      const account = await withRetry(() =>
-        this.server.loadAccount(coordinatorKeypair.publicKey())
+          /**
+           * Inner helper: load account, build, sign, and submit a lock tx.
+           * Extracted so we can retry once on tx_bad_seq with a freshly loaded
+           * account (and therefore a fresh sequence number).
+           */
+          const buildAndSubmit = async (): Promise<string> => {
+            const account = await withRetry(() =>
+              this.server.loadAccount(coordinatorKeypair.publicKey())
+            );
+
+            const tx = new TransactionBuilder(account, {
+              fee: BASE_FEE,
+              networkPassphrase: this.networkPassphrase,
+            })
+              .addOperation(
+                Operation.createClaimableBalance({
+                  asset: Asset.native(),
+                  amount: amountStr,
+                  claimants: [
+                    new Claimant(agentPublicKey, Claimant.predicateUnconditional()),
+                    new Claimant(coordinatorKeypair.publicKey(), Claimant.predicateUnconditional()),
+                  ],
+                })
+              )
+              .setTimeout(30)
+              .build();
+
+            // Derive balance ID before signing — deterministic from the operation
+            const bid = tx.getClaimableBalanceId(0);
+            tx.sign(coordinatorKeypair);
+            await withRetry(() => this.server.submitTransaction(tx));
+            return bid;
+          };
+
+          const bid = await buildAndSubmit();
+
+          this.db.insert({
+            taskId,
+            nodeId,
+            balanceId: bid,
+            status: "locked",
+            amountStroops,
+            txHash: null,
+          });
+
+          return bid;
+        },
       );
-
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(
-          Operation.createClaimableBalance({
-            asset: Asset.native(),
-            amount: amountStr,
-            claimants: [
-              new Claimant(agentPublicKey, Claimant.predicateUnconditional()),
-              new Claimant(coordinatorKeypair.publicKey(), Claimant.predicateUnconditional()),
-            ],
-          })
-        )
-        .setTimeout(30)
-        .build();
-
-      // Derive balance ID before signing — deterministic from the operation
-      const balanceId = tx.getClaimableBalanceId(0);
-
-      tx.sign(coordinatorKeypair);
-
-      await withRetry(() => this.server.submitTransaction(tx));
-
-      this.db.insert({
-        taskId,
-        nodeId,
-        balanceId,
-        status: "locked",
-        amountStroops,
-        txHash: null,
-      });
 
       if (span) tracingService.endSpan(span.spanId, 'completed', { balanceId });
       return balanceId;
@@ -232,24 +270,22 @@ export class PaymentService {
       : null;
 
     try {
-      const account = await withRetry(() =>
-        this.server.loadAccount(coordinatorKeypair.publicKey())
+      const txHash = await this.withSequenceRetry(
+        coordinatorKeypair.publicKey(),
+        async () => {
+          const account = await withRetry(() => this.server.loadAccount(coordinatorKeypair.publicKey()));
+          const tx = new TransactionBuilder(account, {
+            fee: BASE_FEE,
+            networkPassphrase: this.networkPassphrase,
+          })
+            .addOperation(Operation.claimClaimableBalance({ balanceId: record.balanceId }))
+            .setTimeout(30)
+            .build();
+          tx.sign(coordinatorKeypair);
+          const result = await withRetry(() => this.server.submitTransaction(tx));
+          return (result as unknown as { hash: string }).hash;
+        },
       );
-
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(
-          Operation.claimClaimableBalance({ balanceId: record.balanceId })
-        )
-        .setTimeout(30)
-        .build();
-
-      tx.sign(coordinatorKeypair);
-
-      const result = await withRetry(() => this.server.submitTransaction(tx));
-      const txHash = (result as unknown as { hash: string }).hash;
 
       this.db.updateStatus(taskId, nodeId, "released", txHash);
 
@@ -295,24 +331,22 @@ export class PaymentService {
       throw new PaymentAlreadyReleasedError(taskId, nodeId);
     }
 
-    const account = await withRetry(() =>
-      this.server.loadAccount(coordinatorKeypair.publicKey())
+    const txHash = await this.withSequenceRetry(
+      coordinatorKeypair.publicKey(),
+      async () => {
+        const account = await withRetry(() => this.server.loadAccount(coordinatorKeypair.publicKey()));
+        const tx = new TransactionBuilder(account, {
+          fee: BASE_FEE,
+          networkPassphrase: this.networkPassphrase,
+        })
+          .addOperation(Operation.claimClaimableBalance({ balanceId: record.balanceId }))
+          .setTimeout(30)
+          .build();
+        tx.sign(coordinatorKeypair);
+        const result = await withRetry(() => this.server.submitTransaction(tx));
+        return (result as unknown as { hash: string }).hash;
+      },
     );
-
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        Operation.claimClaimableBalance({ balanceId: record.balanceId })
-      )
-      .setTimeout(30)
-      .build();
-
-    tx.sign(coordinatorKeypair);
-
-    const result = await withRetry(() => this.server.submitTransaction(tx));
-    const txHash = (result as unknown as { hash: string }).hash;
 
     this.db.updateStatus(taskId, nodeId, "refunded", txHash);
     return txHash;
@@ -327,5 +361,21 @@ export class PaymentService {
    */
   getPaymentStatus(taskId: string, nodeId: string): PaymentRecord | undefined {
     return this.db.findByKey(taskId, nodeId);
+  }
+
+  private withSequenceRetry<T>(publicKey: string, submit: () => Promise<T>): Promise<T> {
+    return this.sequenceManager.withAccount(publicKey, async () => {
+      let retries = 0;
+      while (true) {
+        try {
+          return await submit();
+        } catch (error) {
+          if (!isBadSeq(error)) throw error;
+          metricsService.recordStellarSequenceConflict();
+          if (retries >= MAX_SEQUENCE_CONFLICT_RETRIES) throw error;
+          retries += 1;
+        }
+      }
+    });
   }
 }
