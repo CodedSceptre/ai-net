@@ -234,6 +234,18 @@ function collectAgentMetrics(): string {
 
     const total = rows.reduce((sum, r) => sum + (Number(r.count) || 0), 0);
     out += formatGauge('ainet_agents_count', 'Total agent count', total);
+
+    // agents_cleaned_total counter (Issue #402)
+    try {
+      const { getAgentsCleanedTotal } = require('./agentCleanup') as typeof import('./agentCleanup');
+      out += formatCounter(
+        'ainet_agents_cleaned_total',
+        'Total agents fully cleaned up after deregistration',
+        getAgentsCleanedTotal(),
+      );
+    } catch {
+      // module may not be loaded yet; non-fatal
+    }
   } catch (err) {
     logger.debug({ err }, 'agent metrics unavailable');
   }

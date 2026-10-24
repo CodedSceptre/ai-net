@@ -1,86 +1,155 @@
+# Prometheus alert rules for ai-net
+# Loaded by prometheus.yml when running the monitoring Docker Compose profile.
+
 groups:
-  - name: ai-net-p1
+  - name: ai-net-backend
+    interval: 30s
     rules:
-      - alert: api_down
-        expr: absent(ainet_up) or ainet_up == 0
+      # ── Service availability ─────────────────────────────────────────────
+      - alert: BackendDown
+        expr: ainet_up == 0
         for: 1m
         labels:
-          severity: P1
-          service: ai-net-api
+          severity: critical
         annotations:
-          summary: ai-net API is unavailable
-          description: The ai-net Prometheus health metric is missing or reports the API as down.
+          summary: "ai-net backend is down"
+          description: "The ai-net backend has been unreachable for more than 1 minute."
 
-      - alert: payment_failure_rate
-        expr: sum(ainet_payments_total{status=~"failed|refunded"}) / clamp_min(sum(ainet_payments_total), 1) > 0.05
+      # ── High HTTP error rate ─────────────────────────────────────────────
+      - alert: HighHttpErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.05
         for: 5m
         labels:
-          severity: P1
-          service: ai-net-payments
+          severity: warning
         annotations:
-          summary: Payment failure rate exceeds 5%
-          description: More than 5% of recorded payments failed or were refunded. Refunds are the persisted failure proxy in the current payment schema.
+          summary: "High HTTP 5xx error rate"
+          description: "More than 5% of HTTP requests are returning 5xx errors over the last 5 minutes (current: {{ $value | humanizePercentage }})."
 
-      - alert: all_agents_offline
-        expr: (sum(ainet_agents_total{status="online"}) or vector(0)) == 0
+      - alert: CriticalHttpErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.20
         for: 2m
         labels:
-          severity: P1
-          service: ai-net-agents
+          severity: critical
         annotations:
-          summary: All agents are offline
-          description: No active agents are currently registered.
+          summary: "Critical HTTP 5xx error rate"
+          description: "More than 20% of HTTP requests are returning 5xx errors (current: {{ $value | humanizePercentage }})."
 
-  - name: ai-net-p2
-    rules:
-      - alert: db_pool_exhausted
-        expr: sum(ainet_db_pool_pending_acquires) > 0
+      # ── HTTP latency ─────────────────────────────────────────────────────
+      - alert: HighHttpLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP p95 latency"
+          description: "95th percentile HTTP request latency exceeds 2 seconds (current: {{ $value }}s)."
+
+      # ── Queue depth ──────────────────────────────────────────────────────
+      - alert: QueueDepthHigh
+        expr: ainet_queue_pending > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job queue depth is high"
+          description: "The job queue has more than 100 pending jobs for over 5 minutes (current: {{ $value }})."
+
+      - alert: QueueDepthCritical
+        expr: ainet_queue_pending > 500
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Job queue depth is critical"
+          description: "The job queue has more than 500 pending jobs (current: {{ $value }})."
+
+      # ── Database connection pools ────────────────────────────────────────
+      - alert: DatabasePoolWaitingQueueHigh
+        expr: db_pool_waiting_queue_size > 5
         for: 1m
         labels:
-          severity: P2
-          service: ai-net-database
+          severity: warning
         annotations:
-          summary: Database pool has waiting requests
-          description: One or more callers are waiting to acquire a database connection.
+          summary: "SQLite connection pool is saturated"
+          description: "Database {{ $labels.database }} has more than 5 callers waiting for a connection for 1 minute."
 
-      - alert: task_dlq_depth
-        expr: ainet_queue_dead_letter_depth > 10
+      # ── Task failures ────────────────────────────────────────────────────
+      - alert: HighTaskFailureRate
+        expr: |
+          (
+            sum(rate(tasks_failed_total[5m]))
+            /
+            (sum(rate(tasks_submitted_total[5m])) > 0)
+          ) > 0.10
         for: 5m
         labels:
-          severity: P2
-          service: ai-net-task-queue
+          severity: warning
         annotations:
-          summary: Task dead-letter queue exceeds 10 jobs
-          description: The task dead-letter queue has accumulated more than 10 jobs.
+          summary: "High task failure rate"
+          description: "More than 10% of submitted tasks are failing (current: {{ $value | humanizePercentage }})."
 
-      - alert: p99_latency
-        expr: histogram_quantile(0.99, sum by (le) (ainet_http_request_duration_milliseconds_bucket)) > 2000
+      # ── Agent health ─────────────────────────────────────────────────────
+      - alert: AgentUnhealthy
+        expr: agent_health_status == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent {{ $labels.agent_id }} is unhealthy"
+          description: "Agent {{ $labels.agent_id }} has been reporting unhealthy status for more than 2 minutes."
+
+      - alert: AllAgentsOffline
+        expr: sum(agent_health_status) == 0 and count(agent_health_status) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "All registered agents are offline"
+          description: "Every registered agent is reporting an unhealthy status."
+
+      # ── Venice AI ────────────────────────────────────────────────────────
+      - alert: VeniceAIHighErrorRate
+        expr: |
+          (
+            sum(rate(venice_ai_calls_total{status="error"}[5m]))
+            /
+            sum(rate(venice_ai_calls_total[5m]))
+          ) > 0.10
         for: 5m
         labels:
-          severity: P2
-          service: ai-net-api
+          severity: warning
         annotations:
-          summary: API p99 latency exceeds 2 seconds
-          description: The rolling HTTP request histogram reports p99 latency above 2 seconds.
+          summary: "High Venice AI error rate"
+          description: "More than 10% of Venice AI calls are failing (current: {{ $value | humanizePercentage }})."
 
-  - name: ai-net-p3
-    rules:
-      - alert: disk_usage
-        expr: (1 - node_filesystem_avail_bytes{fstype!="tmpfs", mountpoint!="/boot"} / node_filesystem_size_bytes{fstype!="tmpfs", mountpoint!="/boot"}) * 100 > 80
-        for: 10m
+      # ── WebSocket connections ─────────────────────────────────────────────
+      - alert: WebSocketConnectionsHigh
+        expr: active_websocket_connections > 100
+        for: 5m
         labels:
-          severity: P3
-          service: ai-net-host
+          severity: warning
         annotations:
-          summary: Disk usage exceeds 80%
-          description: A monitored host filesystem is more than 80% full.
+          summary: "High number of active WebSocket connections"
+          description: "More than 100 active WebSocket connections for 5 minutes (current: {{ $value }})."
 
-      - alert: cache_miss_rate
-        expr: rate(ainet_cache_misses_total[5m]) / clamp_min(rate(ainet_cache_misses_total[5m]) + rate(ainet_cache_hits_total[5m]), 1) > 0.5
-        for: 10m
+      # ── Memory pressure ──────────────────────────────────────────────────
+      - alert: HighMemoryUsage
+        expr: |
+          ainet_process_memory_heap_used_bytes / ainet_process_memory_heap_total_bytes > 0.90
+        for: 5m
         labels:
-          severity: P3
-          service: ai-net-cache
+          severity: warning
         annotations:
-          summary: Cache miss rate exceeds 50%
-          description: More than half of cache lookups missed over the last five minutes.
+          summary: "High heap memory usage"
+          description: "Node.js heap usage exceeds 90% for 5 minutes."
