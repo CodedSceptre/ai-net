@@ -9,6 +9,10 @@ import { getMarkdown } from '../../utils/agentUtils';
 import ThemeContext from '../../context/ThemeContext';
 import CopyButton from '../common/CopyButton';
 import CollapsibleSection from '../common/CollapsibleSection';
+import { useLightbox } from '../../hooks/useLightbox';
+import type { LightboxImage } from '../../hooks/useLightbox';
+import { ImageLightbox } from '../common/ImageLightbox';
+import '../../styles/report.css';
 
 interface Props {
   result: ResearchReportResult | null | undefined;
@@ -132,6 +136,19 @@ const ResearchReportRenderer: React.FC<Props> = ({ result, searchQuery }) => {
               </code>
             );
           },
+          img({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
+            const imageIndex = images.findIndex((image) => image.url === src);
+            return (
+              <button
+                type="button"
+                onClick={() => lightbox.openLightbox(images, Math.max(imageIndex, 0))}
+                aria-label={`Open image: ${alt || title || 'report image'}`}
+                style={{ display: 'block', maxWidth: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}
+              >
+                <img src={src} alt={alt ?? ''} title={title} style={{ maxWidth: '100%', height: 'auto' }} />
+              </button>
+            );
+          },
           a({ href, children }: any) {
             return (
               <a
@@ -208,6 +225,24 @@ const ResearchReportRenderer: React.FC<Props> = ({ result, searchQuery }) => {
         {markdown}
       </ReactMarkdown>
     </div>
+      <ImageLightbox
+        isOpen={lightbox.isOpen}
+        images={lightbox.images}
+        currentIndex={lightbox.currentIndex}
+        scale={lightbox.scale}
+        position={lightbox.position}
+        onClose={lightbox.closeLightbox}
+        onPrev={lightbox.prevImage}
+        onNext={lightbox.nextImage}
+        onSelectIndex={lightbox.setIndex}
+        onZoomIn={lightbox.zoomIn}
+        onZoomOut={lightbox.zoomOut}
+        onResetZoom={lightbox.resetZoom}
+        onWheel={lightbox.handleWheel}
+        onPinch={lightbox.handlePinch}
+        onPositionChange={lightbox.setPosition}
+      />
+    </>
   );
 
   if (isLongReport) {

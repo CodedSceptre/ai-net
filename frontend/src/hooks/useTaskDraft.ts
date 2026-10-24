@@ -7,9 +7,12 @@ export interface TaskDraft {
   agentPreferences: AgentPreference[];
   /** The wizard step the user was on, so returning restores their place. */
   currentStep: number;
+  selectedAgentId?: string;
+  savedAt?: string;
 }
 
-export const TASK_DRAFT_STORAGE_KEY = 'task_draft_v1';
+export const TASK_DRAFT_STORAGE_KEY = 'draft_v1_task_form';
+export const LEGACY_TASK_DRAFT_STORAGE_KEY = 'task_draft_v1';
 
 const TOTAL_STEPS = 3;
 const DEFAULT_BUDGET = 0.1;
@@ -51,6 +54,9 @@ export function loadTaskDraft(): TaskDraft | null {
         typeof parsed.currentStep === 'number'
           ? Math.min(Math.max(1, Math.round(parsed.currentStep)), TOTAL_STEPS)
           : 1,
+      selectedAgentId:
+        typeof parsed.selectedAgentId === 'string' ? parsed.selectedAgentId : undefined,
+      savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : undefined,
     };
   } catch {
     return null;

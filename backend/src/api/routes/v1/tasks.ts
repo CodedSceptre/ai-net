@@ -43,10 +43,7 @@ export function createV1TasksRouter(
   // POST /api/tasks — v1 format, idempotent
   tasksRouter.post("/", idempotencyMiddleware, rateLimitMiddleware, validate(createTaskSchema), (req: Request, res: Response): void => {
     const { prompt, priority } = req.body as z.infer<typeof createTaskSchema>;
-    const walletPublicKey: string =
-      (req.body as z.infer<typeof createTaskSchema>).walletPublicKey ??
-      (req.headers["walletpublickey"] as string | undefined) ??
-      "anonymous";
+    const walletPublicKey = req.user!.sub;
 
     const dailyTaskLimit = getConfig().DAILY_TASK_LIMIT_PER_WALLET;
     if (dailyTaskLimit > 0 && walletPublicKey !== "anonymous") {
@@ -138,7 +135,7 @@ export function createV1TasksRouter(
       res.status(404).json({ error: "Task not found" });
       return;
     }
-    const requesterKey = req.headers["walletpublickey"] as string;
+    const requesterKey = req.user?.sub;
     if (!requesterKey || requesterKey !== task.walletPublicKey) {
       res.status(403).json({ error: "Access denied" });
       return;
