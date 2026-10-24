@@ -6,6 +6,45 @@ import NotificationItem from './NotificationItem';
 import type { AppNotification } from '../../types/notification';
 import './NotificationCenter.css';
 
+export const NOTIFICATION_PANEL_ID = 'notification-panel';
+export const NOTIFICATION_PANEL_TITLE_ID = 'notification-panel-title';
+export const MAX_RECENT_NOTIFICATIONS = 5;
+
+type NotificationCategory = 'payment' | 'task' | 'system';
+
+const GROUP_ORDER: NotificationCategory[] = ['payment', 'task', 'system'];
+
+const GROUP_LABELS: Record<NotificationCategory, string> = {
+  payment: 'Payment',
+  task: 'Task',
+  system: 'System',
+};
+
+/** Maps every notification type to the category it is displayed under. */
+export function getNotificationCategory(type: NotificationType): NotificationCategory {
+  switch (type) {
+    case 'payment_received':
+    case 'payment':
+      return 'payment';
+    case 'task_completed':
+    case 'task_failed':
+    case 'task':
+      return 'task';
+    case 'agent_registered':
+    case 'agent':
+    case 'system':
+    default:
+      return 'system';
+  }
+}
+
+interface NotificationGroup {
+  category: NotificationCategory;
+  label: string;
+  notifications: AppNotification[];
+  unreadCount: number;
+}
+
 export interface NotificationPanelProps {
   isOpen: boolean;
   onClose: () => void;
@@ -52,12 +91,25 @@ export const NotificationPanel: React.FC<NotificationPanelProps> = ({
   const [activeTab, setActiveTab] = useState<NotificationFilterTab>('all');
   const panelRef = useRef<HTMLDivElement>(null);
 
+  const handleClose = useCallback(() => {
+    onClose();
+    anchorRef?.current?.focus();
+  }, [onClose, anchorRef]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    // Move focus into the dialog so keyboard and screen-reader users land in
+    // the panel as soon as it opens.
+    panelRef.current?.focus();
+  }, [isOpen]);
+
   useEffect(() => {
     if (!isOpen) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose();
+        handleClose();
       }
     };
 
@@ -67,7 +119,7 @@ export const NotificationPanel: React.FC<NotificationPanelProps> = ({
         if (anchorRef?.current && anchorRef.current.contains(target)) {
           return;
         }
-        onClose();
+        handleClose();
       }
     };
 
@@ -78,7 +130,7 @@ export const NotificationPanel: React.FC<NotificationPanelProps> = ({
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [isOpen, onClose, anchorRef]);
+  }, [isOpen, handleClose, anchorRef]);
 
   // Sort notifications newest first
   const sortedNotifications = useMemo(() => {

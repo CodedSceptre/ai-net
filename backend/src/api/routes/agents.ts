@@ -7,7 +7,7 @@ import { NotFoundError, ValidationError, UnauthorizedError, AppError } from "../
 import { cacheMiddleware } from "../middleware/cache";
 import { invalidateAgentsCache } from "../../cache/invalidation";
 import { ttlForRoute } from "../../config";
-import { requireWalletAuthMiddleware } from "../middleware/auth";
+,import { requireWalletAuthMiddleware } from "../middleware/auth";
 import {
   calculateReputationBreakdown,
   computeReputationDelta,
