@@ -48,6 +48,19 @@ pub struct TaskMetadata {
     /// Asset pair used to fetch the quoted price (e.g. `XLM_USD`).
     /// `None` when `quoted_price_stroops` is `None`.
     pub price_pair: Option<Symbol>,
+    /// Task maximum budget.
+    pub max_budget: Option<i128>,
+    /// Task minimum acceptable reserve price.
+    pub reserve_price: Option<i128>,
+}
+
+/// Recorded outcome of on-chain weighted task assignment.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskAssignmentRecord {
+    pub winning_agent: Address,
+    pub selection_weights: Vec<u32>,
+    pub selection_seed: u32,
 }
 
 #[contracttype]
@@ -64,6 +77,10 @@ pub enum DataKey {
     /// Coordinator address — the only address permitted to call coordinator functions
     /// such as `assign_task`, `release_funds`, and `fail_task`.
     Coordinator,
+    /// Optional reputation contract address.
+    ReputationContract,
+    /// Recorded weighted task assignment result.
+    TaskAssignment(BytesN<32>),
 }
 
 /// Emitted exactly once per successful `store_task_metadata` call, under
@@ -132,22 +149,16 @@ pub struct CoordinatorSetEvent {
     pub coordinator: Address,
 }
 
-/// Emitted when the contract is upgraded via `upgrade`.
+/// Emitted when a task is assigned to an agent via weighted selection or direct assignment.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ContractUpgradedEvent {
-    /// Schema version of this event payload.
+pub struct TaskAssignedEvent {
     pub version: u32,
-    /// The contract version before the upgrade.
-    pub old_version: String,
-    /// The new contract version after the upgrade.
-    pub new_version: String,
-    /// The new WASM hash deployed.
-    pub new_wasm_hash: BytesN<32>,
-    /// The admin address that authorized the upgrade.
-    pub admin: Address,
-    /// The ledger sequence at which the upgrade was applied.
-    pub ledger_sequence: u32,
+    pub task_id: BytesN<32>,
+    pub agent: Address,
+    pub weight: u32,
+    pub seed: u32,
+    pub ledger: u32,
 }
 
 #[contracterror]
@@ -175,4 +186,6 @@ pub enum Error {
     SelfAssignmentNotAllowed = 17,
     /// Task must be in `Completed` status before funds can be released.
     TaskNotCompleted = 18,
+    /// Candidates list for assignment cannot be empty.
+    EmptyCandidates = 19,
 }

@@ -9,9 +9,11 @@ import { useTransactionHistory } from '../hooks/useTransactionHistory'
 import { SendXLMForm } from '../components/wallet/SendXLMForm'
 import { PaymentChart } from '../components/wallet/PaymentChart'
 import { TransactionTable } from '../components/wallet/TransactionTable'
+import { PaymentFeedback } from '../components/wallet/PaymentFeedback'
 import { WalletWizard } from '../components/wallet/WalletWizard'
 import { Skeleton, SkeletonAvatar, SkeletonCard, SkeletonText } from '../components/common/Skeleton'
 import { ConfirmDialog } from '../components/common/ConfirmDialog'
+import { formatXLM } from '../utils/format'
 import styles from './WalletPage.module.css'
 
 const STELLAR_EXPLORER = 'https://stellar.expert/explorer/testnet'
@@ -35,7 +37,10 @@ export function WalletPageSkeleton() {
       <div className={styles.balanceCardSkeleton}>
         <div className={styles.balanceSkeletonSection}>
           <Skeleton width="10rem" height="0.75rem" />
-          <Skeleton width="14rem" height="2rem" />
+          <div className={styles.balanceValueSkeleton}>
+            <Skeleton width="14rem" height="2rem" />
+            <Skeleton width="2.5rem" height="1rem" />
+          </div>
         </div>
         <div className={styles.publicKeySkeleton}>
           <SkeletonAvatar size={116} data-testid="wallet-qr-skeleton" />
@@ -60,9 +65,9 @@ export function WalletPageSkeleton() {
 }
 
 function WalletPage() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { publicKey, connected, ready, connectionMethod, freighterAvailable, connect, connectFreighter, disconnect, hasCompletedWizard } = useWallet()
-  const { balance, balances, loading: balanceLoading, error: balanceError } = useWalletBalance(publicKey)
+  const { balance, balances, availableBalance, subentryCount, loading: balanceLoading, error: balanceError, didChange } = useWalletBalance(publicKey)
   const { showToast } = useToast()
   const { transactions, loading: txLoading, error: txError } = useTransactionHistory(publicKey)
   const [secretInput, setSecretInput] = React.useState('')
@@ -124,18 +129,42 @@ function WalletPage() {
 
   const balanceDisplay = useMemo(() => {
     if (balanceLoading) {
-      return <div className={styles.balanceSkeleton} aria-busy="true" />
+      return (
+        <div className={styles.balanceValueSkeleton} aria-busy="true">
+          <Skeleton width="14rem" height="2rem" />
+          <Skeleton width="2.5rem" height="1rem" />
+        </div>
+      )
     }
     if (balanceError) {
       return <span className={styles.balanceError}>—</span>
     }
+    const formattedTotal = formatXLM(balance, i18n.language)
+    const formattedAvailable = formatXLM(availableBalance, i18n.language)
+    const reserveXLM = (1 + 0.5 * subentryCount).toFixed(1)
+
     return (
-      <span className={styles.balanceAmount}>
-        {parseFloat(balance).toFixed(7)}{' '}
-        <span className={styles.balanceLabel}>XLM</span>
-      </span>
+      <div>
+        <span
+          className={`${styles.balanceAmount}${didChange ? ` ${styles.balanceChanged}` : ''}`}
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {formattedTotal}{' '}
+          <span className={styles.balanceLabel}>XLM</span>
+        </span>
+        <div className={styles.availableBalanceRow}>
+          <span className={styles.availableBalanceAmount}>
+            {formattedAvailable}
+          </span>
+          <span className={styles.availableBalanceLabel}>XLM {t('wallet.availableLabel')}</span>
+        </div>
+        <p className={styles.reserveNote}>
+          {t('wallet.reserveNote', { reserve: reserveXLM })}
+        </p>
+      </div>
     )
-  }, [balance, balanceLoading, balanceError])
+  }, [balance, availableBalance, subentryCount, balanceLoading, balanceError, didChange, i18n.language, t])
 
   const balanceChips = useMemo(() => {
     const tokenBalances = balances.filter((entry) => entry.asset_type !== 'native')
@@ -349,6 +378,8 @@ function WalletPage() {
           {t('nav.wallet')}
         </h1>
       </div>
+
+      <PaymentFeedback />
 
       {/* Balance Card */}
       <div className={styles.balanceCard}>
