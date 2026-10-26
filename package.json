@@ -18,7 +18,7 @@
     "lint-staged": "lint-staged"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "12.3.0",
+    "@stellar/stellar-sdk": "17.3.0",
     "better-sqlite3": "^9.6.0",
     "cors": "^2.8.5",
     "express": "^4.22.3",
