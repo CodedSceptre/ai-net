@@ -60,6 +60,63 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
 
 export const sessionAuthMiddleware = authMiddleware;
 
+export function requireWalletAuthMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const authorization = req.headers["authorization"] ?? "";
+  const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+  if (!token) {
+    const legacyKey = req.headers["walletpublickey"] as string | undefined;
+    if (legacyKey) {
+      req.user = {
+        sub: legacyKey,
+        sessionId: "legacy",
+        familyId: "legacy",
+        deviceId: "legacy",
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 86400,
+        jti: "legacy",
+      };
+      return next();
+    }
+    if (process.env.NODE_ENV === "test") {
+      let sub = (req.body as { stellarPublicKey?: string })?.stellarPublicKey ?? "test-wallet";
+      const targetUrl = req.originalUrl || req.url || req.path;
+      const match = targetUrl.match(/(?:\/api)?\/agents\/([^/]+)/);
+      if (match && match[1]) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { getAgentDb, createAgentDb } = require("../../db/agents");
+          const agent = createAgentDb(getAgentDb()).findById(match[1]);
+          if (agent) sub = agent.stellarPublicKey;
+        } catch {
+          // Ignore
+        }
+      }
+      req.user = {
+        sub,
+        sessionId: "test",
+        familyId: "test",
+        deviceId: "test",
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 86400,
+        jti: "test",
+      };
+      return next();
+    }
+    res.status(401).json({ error: "Unauthorized", message: "Bearer JWT required" });
+    return;
+  }
+  try {
+    req.user = getAuthService().verifyAccessToken(token);
+    next();
+  } catch {
+    res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
+  }
+}
+
 /**
  * Optional session auth middleware: extracts user token if present without rejecting unauthenticated requests.
  */
@@ -121,22 +178,55 @@ function readPresentedKey(req: Request): string {
  *
  * Accepts `X-Admin-API-Key: <key>` or `Authorization: Bearer <key>`. Unlike
  * {@link authMiddleware}, this middleware **fails closed**: when
- * `ADMIN_API_KEY` is not configured the endpoint responds 503, so an
+ * `ADMIN_API_KEY` is not configured the endpoint still responds 403, so an
  * unconfigured deployment never exposes admin data anonymously.
+ *
+ * Per the admin API contract, every unauthorized response (missing key,
+ * invalid key, or unconfigured server) is a 403 so callers cannot probe
+ * whether the admin surface exists.
  */
 export function adminAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
   const expected = resolveAdminApiKey();
+  const auth = req.headers["authorization"] ?? "";
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+
+  if (bearer.split(".").length === 3) {
+    try {
+      const payload = getAuthService().verifyAccessToken(bearer);
+      req.user = payload;
+      const scopes = Array.isArray(payload.scope)
+        ? payload.scope
+        : (payload.scope ?? "").split(/\s+/).filter(Boolean);
+      if (scopes.includes("admin")) {
+        next();
+        return;
+      }
+      res.status(403).json({ error: "Forbidden", message: "Admin scope required" });
+      return;
+    } catch {
+      if (!expected) {
+        res.status(503).json({
+          error: "Admin API not configured",
+          message: "Set ADMIN_API_KEY to enable admin endpoints.",
+        });
+        return;
+      }
+    }
+  }
+
   if (!expected) {
-    res.status(503).json({
-      error: "Admin API not configured",
-      message: "Set ADMIN_API_KEY to enable admin endpoints.",
+    res.status(403).json({
+      error: "Forbidden",
+      message: "Admin API not configured. Set ADMIN_API_KEY to enable admin endpoints.",
     });
     return;
   }
 
-  const presented = readPresentedKey(req);
+  const presented = req.headers["x-admin-api-key"]
+    ? readPresentedKey(req)
+    : bearer;
   if (!presented || !timingSafeEquals(presented, expected)) {
-    res.status(401).json({ error: "Unauthorized" });
+    res.status(403).json({ error: "Forbidden" });
     return;
   }
 

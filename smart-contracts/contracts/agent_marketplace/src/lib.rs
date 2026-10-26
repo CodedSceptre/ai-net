@@ -12,7 +12,7 @@ pub use errors::Error;
 pub use types::*;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, Symbol, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, IntoVal, Symbol, Vec,
 };
 
 #[contracttype]
@@ -584,6 +584,188 @@ impl AgentMarketplaceContract {
                 total_ratings: 0,
                 rating_sum: 0,
             })
+    }
+
+    /// Register an agent profile with capabilities and initial reputation (Issue #419).
+    pub fn register_agent_profile(
+        env: Env,
+        agent_id: Symbol,
+        owner: Address,
+        capabilities: Vec<Bytes>,
+        initial_reputation: u32,
+    ) -> Result<(), Error> {
+        owner.require_auth();
+        let cap_key = DataKey::AgentCapabilities(agent_id.clone());
+        let owner_key = DataKey::AgentOwner(agent_id.clone());
+        let rep_key = DataKey::AgentReputation(agent_id.clone());
+
+        env.storage().persistent().set(&cap_key, &capabilities);
+        env.storage().persistent().set(&owner_key, &owner);
+        env.storage().persistent().set(&rep_key, &initial_reputation);
+
+        let mut all_agents: Vec<Symbol> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AllAgentIds)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let mut found = false;
+        for a in all_agents.iter() {
+            if a == agent_id {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            all_agents.push_back(agent_id);
+            env.storage().persistent().set(&DataKey::AllAgentIds, &all_agents);
+        }
+
+        Ok(())
+    }
+
+    /// Update an agent's reputation score (Issue #419).
+    pub fn update_agent_reputation(
+        env: Env,
+        agent_id: Symbol,
+        score: u32,
+    ) -> Result<(), Error> {
+        let owner: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AgentOwner(agent_id.clone()))
+            .ok_or(Error::NotFound)?;
+        owner.require_auth();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::AgentReputation(agent_id), &score);
+        Ok(())
+    }
+
+    /// Search agents by a single capability (Issue #419).
+    pub fn search_by_capability(
+        env: Env,
+        capability: Bytes,
+        cursor: Option<Bytes>,
+        limit: u32,
+    ) -> Result<CapabilitySearchResult, Error> {
+        let mut caps = Vec::new(&env);
+        caps.push_back(capability);
+        Self::search_by_capabilities(env, caps, cursor, limit)
+    }
+
+    /// Search agents by multiple capabilities with AND logic and descending reputation order (Issue #419).
+    pub fn search_by_capabilities(
+        env: Env,
+        capabilities: Vec<Bytes>,
+        cursor: Option<Bytes>,
+        limit: u32,
+    ) -> Result<CapabilitySearchResult, Error> {
+        let page_limit = if limit == 0 || limit > 20 { 20 } else { limit };
+
+        let all_agents: Vec<Symbol> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AllAgentIds)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let mut matching: Vec<AgentSearchResult> = Vec::new(&env);
+
+        for agent_id in all_agents.iter() {
+            let caps: Vec<Bytes> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::AgentCapabilities(agent_id.clone()))
+                .unwrap_or_else(|| Vec::new(&env));
+
+            // Verify AND logic: must have ALL requested capabilities
+            let mut matches_all = true;
+            for req_cap in capabilities.iter() {
+                let mut found = false;
+                for agent_cap in caps.iter() {
+                    if agent_cap == req_cap {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    matches_all = false;
+                    break;
+                }
+            }
+
+            if matches_all {
+                let owner: Address = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::AgentOwner(agent_id.clone()))
+                    .ok_or(Error::NotFound)?;
+                let reputation_score = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::AgentReputation(agent_id.clone()))
+                    .unwrap_or(0);
+
+                matching.push_back(AgentSearchResult {
+                    agent_id,
+                    owner,
+                    capabilities: caps,
+                    reputation_score,
+                });
+            }
+        }
+
+        let total_count_estimate = matching.len();
+
+        // Sort descending by reputation_score
+        let n = matching.len();
+        if n > 1 {
+            for i in 0..n {
+                for j in 0..(n - 1 - i) {
+                    let a = matching.get(j).unwrap();
+                    let b = matching.get(j + 1).unwrap();
+                    if a.reputation_score < b.reputation_score {
+                        matching.set(j, b);
+                        matching.set(j + 1, a);
+                    }
+                }
+            }
+        }
+
+        // Apply cursor-based pagination
+        let mut start_idx = 0usize;
+        if let Some(ref c) = cursor {
+            if c.len() >= 4 {
+                let mut buf = [0u8; 4];
+                c.copy_into_slice(&mut buf);
+                start_idx = u32::from_be_bytes(buf) as usize;
+            }
+        }
+
+        let mut page_agents = Vec::new(&env);
+        let mut current_idx = start_idx;
+        while current_idx < (n as usize) && page_agents.len() < page_limit {
+            page_agents.push_back(matching.get(current_idx as u32).unwrap());
+            current_idx += 1;
+        }
+
+        let next_cursor = if current_idx < (n as usize) && !page_agents.is_empty() {
+            let next_offset = current_idx as u32;
+            let mut c_bytes = Bytes::new(&env);
+            for b in next_offset.to_be_bytes() {
+                c_bytes.push_back(b);
+            }
+            Some(c_bytes)
+        } else {
+            None
+        };
+
+        Ok(CapabilitySearchResult {
+            agents: page_agents,
+            next_cursor,
+            total_count_estimate,
+        })
     }
 }
 
