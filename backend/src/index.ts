@@ -17,6 +17,7 @@ import { eventBus } from "./coordinator/eventBus";
 import { createDefaultReconciliationService } from "./services/reconciliation";
 import { createLogger } from "./utils/logger";
 import { redactedConfigSnapshot } from "./config";
+import { warmUpResultCache } from "./cache/warmUp";
 
 async function main() {
   const logger = createLogger({ module: "server" });
@@ -66,6 +67,8 @@ async function main() {
 
     httpServer.listen(port, () => {
       logger.info({ port, env: config.NODE_ENV }, "server listening");
+      // Best-effort cache warm-up: pre-populate result cache from recent tasks
+      warmUpResultCache().catch(() => { /* logged inside warmUpResultCache */ });
     });
 
     // ── Graceful shutdown ──────────────────────────────────────────────────────

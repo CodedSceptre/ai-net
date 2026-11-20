@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getGlobalJobQueue, type JobQueue, type JobStatus } from "../../queue";
 import { tracingService } from "../../services/tracing";
 import { adminAuthMiddleware } from "../middleware/auth";
+import { resultCache } from "../../cache/resultCache";
 import {
   actorFromRequest,
   auditLogToCsv,
@@ -190,6 +191,77 @@ export function createAdminRouter(options: AdminRouterOptions = {}): Router {
 
   router.use("/queue", createAdminQueueRouter(jobQueue));
   router.use("/", createAdminQueueRouter(jobQueue));
+
+  // ── Result cache invalidation endpoints (Issue #723) ──────────────────────
+
+  /**
+   * @openapi
+   * /api/admin/cache/{key}:
+   *   delete:
+   *     summary: Invalidate a specific result cache entry
+   *     tags: [Admin]
+   *     security:
+   *       - adminApiKey: []
+   *     parameters:
+   *       - in: path
+   *         name: key
+   *         required: true
+   *         schema: { type: string }
+   *     responses:
+   *       200:
+   *         description: Entry removed
+   *       401:
+   *         description: Unauthorized
+   */
+  router.delete(
+    "/cache/:key",
+    adminAuthMiddleware,
+    asyncHandler(async (req: Request, res: Response) => {
+      await resultCache.invalidate(req.params.key);
+      res.json({ invalidated: req.params.key });
+    }),
+  );
+
+  /**
+   * @openapi
+   * /api/admin/cache:
+   *   delete:
+   *     summary: Invalidate result cache entries matching a pattern
+   *     tags: [Admin]
+   *     security:
+   *       - adminApiKey: []
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [pattern]
+   *             properties:
+   *               pattern:
+   *                 type: string
+   *                 example: "result:*"
+   *     responses:
+   *       200:
+   *         description: Pattern invalidated
+   *       400:
+   *         description: Missing pattern
+   *       401:
+   *         description: Unauthorized
+   */
+  router.delete(
+    "/cache",
+    adminAuthMiddleware,
+    asyncHandler(async (req: Request, res: Response) => {
+      const parsed = z.object({ pattern: z.string().min(1) }).safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "INVALID_BODY", details: parsed.error.flatten() });
+        return;
+      }
+      await resultCache.invalidateByPattern(parsed.data.pattern);
+      res.json({ invalidatedPattern: parsed.data.pattern });
+    }),
+  );
 
   router.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     logger.error({ err }, "admin operation failed");

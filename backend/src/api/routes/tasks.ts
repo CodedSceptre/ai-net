@@ -170,11 +170,12 @@ export function createTasksRouter(
       createTask(task);
 
       // Enqueue task into persistent background job queue
+      const noCache = req.headers['x-cache-control'] === 'no-cache';
       jobQueue.enqueue({
         taskId: task.id,
         type: "execute_task",
         priority: (priority as JobPriority) ?? "normal",
-        payload: { taskId: task.id },
+        payload: { taskId: task.id, noCache },
       });
 
       res.status(201).json({ taskId: task.id, dagPreview: dag, status: "queued" });

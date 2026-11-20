@@ -22,6 +22,8 @@ import {
   runWithTraceContext,
   childSpanContext,
 } from '../services/traceContext';
+import { resultCache, ResultCache } from '../cache/resultCache';
+import type { AgentResult } from '../cache/resultCache';
 
 const DEFAULT_CONCURRENCY = 3;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -52,6 +54,11 @@ export interface CoordinatorOptions {
   qualityScorer?: QualityScorer;
   /** Correlation ID propagated to downstream HTTP requests and used for tracing spans. */
   correlationId?: string;
+  /**
+   * When true the result cache is bypassed for both reads and writes —
+   * equivalent to the client sending `X-Cache-Control: no-cache`.
+   */
+  noCache?: boolean;
 }
 
 class ConcurrencyLimiter {
@@ -123,6 +130,7 @@ export class Coordinator {
   private readonly qualityScorer: QualityScorer;
   private readonly log: pino.Logger;
   private correlationId: string;
+  private readonly noCache: boolean;
 
   constructor(options: CoordinatorOptions = {}) {
     this.bus = options.eventBus ?? eventBus;
@@ -134,6 +142,7 @@ export class Coordinator {
     this.paymentService = options.paymentService ?? { release: async () => 'mock-hash' };
     this.qualityScorer = options.qualityScorer ?? new QualityScorer();
     this.log = options.logger ?? createLogger();
+    this.noCache = options.noCache ?? false;
     // Resolve correlationId: explicit option > AsyncLocalStorage > empty string
     this.correlationId = options.correlationId ?? currentTraceId() ?? '';
   }
@@ -399,7 +408,31 @@ export class Coordinator {
     );
 
     try {
-      const { agentId, result } = await this.dispatchWithRetry(taskId, node, this.contextFor(node, nodeById));
+      // ── Result cache lookup ─────────────────────────────��─────────────────
+      let resolvedAgentId: string | undefined;
+      let resolvedResult: unknown | undefined;
+      if (!this.noCache && node.prompt) {
+        const cacheKey = ResultCache.generateKey(node.prompt, [node.type]);
+        const cached = await resultCache.get(cacheKey);
+        if (cached) {
+          this.log.info(
+            { taskId, nodeId: node.nodeId, agentType: node.type, cacheKey },
+            'result cache hit — skipping Venice AI dispatch'
+          );
+          resolvedResult = cached.output;
+          resolvedAgentId = cached.agentType;
+        }
+      }
+
+      let agentId: string | undefined;
+      let result: unknown;
+
+      if (resolvedResult !== undefined) {
+        agentId = resolvedAgentId;
+        result = resolvedResult;
+      } else {
+        ({ agentId, result } = await this.dispatchWithRetry(taskId, node, this.contextFor(node, nodeById)));
+      }
 
       node.status = 'completed';
       node.result = result;
@@ -409,6 +442,25 @@ export class Coordinator {
       const quality = this.scoreOutput(taskId, node, result, agentId);
       if (quality) {
         node.quality = quality;
+      }
+
+      // ── Result cache write ────────────────────────────────────────────────
+      // Store the result if: cache not bypassed, node has a prompt, and either
+      // no quality score was produced (we default confidence to 1.0) or the
+      // quality score meets the threshold.
+      if (!this.noCache && node.prompt && resolvedResult === undefined) {
+        const confidence = node.quality?.score ?? 1.0;
+        const cacheKey = ResultCache.generateKey(node.prompt, [node.type]);
+        const agentResult: AgentResult = {
+          output: result,
+          confidence,
+          agentType: node.type,
+          producedAt: new Date().toISOString(),
+        };
+        // Fire-and-forget — never block the node completion on a cache write
+        resultCache.set(cacheKey, agentResult).catch((err: unknown) => {
+          this.log.warn({ err, cacheKey }, 'result cache write failed');
+        });
       }
       updateNode(taskId, node.nodeId, { status: 'completed', result, quality: node.quality });
       this.bus.emit(taskId, {
@@ -621,7 +673,8 @@ export async function executeDAG(
   task: Task,
   dispatch: DispatchFn,
   releasePayment: PaymentReleaseFn,
-  onProgress?: (percentage: number) => void
+  onProgress?: (percentage: number) => void,
+  noCache = false,
 ): Promise<void> {
   const log = createLogger({ taskId: task.id, requestId: task.requestId });
 
@@ -630,6 +683,7 @@ export async function executeDAG(
     paymentService: { release: releasePayment },
     logger: log,
     correlationId: task.traceId,
+    noCache,
   });
 
   await coordinator.executeDAG(task.id, task.dag, onProgress);
@@ -666,7 +720,8 @@ export function createTaskJobHandler(
       updateTaskIfPresent(task.id, { dag: task.dag });
     }
 
-    await executeDAG(task, dispatch, releasePayment, updateProgress);
+    const noCache = !!(job.payload as { noCache?: boolean })?.noCache;
+    await executeDAG(task, dispatch, releasePayment, updateProgress, noCache);
 
     const refreshedTask = getTask(job.taskId);
     if (refreshedTask && refreshedTask.status === "failed") {
