@@ -1,0 +1,127 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Renovate Dependency Dashboard",
+  "schedule": ["every weekend"],
+  "stabilityDays": 3,
+  "automergeType": "squash",
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "schedule": ["at any time"],
+    "stabilityDays": 0,
+    "automerge": false,
+    "labels": ["security", "vulnerability"]
+  },
+  "osvVulnerabilityAlerts": true,
+  "enabledManagers": ["npm", "cargo", "dockerfile", "terraform"],
+  "npm": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "Group all minor and patch npm updates into a single weekly PR per directory",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "npm minor and patch updates ({{packageFileDir}})",
+      "groupSlug": "npm-minor-patch-{{packageFileDir}}",
+      "automerge": false
+    },
+    {
+      "description": "Automerge patch-level npm updates after CI passes and stability days elapse",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "automergeType": "squash",
+      "stabilityDays": 3
+    },
+    {
+      "description": "Major npm version bumps: no automerge, assign devops team for review",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "reviewers": ["team:devops"],
+      "labels": ["dependencies", "major-update"]
+    },
+    {
+      "description": "Cargo patch updates: automerge after stability days",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "automergeType": "squash",
+      "stabilityDays": 3
+    },
+    {
+      "description": "Cargo major updates: no automerge, assign devops team",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "reviewers": ["team:devops"],
+      "labels": ["dependencies", "major-update"]
+    },
+    {
+      "description": "Docker updates: automerge patch/digest, manual review for major",
+      "matchManagers": ["dockerfile"],
+      "matchUpdateTypes": ["patch", "digest"],
+      "automerge": true,
+      "automergeType": "squash",
+      "stabilityDays": 3
+    },
+    {
+      "description": "Docker major updates: no automerge",
+      "matchManagers": ["dockerfile"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "reviewers": ["team:devops"],
+      "labels": ["dependencies", "major-update"]
+    },
+    {
+      "description": "Terraform updates: automerge patch, manual for major",
+      "matchManagers": ["terraform"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "automergeType": "squash",
+      "stabilityDays": 3
+    },
+    {
+      "description": "Terraform major updates: no automerge",
+      "matchManagers": ["terraform"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "reviewers": ["team:devops"],
+      "labels": ["dependencies", "major-update"]
+    },
+    {
+      "description": "Pin Stellar SDK npm package — always requires manual review, never automerge",
+      "matchPackageNames": ["@stellar/stellar-sdk", "stellar-sdk"],
+      "matchManagers": ["npm"],
+      "automerge": false,
+      "stabilityDays": 7,
+      "reviewers": ["team:devops"],
+      "labels": ["stellar-sdk", "requires-manual-review"]
+    },
+    {
+      "description": "Pin stellar-sdk Cargo crate — always requires manual review, never automerge",
+      "matchPackageNames": ["stellar-sdk"],
+      "matchManagers": ["cargo"],
+      "automerge": false,
+      "stabilityDays": 7,
+      "reviewers": ["team:devops"],
+      "labels": ["stellar-sdk", "requires-manual-review"]
+    },
+    {
+      "description": "Vulnerability alerts bypass stability delay",
+      "matchCategories": ["security"],
+      "stabilityDays": 0,
+      "automerge": false,
+      "labels": ["security", "vulnerability"],
+      "schedule": ["at any time"]
+    }
+  ],
+  "ignorePaths": ["**/node_modules/**", "**/target/**"],
+  "labels": ["dependencies"],
+  "commitMessagePrefix": "chore(deps):",
+  "prCreation": "immediate",
+  "rebaseWhen": "conflicted",
+  "platformCommit": false
+}
