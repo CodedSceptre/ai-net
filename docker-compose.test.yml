@@ -1,0 +1,55 @@
+version: "3.9"
+
+# Test environment overrides for docker-compose.yml.
+# Start with: docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
+#
+# Key differences from the base compose:
+#  - NODE_ENV=test on backend
+#  - Monitoring services (Prometheus, Grafana) are excluded (profile-gated, not started by default)
+#  - Uses Stellar testnet rather than a local standalone node
+#  - Backend uses in-memory SQLite for speed
+#  - Redis rate-limiting and daily quotas relaxed for test throughput
+#  - contract-deployer skipped (STELLAR_SECRET_KEY drives it; CI sets this via secrets)
+
+services:
+  stellar-standalone:
+    # In CI we target the public testnet via TESTNET_RPC_URL; override the
+    # quickstart image with a no-op healthcheck placeholder so the depends_on
+    # chain still resolves when the container is not actually needed.
+    profiles:
+      - local-only
+
+  backend:
+    environment:
+      NODE_ENV: test
+      DATABASE_URL: ":memory:"
+      SOROBAN_RPC_URL: ${TESTNET_RPC_URL:-https://soroban-testnet.stellar.org}
+      STELLAR_HORIZON_URL: ${TESTNET_HORIZON_URL:-https://horizon-testnet.stellar.org}
+      STELLAR_NETWORK: testnet
+      VENICE_API_KEY: ${VENICE_API_KEY:-mock_test_key}
+      SKIP_STELLAR_ACCOUNT_VERIFY: "false"
+      REGISTRY_CONTRACT_ID: ${REGISTRY_CONTRACT_ID:-}
+      ALLOWED_ORIGINS: "*"
+      RATE_LIMIT_MAX_REQUESTS: "1000"
+      DAILY_TASK_LIMIT_PER_WALLET: "500"
+      LOG_LEVEL: warn
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    environment:
+      VITE_API_BASE_URL: http://localhost:3000
+      VITE_STELLAR_NETWORK: testnet
+      VITE_SOROBAN_RPC_URL: ${TESTNET_RPC_URL:-https://soroban-testnet.stellar.org}
+
+  contract-deployer:
+    environment:
+      STELLAR_SECRET_KEY: ${STELLAR_SECRET_KEY:-}
+      STELLAR_RPC_URL: ${TESTNET_RPC_URL:-https://soroban-testnet.stellar.org}
+      STELLAR_HORIZON_URL: ${TESTNET_HORIZON_URL:-https://horizon-testnet.stellar.org}
+      STELLAR_NETWORK: testnet
+
+  # Explicitly exclude monitoring services from E2E runs to reduce startup time.
+  # prometheus and grafana use the `monitoring` profile in docker-compose.yml,
+  # so they are not started unless that profile is activated.
