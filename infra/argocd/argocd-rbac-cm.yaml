@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+  namespace: argocd
+data:
+  # Members of the CodedSceptre GitHub org get read-only access by default.
+  # Org admins (mapped via Dex group claim) get full admin rights.
+  policy.default: role:readonly
+  policy.csv: |
+    # Grant admin role to members of the CodedSceptre:admins GitHub team
+    g, CodedSceptre:admins, role:admin
+    # Grant regular org members read + sync rights
+    g, CodedSceptre, role:readonly
+  scopes: '[groups, email]'

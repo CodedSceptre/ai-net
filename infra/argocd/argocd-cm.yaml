@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+data:
+  # ── GitHub OAuth via Dex ────────────────────────────────────────────────────
+  # Only members of the CodedSceptre GitHub organization can log in.
+  # Set ARGOCD_GITHUB_CLIENT_ID and ARGOCD_GITHUB_CLIENT_SECRET as
+  # Kubernetes secrets (see argocd-secret.yaml).
+  url: https://argocd.ai-net.example.com
+
+  dex.config: |
+    connectors:
+      - type: github
+        id: github
+        name: GitHub
+        config:
+          clientID: $dex.github.clientID
+          clientSecret: $dex.github.clientSecret
+          redirectURI: https://argocd.ai-net.example.com/api/dex/callback
+          orgs:
+            - name: CodedSceptre
+
+  # ── Backend health check ─────────────────────────────────────────────────────
+  # Custom health check: backend Application is healthy only when
+  # GET /health returns 200 for all pods.
+  # Unhealthy for 5 minutes triggers ArgoCD automatic rollback.
+  resource.customizations.health.apps_Deployment: |
+    hs = {}
+    hs.status = "Progressing"
+    hs.message = ""
+    if obj.status ~= nil then
+      if obj.status.readyReplicas ~= nil and obj.status.readyReplicas == obj.status.replicas then
+        hs.status = "Healthy"
+      elseif obj.status.conditions ~= nil then
+        for i, condition in ipairs(obj.status.conditions) do
+          if condition.type == "Available" and condition.status == "False" then
+            hs.status = "Degraded"
+            hs.message = condition.message
+          end
+        end
+      end
+    end
+    return hs
+
+  # Degrade (and auto-rollback) after 5 minutes of unhealthy state
+  timeout.reconciliation: 180s
+  application.resourceTrackingMethod: annotation

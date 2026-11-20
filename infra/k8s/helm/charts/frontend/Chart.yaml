@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ai-net-frontend
+description: Helm chart for the ai-net frontend service
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
