@@ -1,0 +1,91 @@
+name: Database Restore Validation
+
+on:
+  schedule:
+    # 3 AM UTC every Sunday
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+jobs:
+  restore-validate:
+    name: Download, restore, and integrity-check backups
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Install SQLite
+        run: sudo apt-get install -y sqlite3
+
+      - name: Download and validate backups
+        id: validate
+        run: |
+          S3_BUCKET="${{ secrets.S3_BACKUP_BUCKET || 'ai-net-backups' }}"
+          DATABASES=(payments.db agents.db tasks.db)
+
+          # Find the most recent backup date folder
+          LATEST_DATE=$(aws s3 ls "s3://$S3_BUCKET/" \
+            | grep PRE \
+            | sort \
+            | tail -1 \
+            | awk '{print $2}' \
+            | tr -d '/')
+
+          if [ -z "$LATEST_DATE" ]; then
+            echo "No backup folders found in s3://$S3_BUCKET" >&2
+            exit 1
+          fi
+
+          echo "Validating backups from date: $LATEST_DATE"
+          ALL_OK=true
+
+          for DB in "${DATABASES[@]}"; do
+            echo "--- Validating $DB ---"
+            aws s3 cp "s3://$S3_BUCKET/$LATEST_DATE/${DB}.gz" "/tmp/${DB}.gz"
+            gunzip -f "/tmp/${DB}.gz"
+            RESULT=$(sqlite3 "/tmp/$DB" "PRAGMA integrity_check;")
+            echo "$DB integrity_check: $RESULT"
+            if [ "$RESULT" != "ok" ]; then
+              echo "INTEGRITY CHECK FAILED for $DB: $RESULT" >&2
+              ALL_OK=false
+            fi
+            rm -f "/tmp/$DB"
+          done
+
+          if [ "$ALL_OK" != "true" ]; then
+            echo "One or more databases failed integrity check" >&2
+            exit 1
+          fi
+
+          echo "All databases passed integrity check"
+
+      - name: Notify Slack — success
+        if: success()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": ":white_check_mark: *ai-net restore validation passed* — all 3 databases integrity_check: ok\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify Slack — failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": ":x: *ai-net restore validation FAILED*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
