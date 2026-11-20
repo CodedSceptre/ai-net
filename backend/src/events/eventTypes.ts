@@ -105,6 +105,11 @@ export interface PaymentReleasedPayload {
   ledgerSequence?: number;
 }
 
+export interface TaskInterruptedPayload {
+  /** Why the task was interrupted (e.g. user cancel, shutdown, timeout). */
+  reason?: string;
+}
+
 // task_completed and task_failed carry no additional payload beyond BaseEvent.
 
 // ---------------------------------------------------------------------------
@@ -119,7 +124,8 @@ export type EventType =
   | 'PaymentLocked'
   | 'PaymentReleased'
   | 'TaskCompleted'
-  | 'TaskFailed';
+  | 'TaskFailed'
+  | 'TaskInterrupted';
 
 export interface TaskCreatedEvent extends BaseEvent {
   type: 'TaskCreated';
@@ -174,6 +180,11 @@ export interface TaskFailedEvent extends BaseEvent {
   };
 }
 
+export interface TaskInterruptedEvent extends BaseEvent {
+  type: 'TaskInterrupted';
+  payload?: TaskInterruptedPayload;
+}
+
 /** Union of all typed event variants. */
 export type AppEvent =
   | TaskCreatedEvent
@@ -183,7 +194,8 @@ export type AppEvent =
   | PaymentLockedEvent
   | PaymentReleasedEvent
   | TaskCompletedEvent
-  | TaskFailedEvent;
+  | TaskFailedEvent
+  | TaskInterruptedEvent;
 
 // ---------------------------------------------------------------------------
 // Guards
@@ -219,6 +231,10 @@ export function isTaskCompleted(e: AppEvent): e is TaskCompletedEvent {
 
 export function isTaskFailed(e: AppEvent): e is TaskFailedEvent {
   return e.type === 'TaskFailed';
+}
+
+export function isTaskInterrupted(e: AppEvent): e is TaskInterruptedEvent {
+  return e.type === 'TaskInterrupted';
 }
 
 // ---------------------------------------------------------------------------
@@ -297,5 +313,19 @@ export function makeTaskFailed(
     occurredAt,
     version: CURRENT_EVENT_VERSION,
     payload: error !== undefined ? { error } : undefined,
+  };
+}
+
+export function makeTaskInterrupted(
+  taskId: string,
+  reason?: string,
+  occurredAt = nowIso()
+): TaskInterruptedEvent {
+  return {
+    type: 'TaskInterrupted',
+    taskId,
+    occurredAt,
+    version: CURRENT_EVENT_VERSION,
+    payload: reason !== undefined ? { reason } : undefined,
   };
 }
