@@ -1,0 +1,162 @@
+name: Deploy Backend (Zero-Downtime)
+
+# Two-phase expand-contract migration deployment.
+#
+# Sequence:
+#   1. Run expand migrations (additive — safe while old code is live)
+#   2. Health-check the currently running backend version
+#   3. Deploy the new backend image
+#   4. Wait for new version health check to pass
+#   5. Run contract migrations (destructive — safe now that new code is live)
+#
+# A failure at any phase stops the pipeline before it can reach the next
+# phase, preventing schema changes that break in-service code.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Backend Docker image tag to deploy (e.g. sha-abc1234)"
+        required: true
+      environment:
+        description: "Target environment (staging | production)"
+        required: true
+        default: staging
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-backend-${{ github.event.inputs.environment }}
+  cancel-in-progress: false   # never cancel an in-flight migration
+
+jobs:
+  deploy:
+    name: Zero-downtime backend deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      DEPLOY_ENV: ${{ github.event.inputs.environment }}
+      IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+      BACKEND_URL: ${{ vars.STAGING_BACKEND_URL || 'http://localhost:3000' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      # ── Phase 1: Expand migrations ─────────────────────────────────────────
+      # Additive schema changes only. The currently running backend version
+      # must stay healthy throughout this phase.
+      - name: Phase 1 — run expand migrations
+        run: bash scripts/run-migrations.sh --phase expand
+        env:
+          DB_PATH: ${{ vars.DB_PATH || 'data/tasks.db' }}
+
+      # ── Phase 2: Health-check the OLD version ──────────────────────────────
+      # Confirm the existing backend is still healthy after the expand phase
+      # before swapping in the new image.
+      - name: Phase 2 — health-check old backend version
+        run: |
+          echo "Checking existing backend health at ${BACKEND_URL}/health ..."
+          for attempt in 1 2 3; do
+            HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
+              "${BACKEND_URL}/health" --max-time 10 || echo "000")
+            if [[ "${HTTP_CODE}" == "200" ]]; then
+              echo "✓ Old backend healthy (attempt ${attempt})"
+              break
+            fi
+            echo "  Attempt ${attempt}: got ${HTTP_CODE}, retrying in 5s..."
+            sleep 5
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "✗ Old backend health check failed — aborting deploy." >&2
+              exit 1
+            fi
+          done
+
+      # ── Phase 3: Deploy new backend image ─────────────────────────────────
+      - name: Phase 3 — deploy new backend image
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          REGISTRY: ghcr.io
+          IMAGE_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name || 'ai-net' }}
+        run: |
+          BACKEND_IMAGE="${REGISTRY}/${IMAGE_OWNER}/${REPO_NAME}/backend:${IMAGE_TAG}"
+          echo "Deploying image: ${BACKEND_IMAGE}"
+
+          if [[ -z "${STAGING_HOST:-}" ]]; then
+            echo "::notice::STAGING_HOST not set — simulating deploy (dry run)."
+          else
+            SSH_KEY_FILE=$(mktemp)
+            echo "${STAGING_SSH_KEY}" > "${SSH_KEY_FILE}"
+            chmod 600 "${SSH_KEY_FILE}"
+
+            ssh -i "${SSH_KEY_FILE}" -o StrictHostKeyChecking=no \
+              "deploy@${STAGING_HOST}" \
+              "BACKEND_IMAGE=${BACKEND_IMAGE} \
+               docker compose -f /opt/ai-net/docker-compose.yml pull backend && \
+               docker compose -f /opt/ai-net/docker-compose.yml up -d --no-deps backend"
+
+            rm -f "${SSH_KEY_FILE}"
+          fi
+
+      # ── Phase 4: Health-check the NEW version ─────────────────────────────
+      - name: Phase 4 — wait for new backend version to pass health check
+        run: |
+          echo "Waiting for new backend to become healthy..."
+          MAX_ATTEMPTS=24   # 24 × 5s = 2 minutes
+          for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
+            HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
+              "${BACKEND_URL}/health" --max-time 10 || echo "000")
+            if [[ "${HTTP_CODE}" == "200" ]]; then
+              echo "✓ New backend healthy after ${attempt} attempt(s)"
+              break
+            fi
+            echo "  Attempt ${attempt}/${MAX_ATTEMPTS}: got ${HTTP_CODE}, retrying in 5s..."
+            sleep 5
+            if [[ "${attempt}" -eq "${MAX_ATTEMPTS}" ]]; then
+              echo "✗ New backend did not become healthy within timeout — aborting before contract migrations." >&2
+              exit 1
+            fi
+          done
+
+      # ── Phase 5: Contract migrations ───────────────────────────────────────
+      # Destructive schema cleanup runs only after the new code is confirmed
+      # healthy. The new code must not reference any structure dropped here.
+      - name: Phase 5 — run contract migrations
+        run: bash scripts/run-migrations.sh --phase contract
+        env:
+          DB_PATH: ${{ vars.DB_PATH || 'data/tasks.db' }}
+
+      # ── Summary ────────────────────────────────────────────────────────────
+      - name: Write deployment summary
+        if: success()
+        run: |
+          {
+            echo "## ✅ Zero-downtime backend deploy succeeded"
+            echo ""
+            echo "| Phase | Status |"
+            echo "|-------|--------|"
+            echo "| 1 — Expand migrations | ✓ |"
+            echo "| 2 — Old version health check | ✓ |"
+            echo "| 3 — New image deployed | ✓ |"
+            echo "| 4 — New version health check | ✓ |"
+            echo "| 5 — Contract migrations | ✓ |"
+            echo ""
+            echo "**Image:** \`${{ env.IMAGE_TAG }}\`"
+            echo "**Environment:** \`${{ env.DEPLOY_ENV }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
