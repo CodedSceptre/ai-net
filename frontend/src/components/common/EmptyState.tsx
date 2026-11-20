@@ -12,17 +12,27 @@ export interface EmptyStateAction {
 export interface EmptyStateProps {
   title: string;
   description?: React.ReactNode;
-  /** Small icon shown in the icon wrapper (legacy usage). */
-  icon?: React.ReactNode;
   /**
-   * Full illustrated SVG placed above the title.
-   * When provided the illustration replaces the small icon wrapper.
-   * Use the pre-built components from `./illustrations/`.
+   * SVG illustration displayed above the title.
+   * Pass a string to render it as an <img> src, or a React element for inline SVG.
    */
-  illustration?: React.ReactNode;
+  illustration?: string | React.ReactNode;
+  /** Small icon shown in the icon wrapper when no illustration is provided. */
+  icon?: React.ReactNode;
   primaryAction?: EmptyStateAction;
   secondaryAction?: EmptyStateAction;
+  /**
+   * Shorthand CTA: fires this callback when the primary button is clicked.
+   * Use together with actionLabel when you don't need a full EmptyStateAction.
+   */
+  onAction?: () => void;
+  /** Button label used with the onAction shorthand. */
+  actionLabel?: string;
   variant?: 'default' | 'card' | 'compact';
+  /**
+   * Play a fade + slide-up entrance animation on first render (default: true).
+   */
+  animated?: boolean;
   className?: string;
   'data-testid'?: string;
 }
@@ -30,11 +40,14 @@ export interface EmptyStateProps {
 export const EmptyState: React.FC<EmptyStateProps> = ({
   title,
   description,
-  icon,
   illustration,
+  icon,
   primaryAction,
   secondaryAction,
+  onAction,
+  actionLabel,
   variant = 'default',
+  animated = true,
   className = '',
   'data-testid': dataTestId = 'empty-state',
 }) => {
@@ -59,6 +72,11 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
     }
   };
 
+  // Merge onAction shorthand into primaryAction when provided without a primaryAction
+  const resolvedPrimaryAction: EmptyStateAction | undefined =
+    primaryAction ??
+    (onAction && actionLabel ? { label: actionLabel, onClick: onAction } : undefined);
+
   const variantClass =
     variant === 'card'
       ? styles.cardVariant
@@ -66,14 +84,25 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
       ? styles.compactVariant
       : '';
 
+  const animationClass = animated ? styles.animated : '';
+
   return (
     <div
-      className={`${styles.container} ${variantClass} ${className}`.trim()}
+      className={`${styles.container} ${variantClass} ${animationClass} ${className}`.trim()}
       data-testid={dataTestId}
     >
       {illustration && (
         <div className={styles.illustrationWrapper} aria-hidden="true">
-          {illustration}
+          {typeof illustration === 'string' ? (
+            <img
+              src={illustration}
+              alt=""
+              className={styles.illustrationImg}
+              aria-hidden="true"
+            />
+          ) : (
+            illustration
+          )}
         </div>
       )}
 
@@ -92,17 +121,19 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
         </div>
       )}
 
-      {(primaryAction || secondaryAction) && (
+      {(resolvedPrimaryAction || secondaryAction) && (
         <div className={styles.actions}>
-          {primaryAction && (
+          {resolvedPrimaryAction && (
             <button
               type="button"
               className={styles.primaryBtn}
-              onClick={(e) => handleActionClick(primaryAction, e)}
+              onClick={(e) => handleActionClick(resolvedPrimaryAction, e)}
               data-testid="empty-state-primary-cta"
             >
-              {primaryAction.icon && <span aria-hidden="true">{primaryAction.icon}</span>}
-              <span>{primaryAction.label}</span>
+              {resolvedPrimaryAction.icon && (
+                <span aria-hidden="true">{resolvedPrimaryAction.icon}</span>
+              )}
+              <span>{resolvedPrimaryAction.label}</span>
             </button>
           )}
 

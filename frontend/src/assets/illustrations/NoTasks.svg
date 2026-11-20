@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 160" fill="none" aria-hidden="true">
+  <!-- Background circle -->
+  <circle cx="100" cy="80" r="60" fill="var(--accent-surface, rgba(99,102,241,0.12))"/>
+  <!-- Clipboard body -->
+  <rect x="65" y="45" width="70" height="85" rx="6" fill="var(--surface-raised, #1a1f2e)" stroke="var(--border-primary, #2a3040)" stroke-width="1.5"/>
+  <!-- Clipboard header -->
+  <rect x="80" y="38" width="40" height="14" rx="4" fill="var(--surface-elevated, #1e293b)" stroke="var(--border-primary, #2a3040)" stroke-width="1.5"/>
+  <!-- Lines representing tasks (all checked off / empty) -->
+  <line x1="78" y1="72" x2="122" y2="72" stroke="var(--border-strong, #475569)" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="78" y1="85" x2="115" y2="85" stroke="var(--border-strong, #475569)" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="78" y1="98" x2="118" y2="98" stroke="var(--border-strong, #475569)" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- Accent check / plus hint -->
+  <circle cx="100" cy="118" r="10" fill="var(--accent-surface, rgba(99,102,241,0.2))" stroke="var(--accent, #a78bfa)" stroke-width="1.5"/>
+  <line x1="100" y1="113" x2="100" y2="123" stroke="var(--accent, #a78bfa)" stroke-width="2" stroke-linecap="round"/>
+  <line x1="95" y1="118" x2="105" y2="118" stroke="var(--accent, #a78bfa)" stroke-width="2" stroke-linecap="round"/>
+</svg>

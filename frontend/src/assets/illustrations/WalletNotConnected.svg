@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 160" fill="none" aria-hidden="true">
+  <!-- Background circle -->
+  <circle cx="100" cy="80" r="60" fill="var(--accent-surface, rgba(99,102,241,0.12))"/>
+  <!-- Wallet body -->
+  <rect x="55" y="58" width="90" height="60" rx="8" fill="var(--surface-raised, #1a1f2e)" stroke="var(--border-primary, #2a3040)" stroke-width="1.5"/>
+  <!-- Wallet flap -->
+  <rect x="55" y="58" width="90" height="20" rx="8" fill="var(--surface-elevated, #1e293b)" stroke="var(--border-primary, #2a3040)" stroke-width="1.5"/>
+  <!-- Coin pocket -->
+  <rect x="118" y="75" width="27" height="26" rx="6" fill="var(--surface-canvas, #0a0e14)" stroke="var(--border-primary, #2a3040)" stroke-width="1.5"/>
+  <!-- Coin -->
+  <circle cx="131" cy="88" r="8" fill="var(--surface-elevated, #1e293b)" stroke="var(--accent-info, #38bdf8)" stroke-width="1.5"/>
+  <text x="131" y="92" text-anchor="middle" font-size="9" fill="var(--accent-info, #38bdf8)" font-family="monospace">$</text>
+  <!-- Disconnect indicator -->
+  <circle cx="72" cy="88" r="12" fill="var(--surface-canvas, #0a0e14)" stroke="var(--status-warning-border, #fbbf24)" stroke-width="1.5" opacity="0.9"/>
+  <line x1="68" y1="84" x2="68" y2="91" stroke="var(--status-warning-border, #fbbf24)" stroke-width="2" stroke-linecap="round"/>
+  <line x1="72" y1="84" x2="72" y2="91" stroke="var(--status-warning-border, #fbbf24)" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="70" cy="94" r="1.5" fill="var(--status-warning-border, #fbbf24)"/>
+</svg>

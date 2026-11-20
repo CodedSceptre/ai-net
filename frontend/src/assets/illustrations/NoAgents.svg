@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 160" fill="none" aria-hidden="true">
+  <!-- Background circle -->
+  <circle cx="100" cy="80" r="60" fill="var(--accent-surface, rgba(99,102,241,0.12))"/>
+  <!-- Robot head -->
+  <rect x="72" y="52" width="56" height="48" rx="8" fill="var(--surface-raised, #1a1f2e)" stroke="var(--accent, #a78bfa)" stroke-width="1.5"/>
+  <!-- Antenna -->
+  <line x1="100" y1="52" x2="100" y2="40" stroke="var(--accent, #a78bfa)" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="100" cy="38" r="4" fill="var(--accent, #a78bfa)"/>
+  <!-- Eyes -->
+  <rect x="82" y="66" width="12" height="10" rx="3" fill="var(--accent-info, #38bdf8)"/>
+  <rect x="106" y="66" width="12" height="10" rx="3" fill="var(--accent-info, #38bdf8)"/>
+  <!-- Mouth -->
+  <path d="M86 87 Q100 95 114 87" stroke="var(--accent, #a78bfa)" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  <!-- Body -->
+  <rect x="80" y="102" width="40" height="22" rx="5" fill="var(--surface-elevated, #1e293b)" stroke="var(--border-primary, #2a3040)" stroke-width="1.5"/>
+  <!-- Body details -->
+  <circle cx="92" cy="113" r="4" fill="var(--accent-surface, rgba(99,102,241,0.3))" stroke="var(--accent, #a78bfa)" stroke-width="1"/>
+  <circle cx="108" cy="113" r="4" fill="var(--accent-surface, rgba(99,102,241,0.3))" stroke="var(--accent, #a78bfa)" stroke-width="1"/>
+</svg>
