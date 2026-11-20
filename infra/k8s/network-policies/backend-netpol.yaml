@@ -1,0 +1,73 @@
+# Backend NetworkPolicy
+# Ingress: allow only from the frontend namespace and the ingress-controller namespace
+# Egress:  allow only to Stellar Horizon, Venice AI, DNS (port 53), and the frontend namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-network-policy
+  namespace: backend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ai-net-backend
+
+  policyTypes:
+    - Ingress
+    - Egress
+
+  # ── Ingress rules ─────────────────────────────────────────────────────────
+  ingress:
+    # Allow traffic from pods in the frontend namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: frontend
+      ports:
+        - protocol: TCP
+          port: 3000
+
+    # Allow traffic from the ingress controller namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3000
+
+  # ── Egress rules ──────────────────────────────────────────────────────────
+  egress:
+    # DNS — required for all outbound name resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Stellar Horizon testnet (horizon-testnet.stellar.org) — HTTPS
+    - to:
+        - ipBlock:
+            cidr: 104.18.0.0/16
+        - ipBlock:
+            cidr: 104.19.0.0/16
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+
+    # Venice AI API (api.venice.ai) — HTTPS
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

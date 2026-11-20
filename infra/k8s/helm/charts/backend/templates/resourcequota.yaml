@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ .Release.Name }}-backend-quota
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: ai-net-backend
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  hard:
+    pods: "20"
+    requests.cpu: "2"
+    requests.memory: "4Gi"
+    limits.cpu: "10"
+    limits.memory: "10Gi"

@@ -1,0 +1,28 @@
+replicaCount: 2
+
+image:
+  repository: ai-net-frontend
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 5173
+
+namespace: frontend
+
+resources:
+  requests:
+    cpu: "50m"
+    memory: "128Mi"
+  limits:
+    cpu: "250m"
+    memory: "256Mi"
+
+env:
+  VITE_API_BASE_URL: "http://ai-net-backend.backend.svc.cluster.local:3000"
+
+config: {}
+
+podDisruptionBudget:
+  minAvailable: 1
