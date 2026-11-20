@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ .Release.Name }}-frontend-quota
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: ai-net-frontend
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  hard:
+    pods: "10"
+    requests.cpu: "500m"
+    requests.memory: "1Gi"
+    limits.cpu: "2500m"
+    limits.memory: "2560Mi"
