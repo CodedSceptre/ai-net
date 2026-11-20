@@ -1,0 +1,380 @@
+name: Deploy Backend (Canary)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag to deploy as canary (e.g. sha-abc1234)"
+        required: true
+        type: string
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - production
+          - staging
+        default: production
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+  ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+  SERVICE_NAME: ai-net-backend
+  STABLE_TG_ARN: ${{ secrets.STABLE_TARGET_GROUP_ARN }}
+  CANARY_TG_ARN: ${{ secrets.CANARY_TARGET_GROUP_ARN }}
+  ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
+  GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
+  GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
+  CLOUDWATCH_NAMESPACE: ai-net
+  OBSERVATION_MINUTES: "10"
+  ERROR_RATE_PROMOTE_THRESHOLD: "1"
+  ERROR_RATE_ROLLBACK_THRESHOLD: "3"
+
+jobs:
+  # ── 1. Build and push canary image ──────────────────────────────────────────
+  build-canary:
+    name: Build & Push Canary Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      canary_image: ${{ steps.build.outputs.canary_image }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push canary image
+        id: build
+        run: |
+          CANARY_TAG="${{ inputs.image_tag }}-canary"
+          IMAGE="${{ env.ECR_REGISTRY }}/${{ env.SERVICE_NAME }}:${CANARY_TAG}"
+          docker build -t "${IMAGE}" ./backend
+          docker push "${IMAGE}"
+          echo "canary_image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "Pushed canary image: ${IMAGE}"
+
+  # ── 2. Deploy canary task definition at 10% traffic ─────────────────────────
+  deploy-canary:
+    name: Deploy Canary (10% traffic)
+    needs: build-canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: ${{ inputs.environment }}
+    outputs:
+      canary_td_arn: ${{ steps.register-canary.outputs.canary_td_arn }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Register canary task definition
+        id: register-canary
+        run: |
+          CANARY_IMAGE="${{ needs.build-canary.outputs.canary_image }}"
+
+          # Derive canary task definition from current stable as template
+          STABLE_TD=$(aws ecs describe-task-definition \
+            --task-definition "${{ env.SERVICE_NAME }}-stable" \
+            --query 'taskDefinition' --output json)
+
+          NEW_TD=$(echo "${STABLE_TD}" | jq \
+            --arg image "${CANARY_IMAGE}" \
+            --arg family "${{ env.SERVICE_NAME }}-canary" \
+            '.family = $family |
+             .containerDefinitions[0].image = $image |
+             del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+
+          REGISTERED=$(aws ecs register-task-definition \
+            --cli-input-json "${NEW_TD}" \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "canary_td_arn=${REGISTERED}" >> "$GITHUB_OUTPUT"
+          echo "Registered canary task definition: ${REGISTERED}"
+
+      - name: Update canary ECS service
+        run: |
+          aws ecs update-service \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --service "${{ env.SERVICE_NAME }}-canary" \
+            --task-definition "${{ steps.register-canary.outputs.canary_td_arn }}" \
+            --desired-count 1 \
+            --force-new-deployment
+          aws ecs wait services-stable \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --services "${{ env.SERVICE_NAME }}-canary"
+          echo "Canary service updated and stable."
+
+      - name: Set ALB weights — canary 10%, stable 90%
+        run: |
+          aws elbv2 modify-listener \
+            --listener-arn "${{ env.ALB_LISTENER_ARN }}" \
+            --default-actions "[{
+              \"Type\": \"forward\",
+              \"ForwardConfig\": {
+                \"TargetGroups\": [
+                  {\"TargetGroupArn\": \"${{ env.STABLE_TG_ARN }}\", \"Weight\": 90},
+                  {\"TargetGroupArn\": \"${{ env.CANARY_TG_ARN }}\", \"Weight\": 10}
+                ],
+                \"TargetGroupStickinessConfig\": {\"Enabled\": false}
+              }
+            }]"
+          echo "ALB weights set: stable=90% canary=10%"
+
+  # ── 3. Observe canary for 10 minutes, sampling error rate every 60 s ────────
+  observe-canary:
+    name: Observe Canary (10-min window)
+    needs: deploy-canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      decision: ${{ steps.evaluate.outputs.decision }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sample error rate and decide
+        id: evaluate
+        run: |
+          LOG_FILE="canary-deployment-log.txt"
+          {
+            echo "=== Canary Deployment Log ==="
+            echo "Image tag : ${{ inputs.image_tag }}-canary"
+            echo "Start time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+          } > "${LOG_FILE}"
+
+          DECISION="promote"
+          END_TIME=$(( $(date +%s) + ${{ env.OBSERVATION_MINUTES }} * 60 ))
+          SAMPLE=0
+
+          while [ "$(date +%s)" -lt "${END_TIME}" ]; do
+            SAMPLE=$(( SAMPLE + 1 ))
+            NOW=$(date +%s)
+            WINDOW_START=$(( NOW - 60 ))
+
+            iso_from_epoch() {
+              date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+                || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ
+            }
+
+            ERRORS=$(aws cloudwatch get-metric-statistics \
+              --namespace "${{ env.CLOUDWATCH_NAMESPACE }}" \
+              --metric-name "5xxErrorCount" \
+              --dimensions "Name=TargetGroup,Value=${{ env.CANARY_TG_ARN }}" \
+              --start-time "$(iso_from_epoch ${WINDOW_START})" \
+              --end-time "$(iso_from_epoch ${NOW})" \
+              --period 60 --statistics Sum \
+              --query 'Datapoints[0].Sum' --output text 2>/dev/null || echo "0")
+
+            TOTAL=$(aws cloudwatch get-metric-statistics \
+              --namespace "${{ env.CLOUDWATCH_NAMESPACE }}" \
+              --metric-name "RequestCount" \
+              --dimensions "Name=TargetGroup,Value=${{ env.CANARY_TG_ARN }}" \
+              --start-time "$(iso_from_epoch ${WINDOW_START})" \
+              --end-time "$(iso_from_epoch ${NOW})" \
+              --period 60 --statistics Sum \
+              --query 'Datapoints[0].Sum' --output text 2>/dev/null || echo "1")
+
+            # Sanitise None / empty responses
+            [[ "${ERRORS}" == "None" || -z "${ERRORS}" ]] && ERRORS=0
+            [[ "${TOTAL}"  == "None" || -z "${TOTAL}"  || "${TOTAL}" == "0" ]] && TOTAL=1
+
+            ERROR_RATE=$(echo "scale=4; ${ERRORS} / ${TOTAL} * 100" | bc)
+            SAMPLE_LINE="[$(date -u +%Y-%m-%dT%H:%M:%SZ)] sample=${SAMPLE} errors=${ERRORS} total=${TOTAL} error_rate=${ERROR_RATE}%"
+            echo "${SAMPLE_LINE}" | tee -a "${LOG_FILE}"
+
+            if (( $(echo "${ERROR_RATE} > ${{ env.ERROR_RATE_ROLLBACK_THRESHOLD }}" | bc -l) )); then
+              echo "ROLLBACK: error rate ${ERROR_RATE}% exceeds ${{ env.ERROR_RATE_ROLLBACK_THRESHOLD }}% threshold" | tee -a "${LOG_FILE}"
+              DECISION="rollback"
+              break
+            fi
+
+            sleep 60
+          done
+
+          if [ "${DECISION}" = "promote" ]; then
+            echo "Observation window complete — error rate within bounds, promoting." | tee -a "${LOG_FILE}"
+          fi
+
+          {
+            echo ""
+            echo "Decision  : ${DECISION}"
+            echo "End time  : $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "${LOG_FILE}"
+
+          echo "decision=${DECISION}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload canary deployment log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-deployment-log-${{ github.run_id }}
+          path: canary-deployment-log.txt
+          retention-days: 30
+
+  # ── 4a. Manual approval gate (required before shifting traffic above 50%) ────
+  approval-gate:
+    name: Manual Approval Gate (> 50% traffic shift)
+    needs: observe-canary
+    if: needs.observe-canary.outputs.decision == 'promote'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: ${{ inputs.environment }}-promote
+    steps:
+      - name: Approval granted
+        run: echo "Manual approval received — proceeding to promote canary to stable."
+
+  # ── 4b. Promote: stable task def ← canary image, ALB → 100% stable ──────────
+  promote:
+    name: Promote Canary to Stable
+    needs: [build-canary, observe-canary, approval-gate]
+    if: needs.observe-canary.outputs.decision == 'promote'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Register new stable task definition with canary image
+        id: register-stable
+        run: |
+          CANARY_IMAGE="${{ needs.build-canary.outputs.canary_image }}"
+
+          CURRENT_TD=$(aws ecs describe-task-definition \
+            --task-definition "${{ env.SERVICE_NAME }}-stable" \
+            --query 'taskDefinition' --output json)
+
+          NEW_TD=$(echo "${CURRENT_TD}" | jq \
+            --arg image "${CANARY_IMAGE}" \
+            '.containerDefinitions[0].image = $image |
+             del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+
+          REGISTERED=$(aws ecs register-task-definition \
+            --cli-input-json "${NEW_TD}" \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "stable_td_arn=${REGISTERED}" >> "$GITHUB_OUTPUT"
+          echo "Registered new stable task definition: ${REGISTERED}"
+
+      - name: Update stable ECS service
+        run: |
+          aws ecs update-service \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --service "${{ env.SERVICE_NAME }}-stable" \
+            --task-definition "${{ steps.register-stable.outputs.stable_td_arn }}" \
+            --force-new-deployment
+          aws ecs wait services-stable \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --services "${{ env.SERVICE_NAME }}-stable"
+          echo "Stable service updated."
+
+      - name: Shift ALB to 100% stable
+        run: |
+          aws elbv2 modify-listener \
+            --listener-arn "${{ env.ALB_LISTENER_ARN }}" \
+            --default-actions "[{
+              \"Type\": \"forward\",
+              \"ForwardConfig\": {
+                \"TargetGroups\": [
+                  {\"TargetGroupArn\": \"${{ env.STABLE_TG_ARN }}\", \"Weight\": 100},
+                  {\"TargetGroupArn\": \"${{ env.CANARY_TG_ARN }}\", \"Weight\": 0}
+                ],
+                \"TargetGroupStickinessConfig\": {\"Enabled\": false}
+              }
+            }]"
+          echo "ALB shifted to 100% stable."
+
+      - name: Scale canary service to zero
+        run: |
+          aws ecs update-service \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --service "${{ env.SERVICE_NAME }}-canary" \
+            --desired-count 0
+          echo "Canary service scaled to 0."
+
+      - name: Promotion summary
+        run: |
+          echo "✅ Canary promoted successfully."
+          echo "   Image : ${{ needs.build-canary.outputs.canary_image }}"
+          echo "   All traffic now routed to stable."
+
+  # ── 4c. Rollback: canary → 0, ALB → 100% stable, Grafana annotation ─────────
+  rollback:
+    name: Rollback Canary
+    needs: observe-canary
+    if: needs.observe-canary.outputs.decision == 'rollback'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Scale canary service to zero
+        run: |
+          aws ecs update-service \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --service "${{ env.SERVICE_NAME }}-canary" \
+            --desired-count 0
+          echo "Canary service scaled to 0."
+
+      - name: Restore ALB to 100% stable
+        run: |
+          aws elbv2 modify-listener \
+            --listener-arn "${{ env.ALB_LISTENER_ARN }}" \
+            --default-actions "[{
+              \"Type\": \"forward\",
+              \"ForwardConfig\": {
+                \"TargetGroups\": [
+                  {\"TargetGroupArn\": \"${{ env.STABLE_TG_ARN }}\", \"Weight\": 100},
+                  {\"TargetGroupArn\": \"${{ env.CANARY_TG_ARN }}\", \"Weight\": 0}
+                ],
+                \"TargetGroupStickinessConfig\": {\"Enabled\": false}
+              }
+            }]"
+          echo "ALB restored to 100% stable."
+
+      - name: Post failure annotation to Grafana
+        run: |
+          if [ -n "${{ env.GRAFANA_URL }}" ] && [ -n "${{ env.GRAFANA_TOKEN }}" ]; then
+            curl -sf -X POST "${{ env.GRAFANA_URL }}/api/annotations" \
+              -H "Authorization: Bearer ${{ env.GRAFANA_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"tags\": [\"canary\",\"rollback\",\"${{ env.SERVICE_NAME }}\"],
+                \"text\": \"Canary rollback: ${{ inputs.image_tag }}-canary exceeded ${{ env.ERROR_RATE_ROLLBACK_THRESHOLD }}% error rate threshold. Run: ${{ github.run_id }}\",
+                \"time\": $(date +%s)000
+              }"
+            echo "Grafana annotation posted."
+          else
+            echo "GRAFANA_URL or GRAFANA_TOKEN not set — skipping annotation."
+          fi
+
+      - name: Rollback summary
+        run: |
+          echo "🔴 Canary rolled back."
+          echo "   Image : ${{ inputs.image_tag }}-canary was rejected."
+          echo "   All traffic restored to stable."
