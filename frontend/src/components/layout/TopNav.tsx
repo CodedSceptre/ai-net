@@ -9,6 +9,7 @@ import type { SupportedLanguage } from '../../i18n/options'
 import './TopNav.css'
 import useTheme from '../../hooks/useTheme'
 import { Sun, Moon, Monitor } from 'lucide-react'
+import { GlobalSearch } from './GlobalSearch'
 
 interface TopNavProps {
   onMenuClick: () => void
@@ -103,6 +104,7 @@ const TopNav: React.FC<TopNavProps> = ({
       </div>
 
       <div className="nav-right">
+        <GlobalSearch />
         <NotificationBell />
 
         {/* Theme toggle: cycles light -> dark -> system */}
