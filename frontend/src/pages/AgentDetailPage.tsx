@@ -1,3 +1,6 @@
+import ReputationHistoryChart from '../components/agents/ReputationHistoryChart'
+import ScoreBreakdownChart from '../components/agents/ScoreBreakdownChart'
+import { useAgentReputation } from '../hooks/useAgentReputation'
 /**
  * AgentDetailPage
  *
@@ -137,8 +140,9 @@ const AgentDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { agent, reputation, reputationHistory, reputationHistoryLoading, agentLoading, reputationLoading, error, notFound } =
+  const { agent, reputation, agentLoading, reputationLoading, error, notFound } =
     useAgentDetail(id ?? '')
+  const history = useAgentReputation(id ?? '', { includeSummary: false })
   useBreadcrumbLabel(agent?.name ?? `Agent ${id ?? ''}`)
 
   const handleHire = useCallback(() => {
@@ -309,10 +313,13 @@ const AgentDetailPage: React.FC = () => {
                 ))}
               </dl>
             )}
-            <ReputationChart
-              history={reputationHistory ?? []}
-              loading={reputationHistoryLoading}
+            <ReputationHistoryChart
+              historyPoints={history.historyPoints}
+              trendSummary={history.trendSummary}
+              isLoading={history.isLoading}
+              error={history.error}
             />
+            {agent && <ScoreBreakdownChart segments={history.scoreBreakdown} score={agent.reputation} />}
           </section>
         )}
       </div>

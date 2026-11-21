@@ -412,7 +412,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
   // GET /api/agents/:id/health
     /**
      * @openapi
-     * /api/agents/{id}/reputation/history:
+     * /api/agents/{id}/reputation-history:
      *   get:
      *     summary: Get an agent's reputation history for the last 30 days
      *     tags: [Agents]
@@ -429,7 +429,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
      *       404:
      *         description: Agent not found
      */
-    router.get("/:id/reputation/history", (req: Request, res: Response, next: NextFunction): void => {
+    router.get(["/:id/reputation-history", "/:id/reputation/history"], (req: Request, res: Response, next: NextFunction): void => {
       try {
         const db = getDb();
         if (!db.findById(req.params.id)) {
