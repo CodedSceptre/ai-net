@@ -1,0 +1,191 @@
+/* ── Root ─────────────────────────────────────────────────────────────────── */
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* ── Drop zone ────────────────────────────────────────────────────────────── */
+.dropZone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem 1.5rem;
+  border: 2px dashed var(--border-primary, #2a3040);
+  border-radius: var(--radius-2xl, 16px);
+  background: var(--surface-secondary, #161b24);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  text-align: center;
+  outline: none;
+}
+
+.dropZone:hover:not(.disabled),
+.dropZone:focus-visible:not(.disabled) {
+  border-color: var(--accent, #8b5cf6);
+  background: var(--accent-surface-muted, rgba(99, 102, 241, 0.06));
+}
+
+.dropZone:focus-visible {
+  outline: 2px solid var(--accent, #8b5cf6);
+  outline-offset: 2px;
+}
+
+/* Drag-over: solid border + tinted background */
+.dropZone.dragOver {
+  border-style: solid;
+  border-color: var(--accent-info, #38bdf8);
+  background: var(--info-surface, rgba(56, 189, 248, 0.08));
+}
+
+.dropZone.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.uploadIcon {
+  color: var(--text-muted, #94a3b8);
+  transition: color 0.15s ease;
+}
+
+.dropZone.dragOver .uploadIcon {
+  color: var(--accent-info, #38bdf8);
+}
+
+.dropZone:hover:not(.disabled) .uploadIcon {
+  color: var(--accent, #8b5cf6);
+}
+
+.dropLabel {
+  font-size: 0.9375rem;
+  color: var(--text-secondary, #8a93a3);
+  margin: 0;
+}
+
+.browseLink {
+  color: var(--accent-text, #c4b5fd);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dropHint {
+  font-size: 0.75rem;
+  color: var(--text-disabled, rgba(148, 163, 184, 0.35));
+  margin: 0;
+}
+
+/* Hidden native input */
+.hiddenInput {
+  display: none;
+}
+
+/* ── File list ────────────────────────────────────────────────────────────── */
+.fileList {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── File item ────────────────────────────────────────────────────────────── */
+.fileItem {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 0.875rem;
+  background: var(--surface-raised, #1a1f2e);
+  border: 1px solid var(--border-subtle, #1f2630);
+  border-radius: var(--radius-lg, 8px);
+  min-width: 0;
+}
+
+.fileIcon {
+  flex-shrink: 0;
+  color: var(--text-muted, #94a3b8);
+  display: flex;
+  align-items: center;
+}
+
+.fileInfo {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fileName {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary, #f5f7fa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fileMeta {
+  font-size: 0.75rem;
+  color: var(--text-muted, #94a3b8);
+}
+
+.errorText {
+  color: var(--status-danger, #ef4444);
+}
+
+/* ── Progress bar ─────────────────────────────────────────────────────────── */
+.progressTrack {
+  width: 100%;
+  height: 3px;
+  background: var(--border-primary, #2a3040);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--accent, #8b5cf6);
+  border-radius: 2px;
+  transition: width 0.1s ease;
+}
+
+/* ── Status icons ─────────────────────────────────────────────────────────── */
+.statusIcon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.iconSuccess { color: var(--status-success, #34d399); }
+.iconError   { color: var(--status-danger, #ef4444); }
+
+/* ── Remove button ────────────────────────────────────────────────────────── */
+.removeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #94a3b8);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.removeBtn:hover {
+  background: var(--status-danger-surface, rgba(239, 68, 68, 0.12));
+  color: var(--status-danger, #ef4444);
+}
+
+.removeBtn:focus-visible {
+  outline: 2px solid var(--status-danger, #ef4444);
+  outline-offset: 2px;
+}
