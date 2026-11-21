@@ -75,3 +75,13 @@ cd frontend && npm run build
 ## Additional Context
 
 <!-- Anything else reviewers should know? Architecture decisions, trade-offs, follow-up work? -->
+
+### Visual baselines
+
+Run `cd frontend && npm run test:visual` to compare screenshots. Open the
+`playwright-visual-report` CI artifact to review expected, actual, and diff images.
+For intended changes, apply the `update-snapshots` label. CI commits regenerated
+PNGs to same-repository PR branches. For a fork PR, download the
+`visual-baselines` artifact, copy the reviewed PNGs to
+`frontend/tests/visual/baselines/`, and commit them to the PR branch. Remove the
+label after the update so subsequent runs compare against the committed images.

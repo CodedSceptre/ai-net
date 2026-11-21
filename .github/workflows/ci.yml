@@ -7,6 +7,7 @@ on:
       - "docs/**"
       - "**.md"
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths-ignore:
       - "docs/**"
       - "**.md"
@@ -197,34 +198,45 @@ jobs:
 
   frontend-visual:
     name: frontend-visual-regression
-    # Deliberately does NOT `needs: [frontend]`. This suite renders four
-    # specific routes through `vite dev` (an on-demand, per-module dev
-    # server), not the full production bundle `frontend`'s `npm run build`
-    # type-checks — so it doesn't need that job to pass, and shouldn't be
-    # blocked by an unrelated tsc error in a page these tests don't visit.
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Pinned to the @playwright/test version resolved in package-lock.json.
-    # Visual baselines are pixel-tied to this image's fonts/rendering stack —
-    # bump this tag in lockstep whenever @playwright/test is upgraded, and
-    # regenerate baselines from the same image (see docs/visual-regression-testing.md).
+    permissions:
+      contents: read
     container:
-      image: mcr.microsoft.com/playwright:v1.61.0-jammy
+      image: mcr.microsoft.com/playwright:v1.61.0-noble
     env:
       TZ: UTC
-      PERCY_TOKEN: ${{ secrets.PERCY_TOKEN }}
     defaults:
       run:
+        shell: bash
         working-directory: frontend
+    outputs:
+      updated: ${{ steps.snapshots.outputs.updated }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run visual regression tests
-        run: npm run test:visual
+      - name: Compare or regenerate visual baselines
+        id: snapshots
+        env:
+          UPDATE: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'update-snapshots') }}
+        run: |
+          if [[ "$UPDATE" == "true" || ! -d tests/visual/baselines ]]; then
+            npm run test:visual -- --update-snapshots
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+          else
+            npm run test:visual
+          fi
 
       - name: Upload visual regression report
         if: ${{ !cancelled() }}
@@ -234,13 +246,46 @@ jobs:
           path: frontend/playwright-report-visual/
           retention-days: 14
 
-      - name: Link visual diffs in job summary
-        if: failure()
+      - name: Upload generated baselines
+        if: ${{ !cancelled() && steps.snapshots.outputs.updated == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: visual-baselines
+          path: frontend/tests/visual/baselines/*/*.png
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Require committed baselines
+        if: steps.snapshots.outputs.updated == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || !contains(github.event.pull_request.labels.*.name, 'update-snapshots'))
         run: |
-          {
-            echo "### Visual regression diffs detected";
-            echo "Open the **playwright-visual-report** artifact attached to this run (Summary tab → Artifacts) and load \`index.html\` for side-by-side expected/actual/diff images per failing snapshot.";
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -z "$(git ls-files -- tests/visual/baselines)" || -n "$(git status --porcelain -- tests/visual/baselines)" ]]; then
+            echo "::error::Commit the reviewed PNGs from the visual-baselines artifact."
+            exit 1
+          fi
+
+  commit-visual-baselines:
+    name: Commit visual baselines
+    needs: frontend-visual
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'update-snapshots') && needs.frontend-visual.outputs.updated == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: visual-baselines
+          path: frontend/tests/visual/baselines
+      - name: Commit generated PNGs
+        env:
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git add -- 'frontend/tests/visual/baselines/*/*.png'
+          if git diff --cached --quiet; then exit 0; fi
+          git -c user.name='github-actions[bot]'             -c user.email='41898282+github-actions[bot]@users.noreply.github.com'             commit -m 'test(frontend): update visual baselines'
+          git push origin "HEAD:refs/heads/$HEAD_BRANCH"
 
   contracts:
     name: smart-contracts
