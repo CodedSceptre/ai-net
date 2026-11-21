@@ -9,7 +9,12 @@ import { createInterface } from "node:readline";
 it("drains five in-flight HTTP responses after SIGTERM and exits cleanly", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "ai-net-shutdown-"));
   const child = spawn(process.execPath, [
-    "-r", require.resolve("ts-node/register/transpile-only"), "-e", `
+    "-e", `
+      require(${JSON.stringify(require.resolve("ts-node"))}).register({
+        project: ${JSON.stringify(resolve(__dirname, "../tsconfig.json"))},
+        transpileOnly: true,
+        experimentalResolver: true,
+      });
       const { createServer } = require("node:http");
       const { setupGracefulShutdown } = require(${JSON.stringify(resolve(__dirname, "../src/index.ts"))});
       const { shutdownMiddleware } = require(${JSON.stringify(resolve(__dirname, "../src/api/middleware/shutdownMiddleware.ts"))});
@@ -30,7 +35,7 @@ it("drains five in-flight HTTP responses after SIGTERM and exits cleanly", async
     `,
   ], {
     cwd,
-    env: { ...process.env, TS_NODE_PROJECT: resolve(__dirname, "../tsconfig.json"), LOG_LEVEL: "silent" },
+    env: { ...process.env, LOG_LEVEL: "silent" },
     stdio: ["ignore", "pipe", "inherit"],
   });
   const exited = once(child, "exit");
