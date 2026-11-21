@@ -32,6 +32,7 @@ import { EmptyState } from '../components/common/EmptyState'
 import { AgentsEmptyIllustration } from '../components/common/illustrations'
 import { SearchEmptyIllustration } from '../components/common/illustrations'
 import { Skeleton, SkeletonCard } from '../components/common/Skeleton'
+import { Pagination } from '../components/common/Pagination'
 import type { AgentRecord } from '../types/api'
 import {
   allCapabilities,
@@ -176,7 +177,11 @@ function AgentsPage() {
   const updateFilters = useCallback(
     (next: Partial<AgentFilters>) => {
       const merged = { ...filters, ...next }
-      setSearchParams(filtersToSearchParams(merged), { replace: true })
+      setSearchParams((prev) => {
+        const updated = filtersToSearchParams(merged)
+        updated.set('page', '1')
+        return updated
+      }, { replace: true })
     },
     [filters, setSearchParams]
   )
@@ -202,6 +207,23 @@ function AgentsPage() {
     () => filterAndSortAgents(agents, filters),
     [agents, filters]
   )
+
+  // Pagination — derived from URL params so page/pageSize survive navigation
+  const currentPage = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10) || 1)
+  const pageSize = Math.max(1, parseInt(searchParams.get('pageSize') ?? '25', 10) || 25)
+  const totalPages = Math.max(1, Math.ceil(visibleAgents.length / pageSize))
+  const paginatedAgents = useMemo(
+    () => visibleAgents.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [visibleAgents, currentPage, pageSize]
+  )
+
+  const handlePageChange = useCallback((page: number) => {
+    setSearchParams((prev) => { prev.set('page', String(page)); return prev }, { replace: true })
+  }, [setSearchParams])
+
+  const handlePageSizeChange = useCallback((size: number) => {
+    setSearchParams((prev) => { prev.set('pageSize', String(size)); prev.set('page', '1'); return prev }, { replace: true })
+  }, [setSearchParams])
 
   const handleHire = useCallback((agent: AgentRecord) => {
     // Navigate to task creation pre-filled with this agent
@@ -421,7 +443,7 @@ function AgentsPage() {
                       role="list"
                       aria-label={t('nav.agentRegistry', { defaultValue: 'Agent Registry' })}
                     >
-                      {visibleAgents.map((agent) => (
+                      {paginatedAgents.map((agent) => (
                         <div
                           key={agent.id}
                           role="listitem"
@@ -445,12 +467,23 @@ function AgentsPage() {
 
               {viewMode === 'table' && (
                 <AgentTable
-                  agents={visibleAgents}
+                  agents={paginatedAgents}
                   loading={loading}
                   sortKey={filters.sortKey}
                   sortDir={filters.sortDir}
                   onSort={handleSort}
                   onRowClick={setSelected}
+                />
+              )}
+
+              {totalPages > 1 && (
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  totalItems={visibleAgents.length}
+                  pageSize={pageSize}
+                  onPageChange={handlePageChange}
+                  onPageSizeChange={handlePageSizeChange}
                 />
               )}
             </main>

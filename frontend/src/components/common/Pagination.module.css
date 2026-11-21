@@ -1,0 +1,211 @@
+.pagination {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 0;
+}
+
+.paginationControls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.paginationMeta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* Prev / Next buttons */
+.prevNextBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.prevNextBtn:hover:not(:disabled) {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.prevNextBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.prevNextBtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Page number list wrapper */
+.pageNumbers {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Individual page button */
+.pageBtn {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pageBtn:hover:not(:disabled) {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
+.pageBtn.active {
+  background: var(--accent-surface, rgba(99, 102, 241, 0.15));
+  border-color: var(--accent-border, rgba(99, 102, 241, 0.3));
+  color: var(--accent-text-strong, #a78bfa);
+  cursor: default;
+}
+
+.pageBtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Ellipsis */
+.ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 36px;
+  color: var(--text-muted);
+  font-size: 13px;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Results summary */
+.resultsSummary {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Jump-to-page */
+.jumpLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.jumpLabelText {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.jumpInput {
+  width: 56px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: center;
+}
+
+.jumpInput:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+/* Hide number input arrows */
+.jumpInput::-webkit-outer-spin-button,
+.jumpInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.jumpInput[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Page size selector */
+.pageSizeLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pageSizeLabelText {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.pageSizeSelect {
+  height: 32px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a5aebd' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+.pageSizeSelect:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+/* Mobile — stack controls vertically, simplify */
+@media (max-width: 480px) {
+  .paginationMeta {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .prevNextBtn span:not(:only-child) {
+    /* hide text labels on very small screens, keep icons */
+    display: none;
+  }
+
+  .prevNextBtn {
+    padding: 6px 10px;
+  }
+}
