@@ -15,6 +15,10 @@ async function prepareApp() {
   if (import.meta.env.DEV || import.meta.env.MODE === 'test' || window.location.hostname === 'localhost') {
     try {
       const { worker } = await import('./mocks/browser')
+      if (import.meta.env.DEV && localStorage.getItem('ai-net-visual-fixtures') === 'true') {
+        const { visualHandlers } = await import('../tests/visual/fixtures/handlers')
+        worker.use(...visualHandlers)
+      }
       await worker.start({
         onUnhandledRequest: 'bypass',
         serviceWorker: {

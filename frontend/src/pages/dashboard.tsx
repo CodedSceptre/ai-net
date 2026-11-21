@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Navigate } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
 import { useNetworkStats } from "../hooks/useNetworkStats";
+import { useAgentRegistry } from "../hooks/useAgentRegistry";
 import { DashboardLayout } from "../components/dashboard/DashboardLayout";
 import { NetworkStatsWidget } from "../components/dashboard/NetworkStatsWidget";
 import { NetworkHealthBadge } from "../components/dashboard/NetworkHealthBadge";
@@ -59,6 +60,7 @@ export const DashboardSkeleton: React.FC = () => {
 export const DashboardPage: React.FC = () => {
   const { address, connected } = useWallet();
   const { data, loading, error } = useNetworkStats();
+  const { agents, loading: agentsLoading } = useAgentRegistry();
   const { showToast } = useToast();
   const { t, i18n } = useTranslation();
 
@@ -104,6 +106,25 @@ export const DashboardPage: React.FC = () => {
       <section className={styles.health}>
         <NetworkHealthBadge uptimePercent={kpiData.uptimePercent} />
       </section>
+      {(agentsLoading || agents.length > 0) && (
+        <section className={styles.recentTasks} aria-labelledby="dashboard-agent-performance">
+          <h2 id="dashboard-agent-performance" className={styles.heading}>
+            {t("page.dashboard.agentPerformance", { defaultValue: "Agent performance" })}
+          </h2>
+          {agentsLoading ? (
+            <SkeletonTable rows={3} columns={2} />
+          ) : (
+            <ul className={styles.agentPerformance}>
+              {[...agents].sort((a, b) => b.reputation - a.reputation).slice(0, 3).map((agent) => (
+                <li key={agent.id}>
+                  <span>{agent.name}</span>
+                  <strong>{new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 2 }).format(agent.reputation)} / 5</strong>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
       <section className={styles.recentTasks}>
         <h2 className={styles.heading}>{t("page.dashboard.recentTasks")}</h2>
         <RecentTasksTable walletAddress={address ?? ""} loading={loading} />

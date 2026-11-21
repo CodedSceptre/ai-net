@@ -3,6 +3,7 @@ import { useTranslation, Trans } from "react-i18next";
 import { useParams } from "react-router-dom";
 
 import { useTaskMonitor } from "../hooks/useTaskMonitor";
+import { PipelineStepIndicator } from "../components/tasks/PipelineStepIndicator";
 import { DAGVisualization } from "../components/tasks/DAGVisualization";
 import { TaskDetailTimeline } from "../components/dashboard/TaskDetailTimeline";
 import { PaymentTimeline } from "../components/dashboard/PaymentTimeline";
