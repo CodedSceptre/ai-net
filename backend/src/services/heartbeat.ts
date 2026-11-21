@@ -1,3 +1,4 @@
+import { ReputationEngine } from "./reputationEngine";
 import { AgentDb, createAgentDb, getAgentDb } from "../db/agents";
 import { createLogger } from "../utils/logger";
 
@@ -30,6 +31,7 @@ export function createHeartbeatService(options: HeartbeatServiceOptions = {}): H
     try {
       const db = getDb();
       const markedOffline = db.markStaleAgents(staleThresholdSeconds);
+      if (!options.db) new ReputationEngine().sampleUptime();
 
       if (markedOffline > 0) {
         logger.info(`Heartbeat cleanup: ${markedOffline} marked offline`);

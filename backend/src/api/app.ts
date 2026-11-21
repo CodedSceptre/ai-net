@@ -323,18 +323,20 @@ export function createApp(opts: AppOptions = {}): {
 }
 
 /**
- * Build a DispatchFn that looks up the cheapest agent for a node's type in the
- * provided registry and forwards the call to that agent via HTTP.
+ * Dispatch to an eligible agent and report which agent handled the node.
  */
 function makeHttpDispatch(registry?: AgentRegistry): DispatchFn {
-  return async (_taskId: string, node: DAGNode, context: string): Promise<unknown> => {
-    if (!registry) {
-      throw new Error(
-        "No agent registry configured. Provide agentRegistry in AppOptions or supply a custom dispatch function.",
-      );
-    }
-
-    const agents = await registry.getAgents(node.type);
+  return async (_taskId: string, node: DAGNode, context: string, onAgentSelected): Promise<unknown> => {
+    const agents = registry
+      ? await registry.getAgents(node.type)
+      : createAgentDb(getAgentDb()).list({ capability: node.type, status: "online" }).map((agent) => ({
+        id: agent.id,
+        type: node.type,
+        endpoint: agent.endpoint,
+        cost: agent.pricingXLM,
+        status: agent.status,
+        reputation: agent.reputationScore,
+      }));
     if (!agents || agents.length === 0) {
       throw new AppError(`No agent registered for type: ${node.type}`, 500, "AGENT_NOT_FOUND");
     }
@@ -349,7 +351,8 @@ function makeHttpDispatch(registry?: AgentRegistry): DispatchFn {
       );
     }
 
-    const agent = [...eligible].sort((a, b) => a.cost - b.cost)[0];
+    const agent = [...eligible].sort((a, b) => a.cost - b.cost || (b.reputation ?? 0) - (a.reputation ?? 0))[0];
+    onAgentSelected?.(agent.id);
     return httpDispatch(agent, node.nodeId, node, context);
   };
 }
