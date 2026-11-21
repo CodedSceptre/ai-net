@@ -77,9 +77,10 @@ export function getDb(dbPath?: string): Database.Database {
   return getPaymentPool(dbPath).writer;
 }
 
-export function closeDb(): void {
-  void _pool?.close();
+export async function closeDb(): Promise<void> {
+  const closing = _pool?.close();
   _pool = null;
+  await closing;
 }
 
 /** The payments pool if one is open, else null. Used by the metrics endpoint. */

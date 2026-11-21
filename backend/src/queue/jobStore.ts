@@ -4,7 +4,7 @@ import { createLogger } from "../utils/logger";
 
 const logger = createLogger({ component: "job-store" });
 
-export type JobStatus = "pending" | "active" | "completed" | "failed" | "dead-letter";
+export type JobStatus = "pending" | "cancelled" | "active" | "completed" | "failed" | "dead-letter";
 export type JobPriority = "low" | "normal" | "high" | "critical";
 
 export const PRIORITY_WEIGHTS: Record<JobPriority, number> = {
@@ -33,6 +33,7 @@ export interface Job<T = any> {
 }
 
 export interface JobStore {
+  cancelWaiting(): void;
   insert(job: Job): void;
   findById(id: string): Job | undefined;
   findByTaskId(taskId: string): Job | undefined;
@@ -92,6 +93,7 @@ export function getJobDb(dbPath?: string): Database.Database {
 }
 
 export function closeJobDb(): void {
+  _jobDb?.pragma("wal_checkpoint(FULL)");
   _jobDb?.close();
   _jobDb = null;
 }
@@ -330,6 +332,13 @@ export function createJobStore(db: Database.Database): JobStore {
         deadLetter: counts["dead-letter"] || 0,
         total,
       };
+    },
+
+    cancelWaiting(): void {
+      db.prepare(`
+        UPDATE jobs SET status = 'cancelled', lastError = 'Server shutdown', updatedAt = ?
+        WHERE status = 'pending' OR (status = 'failed' AND attempts < maxAttempts)
+      `).run(new Date().toISOString());
     },
 
     getDeadLetterJobs(page = 1, pageSize = 50): { jobs: Job[]; total: number } {

@@ -316,7 +316,11 @@ export function createEventStore(db?: Database.Database | string): EventStore {
     },
 
     close(): void {
-      database.close();
+      try {
+        database.pragma("wal_checkpoint(FULL)");
+      } finally {
+        database.close();
+      }
     },
   };
 }
