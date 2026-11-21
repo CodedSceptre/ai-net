@@ -8,6 +8,7 @@ import { DashboardLayout } from '../components/dashboard/DashboardLayout';
 import { KpiCard } from '../components/dashboard/KpiCard';
 import { NetworkHealthBadge } from '../components/dashboard/NetworkHealthBadge';
 import { RecentTasksTable } from '../components/dashboard/RecentTasksTable';
+import { ActivityFeed } from '../components/dashboard/ActivityFeed';
 import { useToast } from '../hooks/useToast';
 import { Skeleton, SkeletonAvatar, SkeletonCard, SkeletonTable } from '../components/common/Skeleton';
 import styles from './dashboard.module.css';
@@ -126,6 +127,9 @@ export const DashboardPage: React.FC = () => {
       <section className={styles.recentTasks}>
         <h2 className={styles.heading}>{t('page.dashboard.recentTasks')}</h2>
         <RecentTasksTable walletAddress={address ?? ''} loading={loading} />
+      </section>
+      <section className={styles.activityFeed}>
+        <ActivityFeed />
       </section>
     </DashboardLayout>
   );
