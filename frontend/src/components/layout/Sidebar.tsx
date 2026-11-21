@@ -1,6 +1,7 @@
 import React from 'react'
 import { useTranslation } from 'react-i18next'
 import { motion } from 'framer-motion'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { NAV_GROUPS, isNavItemActive } from './navigation'
 import './Sidebar.css'
 
@@ -8,9 +9,11 @@ interface SidebarProps {
   collapsed: boolean
   currentPath: string
   onNavigate: (path: string) => void
+  onToggle: () => void
+  walletAddress?: string | null
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ collapsed, currentPath, onNavigate }) => {
+const Sidebar: React.FC<SidebarProps> = ({ collapsed, currentPath, onNavigate, onToggle, walletAddress }) => {
   const { t } = useTranslation()
 
   const handleKeyDown = (e: React.KeyboardEvent, path: string) => {
@@ -25,6 +28,17 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, currentPath, onNavigate })
       className={`sidebar ${collapsed ? 'collapsed' : ''}`}
       aria-label={t('a11y.sidebar')}
     >
+      <div className="sidebar-header">
+        <button
+          className="sidebar-toggle-btn"
+          onClick={onToggle}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+        </button>
+      </div>
+
       <nav className="sidebar-nav" role="navigation" aria-label={t('a11y.mainNavigation')}>
         {NAV_GROUPS.map((group) => (
           <div className="nav-group" key={group.id}>
@@ -81,6 +95,22 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, currentPath, onNavigate })
           </div>
         ))}
       </nav>
+
+      {walletAddress && (
+        <div className="sidebar-user" title={collapsed ? walletAddress : undefined}>
+          <div className="sidebar-user-avatar" aria-hidden="true">
+            {walletAddress.slice(0, 2)}
+          </div>
+          {!collapsed && (
+            <div className="sidebar-user-info">
+              <span className="sidebar-user-address">
+                {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
+              </span>
+              <span className="sidebar-user-label">Connected</span>
+            </div>
+          )}
+        </div>
+      )}
     </aside>
   )
 }
