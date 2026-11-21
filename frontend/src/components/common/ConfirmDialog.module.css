@@ -1,0 +1,211 @@
+/* ── Backdrop ─────────────────────────────────────────────────────────── */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--surface-scrim, rgba(0, 0, 0, 0.65));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  animation: backdropFadeIn 150ms ease forwards;
+}
+
+@keyframes backdropFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Dialog shell ─────────────────────────────────────────────────────── */
+.dialog {
+  background: var(--surface-panel-translucent, rgba(30, 41, 59, 0.96));
+  border-radius: var(--radius-2xl, 16px);
+  border: 1px solid var(--border-muted, rgba(255, 255, 255, 0.08));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  width: 100%;
+  max-width: 440px;
+  margin: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.5rem;
+  animation: dialogScaleIn 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes dialogScaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Risk-level border tints */
+.dialog.low    { border-color: var(--info-border, rgba(56, 189, 248, 0.3)); }
+.dialog.medium { border-color: var(--status-warning-border, rgba(245, 158, 11, 0.3)); }
+.dialog.high   { border-color: var(--status-danger-border, rgba(239, 68, 68, 0.3)); }
+
+/* ── Header ───────────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-bottom: 0.875rem;
+  border-bottom: 1px solid var(--border-muted, rgba(255, 255, 255, 0.08));
+}
+
+.dialog.low    .header { border-bottom-color: var(--info-border, rgba(56, 189, 248, 0.3)); }
+.dialog.medium .header { border-bottom-color: var(--status-warning-border, rgba(245, 158, 11, 0.3)); }
+.dialog.high   .header { border-bottom-color: var(--status-danger-border, rgba(239, 68, 68, 0.3)); }
+
+.riskIcon {
+  font-size: 1.25rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-primary, #f5f7fa);
+}
+
+.dialog.low    .title { color: var(--accent-info, #38bdf8); }
+.dialog.medium .title { color: var(--status-warning, #fbbf24); }
+.dialog.high   .title { color: var(--status-danger, #ef4444); }
+
+/* ── Body ─────────────────────────────────────────────────────────────── */
+.description {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--text-secondary, #8a93a3);
+}
+
+/* ── High-risk type-to-confirm ───────────────────────────────────────── */
+.typeConfirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--status-danger-surface, rgba(239, 68, 68, 0.08));
+  border: 1px solid var(--status-danger-border, rgba(239, 68, 68, 0.3));
+  border-radius: var(--radius-lg, 8px);
+  padding: 0.875rem;
+}
+
+.typeLabel {
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #8a93a3);
+}
+
+.typeLabel strong {
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 0.875rem;
+  color: var(--status-danger, #ef4444);
+}
+
+.typeInput {
+  width: 100%;
+  background: var(--surface-raised, #1a1f2e);
+  border: 1px solid var(--border-primary, #2a3040);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--text-primary, #f5f7fa);
+  font-size: 0.9375rem;
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  padding: 0.5rem 0.75rem;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.typeInput:focus {
+  border-color: var(--status-danger, #ef4444);
+}
+
+.typeInput::placeholder {
+  color: var(--text-disabled, rgba(148, 163, 184, 0.35));
+}
+
+/* ── Actions row ──────────────────────────────────────────────────────── */
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.cancelBtn {
+  padding: 0.5rem 1.25rem;
+  border-radius: var(--radius-lg, 8px);
+  border: 1px solid var(--border-primary, #2a3040);
+  background: transparent;
+  color: var(--text-secondary, #8a93a3);
+  font-size: 0.875rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.cancelBtn:hover {
+  background: var(--surface-hover, rgba(255, 255, 255, 0.06));
+  color: var(--text-primary, #f5f7fa);
+}
+
+.cancelBtn:focus-visible {
+  outline: 2px solid var(--accent, #8b5cf6);
+  outline-offset: 2px;
+}
+
+.confirmBtn {
+  padding: 0.5rem 1.25rem;
+  border-radius: var(--radius-lg, 8px);
+  border: none;
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  color: #fff;
+  transition: opacity 0.15s ease, filter 0.15s ease;
+}
+
+.confirmBtn:disabled,
+.confirmBtn[aria-disabled='true'] {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.confirmBtn:not(:disabled):focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+/* Per-risk confirm button colours */
+.confirmLow {
+  background: var(--accent-info, #38bdf8);
+  color: #0a0e14;
+}
+.confirmLow:not(:disabled):hover { filter: brightness(1.12); }
+
+.confirmMedium {
+  background: var(--status-warning, #fbbf24);
+  color: #0a0e14;
+}
+.confirmMedium:not(:disabled):hover { filter: brightness(1.1); }
+
+.confirmHigh {
+  background: var(--status-danger, #ef4444);
+  color: #fff;
+}
+.confirmHigh:not(:disabled):hover { filter: brightness(1.12); }
+
+/* ── Reduced motion ───────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .backdrop,
+  .dialog {
+    animation: none;
+  }
+}
