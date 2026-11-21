@@ -148,6 +148,7 @@ export function getAuthDb(dbPath?: string): Database.Database {
 }
 
 export function closeAuthDb(): void {
+  _authDb?.pragma("wal_checkpoint(FULL)");
   _authDb?.close();
   _authDb = null;
 }

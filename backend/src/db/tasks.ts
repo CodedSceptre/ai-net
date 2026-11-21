@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import path from "path";
-import type { Task, TaskStatus } from "../types/task";
+import type { DAGNode, Task, TaskStatus } from "../types/task";
 import type { QualityScoreRecord } from "../services/qualityScorer.types";
 import { createLogger } from "../utils/logger";
 import { migrateToLatest } from "./migrator";
@@ -50,9 +50,10 @@ export function currentTaskPool(): SqlitePool | null {
   return _taskPool && !_taskPool.closed ? _taskPool : null;
 }
 
-export function closeTaskDb(): void {
-  void _taskPool?.close();
+export async function closeTaskDb(): Promise<void> {
+  const closing = _taskPool?.close();
   _taskPool = null;
+  await closing;
 }
 
 export interface TaskEvent {
@@ -132,6 +133,7 @@ export interface TaskDb {
   insertEvent(event: TaskEvent): void;
   getEventHistory(taskId: string): TaskEvent[];
   failRunningTasks(): void;
+  interruptRunningNodes(): void;
   insertQualityScore(record: QualityScoreRecord): void;
   listQualityScores(agentId?: string, limit?: number, since?: string): QualityScoreRecord[];
 }
@@ -367,6 +369,25 @@ export function createTaskDb(db: Database.Database): TaskDb {
         payload: r.payload ? JSON.parse(r.payload) : undefined,
         timestamp: r.timestamp,
       }));
+    },
+
+    interruptRunningNodes(): void {
+      const rows = db.prepare("SELECT id, dagJson FROM tasks WHERE status = 'running'")
+        .all() as { id: string; dagJson: string }[];
+      const update = db.prepare("UPDATE tasks SET dagJson = ?, updatedAt = ? WHERE id = ?");
+      const timestamp = new Date().toISOString();
+      db.transaction(() => {
+        for (const { id, dagJson } of rows) {
+          const dag = JSON.parse(dagJson) as DAGNode[];
+          const running = dag.filter((node) => node.status === "running");
+          if (!running.length) continue;
+          for (const node of running) {
+            node.status = "interrupted";
+            node.interruptedAt = timestamp;
+          }
+          update.run(JSON.stringify(dag), timestamp, id);
+        }
+      })();
     },
 
     failRunningTasks(): void {

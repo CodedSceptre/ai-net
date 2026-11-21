@@ -210,9 +210,10 @@ export function currentAgentPool(): SqlitePool | null {
   return _agentPool && !_agentPool.closed ? _agentPool : null;
 }
 
-export function closeAgentDb(): void {
-  void _agentPool?.close();
+export async function closeAgentDb(): Promise<void> {
+  const closing = _agentPool?.close();
   _agentPool = null;
+  await closing;
 }
 
 export interface AgentDb {

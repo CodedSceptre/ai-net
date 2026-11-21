@@ -153,10 +153,11 @@ describe('setupGracefulShutdown', () => {
     const shutdown = setupGracefulShutdown(mockHttpServer, mockCloseApp, { GRACEFUL_SHUTDOWN_TIMEOUT: 10 });
 
     // Start shutdown
-    shutdown('SIGINT');
+    const stopped = shutdown('SIGINT');
 
     // Fast-forward timers by 10 seconds
     jest.advanceTimersByTime(10000);
+    await stopped;
 
     // The force exit timeout should trigger process.exit(1)
     expect(mockProcessExit).toHaveBeenCalledWith(1);

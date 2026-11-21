@@ -1,3 +1,4 @@
+import { shutdownMiddleware, isShuttingDown } from "./middleware/shutdownMiddleware";
 /**
  * Express application factory.
  *
@@ -127,6 +128,7 @@ export function createApp(opts: AppOptions = {}): {
     void eventBus.connectRedis(config.REDIS_URL);
   }
 
+  app.use(shutdownMiddleware);
   app.use(express.json());
   app.use((_req, res, next) => {
     if (config.NODE_ENV === "production") {
@@ -303,7 +305,10 @@ export function createApp(opts: AppOptions = {}): {
   }));
 
   function close(callback?: () => void): void {
-    jobWorker.stop(opts.jobWorkerStopTimeoutMs ?? 10_000).finally(() => {
+    const stopped = jobWorker.stop(opts.jobWorkerStopTimeoutMs ?? 10_000);
+    if (isShuttingDown) jobQueue.getStore().cancelWaiting();
+    void stopped.finally(() => {
+      if (isShuttingDown) jobQueue.getStore().cancelWaiting();
       heartbeatService.stop();
       eventBus.disconnectRedis();
       metricsService.setWebSocketProbe(null);
@@ -311,7 +316,7 @@ export function createApp(opts: AppOptions = {}): {
       detachStream();
       if (httpServer.listening) {
         httpServer.close(callback);
-      } else if (callback) {
+      } else if (callback && (!isShuttingDown || jobWorker.getActiveCount() === 0)) {
         callback();
       }
     });

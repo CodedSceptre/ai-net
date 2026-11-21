@@ -1,3 +1,4 @@
+import { trackStellarTransaction } from "../api/middleware/shutdownMiddleware";
 import { Keypair } from '@stellar/stellar-sdk';
 import type { PaymentReleaseFn } from '../coordinator/coordinator';
 import { getTask } from '../coordinator/taskStore';
@@ -49,6 +50,6 @@ export function createPaymentReleaseFn(
       throw new Error(`[payment] Task not found: ${taskId} (node: ${nodeId})`);
     }
     // task.walletPublicKey is the Stellar address that receives the escrowed payment
-    return stellarRelease(coordinatorKeypair, task.walletPublicKey, taskId);
+    return trackStellarTransaction(() => stellarRelease(coordinatorKeypair, task.walletPublicKey, taskId));
   };
 }
