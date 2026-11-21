@@ -1,3 +1,4 @@
+import { bindRequestContext, requestContext, resolveRequestId } from "../../utils/requestContext";
 import { Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'crypto';
 import { tracingService } from '../../services/tracing';
@@ -28,7 +29,7 @@ function parseTraceparent(header: string): { traceId: string; parentSpanId: stri
  *
  * ### X-Request-Id (unchanged behaviour)
  * - If the client sends an `X-Request-Id` header, that value is reused.
- * - Otherwise a new UUID v4 is generated.
+ * - Otherwise a new 12-character nanoid is generated.
  * - Attached to `res.locals.requestId` and echoed as the `X-Request-Id`
  *   response header.
  *
@@ -54,7 +55,11 @@ function parseTraceparent(header: string): { traceId: string; parentSpanId: stri
  * status `'completed'` or `'failed'`) when the response finishes.
  */
 export function requestId(req: Request, res: Response, next: NextFunction): void {
-  const id = (req.headers["x-request-id"] as string | undefined) || randomUUID();
+  const id = resolveRequestId(req.headers["x-request-id"]);
+  requestContext.run({ requestId: id }, () => assignRequestContext(req, res, next, id));
+}
+
+function assignRequestContext(req: Request, res: Response, next: NextFunction, id: string): void {
   res.locals.requestId = id;
   req.requestId = id;
   res.setHeader("X-Request-Id", id);
@@ -102,10 +107,10 @@ export function requestId(req: Request, res: Response, next: NextFunction): void
   );
 
   if (typeof res.on === "function") {
-    res.on("finish", () => {
+    res.on("finish", bindRequestContext(() => {
       const status = res.statusCode < 400 ? "completed" : "failed";
       tracingService.endSpan(span.spanId, status, { statusCode: res.statusCode });
-    });
+    }));
   }
 
   // ── AsyncLocalStorage context ─────────────────────────────────────────────

@@ -17,6 +17,7 @@ declare module "@stellar/stellar-sdk" {
   }
 
   export namespace Horizon {
+    export const AxiosClient: import("axios").AxiosInstance;
     export class Server {
       constructor(serverURL: string);
       loadAccount(publicKey: string): Promise<AccountResponse>;

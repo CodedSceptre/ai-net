@@ -1,3 +1,4 @@
+import { requestIdHeaders } from "../../utils/requestContext";
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '../../utils/logger.js';
 import { VeniceCircuitBreaker } from '../veniceCircuitBreaker.js';
@@ -499,6 +500,7 @@ export class VeniceClient implements VeniceClientLike {
         const response = await fetch(`${provider.baseUrl ?? this.baseUrl}/chat/completions`, {
           method: 'POST',
           headers: {
+            ...requestIdHeaders(),
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${provider.apiKey}`,
           },

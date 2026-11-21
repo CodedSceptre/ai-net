@@ -1,6 +1,7 @@
+import { createHorizonServer } from "../../services/horizonClient";
 import { Router, Request, Response, NextFunction } from "express";
 import { z } from "zod";
-import { Horizon, Keypair } from "@stellar/stellar-sdk";
+import { Keypair } from "@stellar/stellar-sdk";
 import { getAgentDb, createAgentDb, AgentDb } from "../../db/agents";
 import { heartbeatRateLimitMiddleware } from "../middleware/rateLimit";
 import { NotFoundError, ValidationError, UnauthorizedError, AppError } from "../../errors";
@@ -55,7 +56,7 @@ const TaskResultSchema = z
 const DEFAULT_HEALTH_TIMEOUT_MS = 3_000;
 const QUALITY_SCORE_VERSION = "1.0";
 const HORIZON_URL = process.env.STELLAR_HORIZON_URL || "https://horizon-testnet.stellar.org";
-const horizon = new Horizon.Server(HORIZON_URL);
+const horizon = createHorizonServer(HORIZON_URL);
 
 export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
   const router = Router();

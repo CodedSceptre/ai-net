@@ -208,12 +208,12 @@ describe('requestId middleware', () => {
     expect(locals.requestId).toBe('my-req-id');
   });
 
-  it('generates a UUID requestId when X-Request-Id header is absent', () => {
+  it('generates a nanoid requestId when X-Request-Id header is absent', () => {
     const mw = freshMiddleware();
     const { res, locals } = makeRes();
     mw(makeReq(), res, jest.fn());
     expect(typeof locals.requestId).toBe('string');
-    expect((locals.requestId as string).length).toBeGreaterThan(0);
+    expect(locals.requestId).toMatch(/^[A-Za-z0-9_-]{12}$/);
   });
 
   it('sets res.locals.correlationId from X-Correlation-ID header when present', () => {

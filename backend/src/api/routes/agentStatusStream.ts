@@ -1,3 +1,4 @@
+import { bindRequestContext, getRequestId, requestContext, REQUEST_ID_HEADER, resolveRequestId } from "../../utils/requestContext";
 /**
  * Agent-status WebSocket broadcast endpoint — /ws
  *
@@ -35,7 +36,7 @@
 import type { Server as HttpServer } from 'http';
 import type { IncomingMessage } from 'http';
 import type { Socket } from 'net';
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { randomUUID } from 'crypto';
 
 import { eventBus as defaultEventBus } from '../../coordinator/eventBus';
@@ -44,7 +45,7 @@ import { createLogger } from '../../utils/logger';
 
 const logger = createLogger({ module: 'ws-agent-status' });
 
-const AGENT_STATUS_PATH = /^\/ws(?:\?.*)?$/;
+export const AGENT_STATUS_PATH = /^\/ws(?:\?.*)?$/;
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_PONG_TIMEOUT_MS = 10_000;
@@ -150,25 +151,33 @@ export function attachAgentStatusStream(
       return;
     }
 
-    const clientIp = getClientIp(req);
-    const active = clientConnections.get(clientIp) ?? 0;
-    if (active >= maxConnectionsPerClient) {
-      logger.warn({ clientIp }, 'agent-status connection limit exceeded');
-      socket.write(
-        'HTTP/1.1 429 Too Many Requests\r\n' +
-        'Connection: close\r\n\r\n' +
-        'Too many concurrent WebSocket connections',
-      );
-      socket.destroy();
-      return;
-    }
+    const requestId = resolveRequestId(req.headers['x-request-id']);
+    requestContext.run({ requestId }, () => {
+      const clientIp = getClientIp(req);
+      const active = clientConnections.get(clientIp) ?? 0;
+      if (active >= maxConnectionsPerClient) {
+        logger.warn({ clientIp }, 'agent-status connection limit exceeded');
+        socket.write(
+          'HTTP/1.1 429 Too Many Requests\r\n' +
+          `${REQUEST_ID_HEADER}: ${requestId}\r\n` +
+          'Connection: close\r\n\r\n' +
+          'Too many concurrent WebSocket connections',
+        );
+        socket.destroy();
+        return;
+      }
 
-    clientConnections.set(clientIp, active + 1);
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, req, clientIp);
+      clientConnections.set(clientIp, active + 1);
+      wss.handleUpgrade(req, socket, head, bindRequestContext((ws: WebSocket) => {
+        wss.emit('connection', ws, req, clientIp);
+      }));
     });
   };
 
+  wss.on('headers', (headers) => {
+    const requestId = getRequestId();
+    if (requestId) headers.push(`${REQUEST_ID_HEADER}: ${requestId}`);
+  });
   httpServer.on('upgrade', onUpgrade);
 
   // ── Per-connection setup ───────────────────────────────────────────────────
@@ -210,7 +219,7 @@ export function attachAgentStatusStream(
       }, pongTimeoutMs);
     }, heartbeatIntervalMs);
 
-    ws.on('message', (raw) => {
+    ws.on('message', bindRequestContext((raw: RawData) => {
       try {
         const msg = JSON.parse(raw.toString()) as { type?: unknown };
         if (msg?.type === 'pong' && pongTimer) {
@@ -220,7 +229,7 @@ export function attachAgentStatusStream(
       } catch {
         // Ignore unparseable messages.
       }
-    });
+    }));
 
     const cleanup = (): void => {
       if (heartbeat) clearInterval(heartbeat);
@@ -231,8 +240,8 @@ export function attachAgentStatusStream(
       logger.debug('agent-status client disconnected');
     };
 
-    ws.on('close', cleanup);
-    ws.on('error', cleanup);
+    ws.on('close', bindRequestContext(cleanup));
+    ws.on('error', bindRequestContext(cleanup));
   });
 
   // ── Detach ─────────────────────────────────────────────────────────────────

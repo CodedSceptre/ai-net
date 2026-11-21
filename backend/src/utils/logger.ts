@@ -1,3 +1,4 @@
+import { getRequestId } from "./requestContext";
 import crypto from "crypto";
 import { AsyncLocalStorage } from "async_hooks";
 import pino from "pino";
@@ -34,7 +35,6 @@ const REDACTED = "[REDACTED]";
 const REDACTED_ADDRESS = "[REDACTED_ADDRESS]";
 const DEFAULT_LOG_CONTEXT = {
   service: "ai-net-backend",
-  requestId: "system",
   traceId: "system",
   spanId: "system",
   userId: "system",
@@ -233,7 +233,6 @@ function normalizeBindings(bindings?: Record<string, unknown>): Record<string, u
     ...DEFAULT_LOG_CONTEXT,
     ...sanitized,
     traceId,
-    requestId: sanitized.requestId ?? DEFAULT_LOG_CONTEXT.requestId,
   };
 }
 
@@ -274,11 +273,23 @@ function createBaseLogger(destination?: DestinationStream, redactPaths: readonly
     // correlation IDs without the caller having to pass them explicitly.
     mixin() {
       const ctx = currentTraceContext();
-      if (!ctx) return {};
-      const bindings: Record<string, unknown> = { traceId: ctx.traceId, spanId: ctx.spanId };
-      if (ctx.taskId) bindings.taskId = ctx.taskId;
-      if (ctx.requestId) bindings.requestId = ctx.requestId;
+      const bindings: Record<string, unknown> = {};
+      if (ctx) {
+        bindings.traceId = ctx.traceId;
+        bindings.spanId = ctx.spanId;
+        if (ctx.taskId) bindings.taskId = ctx.taskId;
+      }
+      const requestId = getRequestId();
+      if (requestId) bindings.requestId = requestId;
       return bindings;
+    },
+    mixinMergeStrategy(fields, bindings) {
+      const requestId = getRequestId();
+      return {
+        ...bindings,
+        ...fields,
+        ...(requestId ? { requestId } : {}),
+      };
     },
     hooks: {
       logMethod(inputArgs, method) {
@@ -289,8 +300,10 @@ function createBaseLogger(destination?: DestinationStream, redactPaths: readonly
           typeof currentLogger.bindings === "function" ? currentLogger.bindings() : {};
         const activeContext = logContextStore.getStore();
         const context = normalizeBindings(
-          activeContext ? { ...loggerBindings, ...activeContext } : loggerBindings,
+          activeContext ? { ...activeContext, ...loggerBindings } : loggerBindings,
         );
+        const requestId = getRequestId();
+        if (requestId) context.requestId = requestId;
         const sanitizedArgs = inputArgs.map((arg) =>
           sanitizeLogPayload(arg, undefined, new WeakSet<object>(), "", redactPaths),
         );
@@ -305,7 +318,7 @@ function createBaseLogger(destination?: DestinationStream, redactPaths: readonly
           sanitizedArgs[0] = {
             ...context,
             ...fields,
-            context: { ...context, ...fields },
+            context: { ...context, ...fields, ...(requestId ? { requestId } : {}) },
           };
         } else {
           sanitizedArgs.unshift({ ...context, context });
@@ -332,7 +345,8 @@ function captureError(level: number, args: unknown[]): void {
     const message = [...sanitized]
       .reverse()
       .find((arg): arg is string => typeof arg === "string");
-    recordErrorLog(level, fields, message);
+    const requestId = getRequestId();
+    recordErrorLog(level, requestId ? { ...fields, requestId } : fields, message);
   } catch {
     // Never let observability break logging.
   }
@@ -362,19 +376,21 @@ export function createLogger(
   if (!options.destination && !baseLogger) {
     baseLogger = root;
   }
-  const normalizedBindings = normalizeBindings(bindings);
+  const sanitizedBindings = sanitizeLogPayload(bindings ?? {}) as Record<string, unknown>;
 
   // Apply per-module log level override if a component is specified (Issue #404)
   const component = bindings?.component as string | undefined;
   if (component) {
     const moduleLevel = getModuleLogLevel(component);
     if (moduleLevel) {
-      return withErrorCapture(root.child(normalizedBindings, { level: moduleLevel }));
+      return withErrorCapture(root.child(sanitizedBindings, { level: moduleLevel }));
     }
   }
 
-  return withErrorCapture(root.child(normalizedBindings));
+  return withErrorCapture(root.child(sanitizedBindings));
 }
+
+export const getLogger = createLogger;
 
 const logger = createLogger();
 
