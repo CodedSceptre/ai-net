@@ -10,8 +10,6 @@ import type { DAGNode, Task } from '../types/task';
 import {
   QualityScorer,
   recordQualityScore,
-  reputationDeltaForScore,
-  updateAgentReputation,
 } from '../services/qualityScorer';
 import type { QualityScore } from '../services/qualityScorer.types';
 import { createLogger } from '../utils/logger';
@@ -25,6 +23,7 @@ import {
   childSpanContext,
 } from '../services/traceContext';
 import { metricsService } from '../services/metrics';
+import { ReputationEngine } from '../services/reputationEngine';
 
 const DEFAULT_CONCURRENCY = 3;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -33,7 +32,8 @@ const PRIMARY_ATTEMPTS = 3;
 export type DispatchFn = (
   taskId: string,
   node: DAGNode,
-  context: string
+  context: string,
+  onAgentSelected?: (agentId: string) => void,
 ) => Promise<unknown>;
 
 export type PaymentReleaseFn = (
@@ -112,7 +112,7 @@ function isRetryable(err: unknown): boolean {
 }
 
 function sortByCost(agents: AgentRegistration[]): AgentRegistration[] {
-  return [...agents].sort((a, b) => a.cost - b.cost);
+  return [...agents].sort((a, b) => a.cost - b.cost || (b.reputation ?? 0) - (a.reputation ?? 0));
 }
 
 /**
@@ -457,14 +457,20 @@ export class Coordinator {
       'node execution started'
     );
 
+    let selectedAgentId: string | undefined;
+    let dispatchStartedAt = Date.now();
+    let responseMs: number | undefined;
     try {
-      const { agentId, result } = await this.dispatchWithRetry(taskId, node, nodeContext, nodeSpan?.spanId);
+      const { agentId, result } = await this.dispatchWithRetry(taskId, node, nodeContext, (id) => {
+        selectedAgentId = id;
+        dispatchStartedAt = Date.now();
+      }, nodeSpan?.spanId);
+      responseMs = Date.now() - dispatchStartedAt;
 
       node.status = 'completed';
       node.result = result;
 
-      // Quality score the output and feed it back into reputation. Best-effort:
-      // scoring never fails the node.
+      // Quality scoring is independent of the weighted agent reputation.
       const quality = this.scoreOutput(taskId, node, result, agentId, Date.now() - nodeStartedAt);
       if (quality) {
         node.quality = quality;
@@ -532,6 +538,19 @@ export class Coordinator {
       });
 
       return 'failed';
+    } finally {
+      if (selectedAgentId) {
+        try {
+          new ReputationEngine().updateReputation(selectedAgentId, {
+            taskId,
+            nodeId: node.nodeId,
+            successful: responseMs !== undefined,
+            responseMs: responseMs ?? Date.now() - dispatchStartedAt,
+          });
+        } catch (err) {
+          this.log.warn({ err, agentId: selectedAgentId, taskId, nodeId: node.nodeId }, 'failed to update agent reputation');
+        }
+      }
     }
   }
 
@@ -544,9 +563,7 @@ export class Coordinator {
   }
 
   /**
-   * Score a completed agent output, persist it with the task execution record,
-   * and feed it back into the agent's reputation. Best-effort: scoring failures
-   * are logged and never fail the node.
+   * Score and persist a completed agent output. Scoring failures are logged.
    */
   private scoreOutput(
     taskId: string,
@@ -577,11 +594,6 @@ export class Coordinator {
           format: quality.format.score,
           needsReview: quality.needsReview,
           responseTimeMs,
-          timestamp: quality.timestamp,
-        });
-        updateAgentReputation(agentId, reputationDeltaForScore(quality.score), {
-          taskId,
-          nodeId: node.nodeId,
           timestamp: quality.timestamp,
         });
       }
@@ -626,14 +638,21 @@ export class Coordinator {
     taskId: string,
     node: DAGNode,
     context: string,
+    onAgentSelected: (agentId: string) => void,
     parentSpanId?: string,
   ): Promise<{ agentId?: string; result: unknown }> {
     if (this.dispatchOverride) {
-      return { result: await this.dispatchOverride(taskId, node, context) };
+      let agentId: string | undefined;
+      const result = await this.dispatchOverride(taskId, node, context, (id) => {
+        agentId = id;
+        onAgentSelected(id);
+      });
+      return { agentId, result };
     }
 
     const agents = await this.agentsFor(node.type);
     const primary = agents[0];
+    onAgentSelected(primary.id);
     let lastError: unknown = new Error(`No agent registered for type: ${node.type}`);
 
     for (let attempt = 1; attempt <= PRIMARY_ATTEMPTS; attempt += 1) {
@@ -651,6 +670,7 @@ export class Coordinator {
 
     const fallback = selectFallbackAgent(agents, primary.id) ?? agents.find(agent => agent.id !== primary.id);
     if (fallback) {
+      onAgentSelected(fallback.id);
       this.log.warn(
         { taskId, nodeId: node.nodeId, primaryId: primary.id, fallbackId: fallback.id, correlationId: this.correlationId },
         'falling back to alternative agent'
