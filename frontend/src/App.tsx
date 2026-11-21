@@ -61,6 +61,7 @@ const queryClient = new QueryClient({
 
 // Lazy-loaded page components
 const AgentDetailPage = lazy(() => import("./pages/AgentDetailPage"));
+const StatusPage = lazy(() => import("./pages/StatusPage"));
 
 // Lives INSIDE <Router> and the theme/wallet providers: useCommandPalette()
 // calls useNavigate(), useTheme() and useWallet(), which all require their
@@ -142,16 +143,7 @@ const RoutedContent: React.FC = () => {
                   />
                   <Route path="/forbidden" element={<ForbiddenPage />} />
                   <Route path="/server-error" element={<ServerErrorPage />} />
-                  <Route
-                    path="/agents"
-                    element={
-                      <RouteErrorBoundary label="Agents">
-                        <ProtectedRoute>
-                          <AgentsPage />
-                        </ProtectedRoute>
-                      </RouteErrorBoundary>
-                    }
-                  />
+                  <Route path="/status" element={<StatusPage />} />
                   <Route path="/forbidden" element={<ForbiddenPage />} />
                   <Route path="/server-error" element={<ServerErrorPage />} />
                   <Route
