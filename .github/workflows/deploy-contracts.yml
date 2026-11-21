@@ -1,0 +1,89 @@
+name: Deploy contracts to Stellar testnet
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'smart-contracts/**'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and validate without broadcasting transactions
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: stellar-testnet-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    container: stellar/stellar-cli:26.1.0
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install build and deployment tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends jq
+          rustup target add wasm32-unknown-unknown
+      - name: Build contracts
+        working-directory: smart-contracts
+        run: |
+          cargo build --workspace --locked --target wasm32-unknown-unknown --release
+          # Use Stellar's supported Wasm target for the deployed artifacts.
+          cargo build --workspace --locked --target wasm32v1-none --release
+      - name: Deploy or validate contracts
+        env:
+          DRY_RUN: ${{ inputs.dry_run || github.ref != 'refs/heads/main' }}
+          STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+          STELLAR_NETWORK_PASSPHRASE: ${{ secrets.STELLAR_NETWORK_PASSPHRASE }}
+          WASM_TARGET: wasm32v1-none
+        run: |
+          set -o pipefail
+          {
+            args=(--network testnet --skip-build)
+            if [[ "$DRY_RUN" == "true" ]]; then
+              args+=(--dry-run)
+              unset STELLAR_SECRET_KEY STELLAR_NETWORK_PASSPHRASE
+            else
+              : "${STELLAR_SECRET_KEY:?Missing deployment secret}"
+              : "${STELLAR_NETWORK_PASSPHRASE:?Missing network passphrase}"
+            fi
+            bash smart-contracts/scripts/deploy.sh "${args[@]}"
+          } 2>&1 | tee deployment.log
+      - name: Upload deployment log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: testnet-deployment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: deployment.log
+          retention-days: 30
+      - name: Comment on the associated pull request
+        if: github.event_name == 'push'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            const { owner, repo } = context.repo;
+            const pulls = await github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit, {
+              owner, repo, commit_sha: context.sha,
+            });
+            const { contracts } = JSON.parse(fs.readFileSync('smart-contracts/deployments/testnet.json', 'utf8'));
+            const lines = Object.entries(contracts).map(([name, entry]) => `- **${name}** — \`${entry.contract_id}\``);
+            for (const pr of pulls.filter(pr => pr.merged_at && pr.base.ref === 'main' && pr.base.repo?.full_name === `${owner}/${repo}`)) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pr.number,
+                body: ['Stellar testnet contract addresses', '', ...lines].join('\n'),
+              });
+            }

@@ -14,6 +14,7 @@
 #   STELLAR_RPC_URL        Override default RPC endpoint
 #   STELLAR_HORIZON_URL    Override default Horizon endpoint
 
+set +x
 set -euo pipefail
 
 # ─── Colours ─────────────────────────────────────────────────────────────────
@@ -28,6 +29,8 @@ NC='\033[0m'
 NETWORK="testnet"
 SKIP_BUILD=false
 VERIFY=false
+DRY_RUN=false
+WASM_TARGET="${WASM_TARGET:-wasm32-unknown-unknown}"
 
 # ─── Usage ────────────────────────────────────────────────────────────────────
 usage() {
@@ -39,6 +42,7 @@ Deploy Soroban contracts to the specified network in dependency order:
 
 ${BOLD}OPTIONS:${NC}
   -n, --network NETWORK     Target network: testnet | mainnet | standalone  [default: testnet]
+      --dry-run             Validate the build artifacts without broadcasting
   -s, --skip-build          Skip the Wasm build step
   -v, --verify              Run verify.sh after successful deployment
   -h, --help                Show this help message
@@ -67,6 +71,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -s|--skip-build)
       SKIP_BUILD=true
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=true
       shift
       ;;
     -v|--verify)
@@ -131,17 +139,18 @@ set_network_defaults() {
       NETWORK_PASSPHRASE="Standalone Network ; February 2017"
       ;;
   esac
-  export STELLAR_RPC_URL STELLAR_HORIZON_URL NETWORK_PASSPHRASE
+  export STELLAR_RPC_URL STELLAR_HORIZON_URL
+  export STELLAR_NETWORK_PASSPHRASE="${STELLAR_NETWORK_PASSPHRASE:-$NETWORK_PASSPHRASE}"
 }
 
 # ─── Dependency check ─────────────────────────────────────────────────────────
 check_dependencies() {
   local missing=()
-  for dep in jq sha256sum; do
+  for dep in jq sha256sum stellar; do
     command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
   done
-  if [[ "$SKIP_BUILD" == "false" ]]; then
-    command -v cargo >/dev/null 2>&1 || missing+=("cargo")
+  if [[ "$SKIP_BUILD" == "false" ]] && ! command -v cargo >/dev/null 2>&1; then
+    missing+=(cargo)
   fi
   if [[ ${#missing[@]} -gt 0 ]]; then
     echo -e "${RED}Error: Required tools not found: ${missing[*]}${NC}" >&2
@@ -153,7 +162,7 @@ check_dependencies() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DEPLOYMENTS_DIR="$PROJECT_ROOT/deployments"
-TARGET_DIR="$PROJECT_ROOT/target/wasm32-unknown-unknown/release"
+TARGET_DIR="$PROJECT_ROOT/target/$WASM_TARGET/release"
 DEPLOYMENT_FILE="$DEPLOYMENTS_DIR/${NETWORK}.json"
 TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ" 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
@@ -165,6 +174,13 @@ CONTRACTS=(
   "task-store:task_store:contracts/task_store"
   "payment-escrow:payment_escrow:contracts/payment_escrow"
   "error-resolver:error_resolver:contracts/error-resolver"
+  "error-registry:error_registry:contracts/error-registry"
+  "agent-bidding:agent_bidding:contracts/agent_bidding"
+  "agent-governance:agent_governance:contracts/agent_governance"
+  "upgrade-manager:upgrade_manager:contracts/upgrade-manager"
+  "multisig-governance:multisig_governance:contracts/multisig_governance"
+  "platform-config:platform_config:contracts/platform_config"
+  "agent-marketplace:agent_marketplace:contracts/agent_marketplace"
 )
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -200,9 +216,9 @@ build_contracts() {
     return 0
   fi
 
-  log_info "Building contracts (cargo build --target wasm32-unknown-unknown --release)…"
+  log_info "Building contracts for $WASM_TARGET…"
   cd "$PROJECT_ROOT"
-  if ! cargo build --target wasm32-unknown-unknown --release 2>&1; then
+  if ! cargo build --workspace --locked --target "$WASM_TARGET" --release 2>&1; then
     log_error "cargo build failed"
     exit 1
   fi
@@ -210,59 +226,59 @@ build_contracts() {
   echo ""
 }
 
-# ─── Deploy one contract ──────────────────────────────────────────────────────
+redact_cli_output() {
+  awk '
+    function mask(line, secret, at, clean) {
+      if (secret == "") return line
+      while ((at = index(line, secret)) > 0) {
+        clean = clean substr(line, 1, at - 1) "[REDACTED]"
+        line = substr(line, at + length(secret))
+      }
+      return clean line
+    }
+    { print mask(mask($0, ENVIRON["STELLAR_SECRET_KEY"]), ENVIRON["STELLAR_NETWORK_PASSPHRASE"]) }
+  '
+}
+
 deploy_contract() {
-  local name="$1"
-  local wasm_stem="$2"
+  local name="$1" wasm_stem="$2"
   local wasm_file="$TARGET_DIR/${wasm_stem}.wasm"
-
-  log_info "Deploying ${BOLD}${name}${NC}…"
-
-  if [[ ! -f "$wasm_file" ]]; then
-    # Contract may not exist in this workspace — skip gracefully
-    log_warn "Wasm file not found: ${wasm_file} — skipping ${name}"
+  if [[ ! -s "$wasm_file" ]]; then
+    log_error "Missing Wasm artifact for $name"
+    return 1
+  fi
+  local wasm_hash
+  wasm_hash="$(sha256sum "$wasm_file" | cut -d' ' -f1)"
+  if [[ "$DRY_RUN" == "true" ]]; then
+    log_info "Validated $name ($wasm_hash)"
     return 0
   fi
 
-  local wasm_hash
-  wasm_hash="$(sha256sum "$wasm_file" | cut -d' ' -f1)"
-
-  # Deploy
-  local deploy_output
-  if ! deploy_output="$(soroban contract deploy \
-      --wasm "$wasm_file" \
-      --source "$STELLAR_SECRET_KEY" \
-      --rpc-url "$STELLAR_RPC_URL" \
-      --network-passphrase "$NETWORK_PASSPHRASE" \
-      2>&1)"; then
-    log_error "Failed to deploy ${name}: ${deploy_output}"
+  local salt contract_id output
+  salt="$(printf '%s:%s' "$name" "$wasm_hash" | sha256sum | cut -d' ' -f1)"
+  # The salt makes the address stable for this artifact even on a fresh runner.
+  contract_id="$(stellar contract id wasm --salt "$salt" 2> >(redact_cli_output >&2))"
+  if [[ ! "$contract_id" =~ ^C[A-Z2-7]{55}$ ]]; then
+    log_error "Could not derive contract ID for $name"
     return 1
   fi
-
-  local contract_id
-  contract_id="$(echo "$deploy_output" | grep -oE 'C[A-Z0-9]{55}' | head -1 || true)"
-
-  if [[ -z "$contract_id" ]]; then
-    log_error "Could not parse contract ID from deploy output for ${name}:"
-    echo "$deploy_output" >&2
-    return 1
+  if stellar contract fetch --id "$contract_id" >/dev/null 2>&1; then
+    log_info "Reusing $name at $contract_id"
+  else
+    log_info "Deploying $name"
+    output="$(stellar contract deploy --wasm "$wasm_file" --salt "$salt" 2> >(redact_cli_output >&2))"
+    if [[ "$output" != "$contract_id" ]]; then
+      log_error "Unexpected contract ID for $name"
+      return 1
+    fi
   fi
 
-  log_success "Deployed ${name}"
-  log_info "  Contract ID : ${contract_id}"
-  log_info "  Wasm hash   : ${wasm_hash}"
-
-  # Persist to deployments.json
   local updated
-  updated="$(cat "$DEPLOYMENT_FILE" | jq \
-    --arg name "$name" \
-    --arg id "$contract_id" \
-    --arg hash "$wasm_hash" \
-    --arg ts "$TIMESTAMP" \
-    '.contracts[$name] = { contract_id: $id, wasm_hash: $hash, deployed_at: $ts }')"
-  echo "$updated" > "$DEPLOYMENT_FILE"
-
-  return 0
+  updated="$(jq --arg name "$name" --arg id "$contract_id" --arg hash "$wasm_hash" --arg ts "$TIMESTAMP" \
+    '.contracts[$name] = { contract_id: $id, wasm_hash: $hash, deployed_at: $ts }' "$DEPLOYMENT_FILE")"
+  printf '%s\n' "$updated" > "$DEPLOYMENT_FILE.tmp"
+  mv "$DEPLOYMENT_FILE.tmp" "$DEPLOYMENT_FILE"
+  log_success "$name: $contract_id"
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -274,24 +290,22 @@ main() {
   echo -e "Output     : ${DEPLOYMENT_FILE}"
   echo ""
 
-  init_deployment_file
   build_contracts
+  stellar contract deploy --help >/dev/null
+  stellar contract id wasm --help >/dev/null
+  stellar contract fetch --help >/dev/null
+  if [[ "$DRY_RUN" == "false" ]]; then
+    init_deployment_file
+  fi
 
-  echo -e "${BLUE}Deploying contracts in dependency order…${NC}"
-  echo ""
-
-  local failed=false
+  local entry name wasm_stem
   for entry in "${CONTRACTS[@]}"; do
     IFS=':' read -r name wasm_stem _path <<< "$entry"
-    if ! deploy_contract "$name" "$wasm_stem"; then
-      failed=true
-    fi
-    echo ""
+    deploy_contract "$name" "$wasm_stem"
   done
-
-  if [[ "$failed" == "true" ]]; then
-    log_error "One or more contracts failed to deploy."
-    exit 1
+  if [[ "$DRY_RUN" == "true" ]]; then
+    log_success "Dry run completed"
+    return 0
   fi
 
   # Record history
@@ -312,7 +326,10 @@ main() {
   fi
 }
 
-validate_env
+if [[ "$DRY_RUN" == "false" ]]; then
+  validate_env
+  export STELLAR_ACCOUNT="$STELLAR_SECRET_KEY"
+fi
 check_dependencies
 set_network_defaults
 main "$@"
