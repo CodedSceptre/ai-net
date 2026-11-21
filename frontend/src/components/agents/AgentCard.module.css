@@ -1,0 +1,261 @@
+/* AgentCard — redesigned agent card (Issue #734) */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 0.75rem);
+  padding: var(--space-4, 1rem);
+  background: var(--surface-primary, #11151d);
+  border: 1px solid var(--border-subtle, #1f2630);
+  border-radius: var(--radius-lg, 0.5rem);
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow-md);
+}
+
+.card:focus-within {
+  border-color: var(--accent-border);
+}
+
+.cardSkeleton {
+  pointer-events: none;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2, 0.5rem);
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 0.5rem);
+  min-width: 0;
+}
+
+.identityText {
+  min-width: 0;
+}
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-pill, 9999px);
+  background: var(--accent-surface);
+  color: var(--accent-text-strong);
+  flex-shrink: 0;
+}
+
+.name {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.agentId {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.skeletonIdentity {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  justify-content: center;
+}
+
+/* ── Status dot ──────────────────────────────────────────────────────────── */
+
+.statusDot {
+  flex-shrink: 0;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: var(--radius-pill, 9999px);
+  margin-top: 0.25rem;
+}
+
+.statusDot--online {
+  background: var(--status-success);
+  box-shadow: 0 0 0 3px var(--status-success-surface);
+}
+
+.statusDot--degraded {
+  background: var(--status-warning);
+  box-shadow: 0 0 0 3px var(--status-warning-surface);
+}
+
+.statusDot--offline {
+  background: var(--text-muted);
+  box-shadow: 0 0 0 3px var(--surface-hover);
+}
+
+/* ── Capabilities ────────────────────────────────────────────────────────── */
+
+.capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2, 0.5rem);
+  min-height: 1.4rem;
+}
+
+.noCaps {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.capBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-pill, 9999px);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.capBadge--research {
+  color: var(--agent-research);
+  background: var(--agent-research-surface);
+  border-color: var(--agent-research-border);
+}
+
+.capBadge--risk {
+  color: var(--agent-risk);
+  background: var(--agent-risk-surface);
+  border-color: var(--agent-risk-border);
+}
+
+.capBadge--coding {
+  color: var(--agent-coding);
+  background: var(--agent-coding-surface);
+  border-color: var(--agent-coding-border);
+}
+
+.capBadge--design {
+  color: var(--agent-design);
+  background: var(--agent-design-surface);
+  border-color: var(--agent-design-border);
+}
+
+.capBadge--report {
+  color: var(--agent-report);
+  background: var(--agent-report-surface);
+  border-color: var(--agent-report-border);
+}
+
+.capBadge--default {
+  color: var(--agent-default, var(--text-muted));
+  background: var(--agent-default-surface, var(--surface-hover));
+  border-color: var(--agent-default-border, var(--border-muted));
+}
+
+/* ── Metrics ─────────────────────────────────────────────────────────────── */
+
+.metrics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 0.5rem);
+}
+
+@media (min-width: 480px) {
+  .metrics {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.metricLabel {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.price {
+  font-size: 1.05rem;
+  color: var(--text-primary);
+}
+
+.unit {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.perTask {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.usd {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+/* ── Hire CTA ─────────────────────────────────────────────────────────────── */
+
+.hireButton {
+  margin-top: auto;
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-md, 0.375rem);
+  border: 1px solid var(--accent, #8b5cf6);
+  background: var(--accent, #8b5cf6);
+  color: var(--text-inverse, #fff);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+
+.hireButton:hover:not(:disabled) {
+  background: var(--accent-hover, #7c3aed);
+  border-color: var(--accent-hover, #7c3aed);
+}
+
+.hireButton:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.hireButton:disabled {
+  background: var(--surface-muted, #334155);
+  border-color: var(--border-subtle, #1f2630);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.hireButtonDisabled {
+  background: var(--surface-muted, #334155);
+  border-color: var(--border-subtle, #1f2630);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
