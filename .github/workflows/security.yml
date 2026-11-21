@@ -1,0 +1,90 @@
+name: Security scans
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 8 * * 1'
+
+permissions: {}
+
+jobs:
+  scan:
+    name: ${{ matrix.tool }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: [TruffleHog, npm backend, npm frontend, Cargo audit]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'refs/heads/main' || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        if: startsWith(matrix.tool, 'npm ')
+        with:
+          node-version: 22
+
+      - name: Scan Git history
+        if: matrix.tool == 'TruffleHog'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Use the same pinned OSS scanner image as the repository's TruffleHog action.
+          ruby -ryaml -e 'YAML.safe_load_file(".trufflehog.yml").fetch("exclude_paths").each { |path| puts "^#{Regexp.escape(path)}$" }' > "$RUNNER_TEMP/excluded-paths"
+          range=()
+          if [[ -n "$BASE" ]]; then
+            range+=(--since-commit "$(git merge-base "$BASE" "$HEAD_SHA")" --branch "$HEAD_SHA")
+          fi
+          status=0
+          docker run --rm -v "$PWD:/repo:ro" -v "$RUNNER_TEMP/excluded-paths:/excluded-paths:ro" \
+            ghcr.io/trufflesecurity/trufflehog:3.97.9 git file:///repo \
+            "${range[@]}" --exclude-paths=/excluded-paths --results=verified --fail --json \
+            > "$RUNNER_TEMP/scan.json" || status=$?
+          echo "SCAN_STATUS=$status" >> "$GITHUB_ENV"
+
+      - name: Audit npm lockfile
+        if: startsWith(matrix.tool, 'npm ')
+        env:
+          TOOL: ${{ matrix.tool }}
+        run: |
+          cd "${TOOL#npm }"
+          status=0
+          npm audit --audit-level=high --json > "$RUNNER_TEMP/scan.json" || status=$?
+          echo "SCAN_STATUS=$status" >> "$GITHUB_ENV"
+
+      - name: Install cargo-audit
+        if: matrix.tool == 'Cargo audit'
+        run: cargo install --locked cargo-audit --version 0.22.1
+
+      - name: Audit Cargo lockfile
+        if: matrix.tool == 'Cargo audit'
+        working-directory: smart-contracts
+        run: |
+          printf '[advisories]\nseverity_threshold = "critical"\n' > "$RUNNER_TEMP/audit.toml"
+          status=0
+          cargo audit --config "$RUNNER_TEMP/audit.toml" --json > "$RUNNER_TEMP/scan.json" || status=$?
+          echo "SCAN_STATUS=$status" >> "$GITHUB_ENV"
+
+      - name: Convert findings to SARIF
+        env:
+          TOOL: ${{ matrix.tool }}
+        run: python3 .github/scripts/security-sarif.py "$TOOL" "$RUNNER_TEMP"
+
+      - name: Upload code scanning results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ runner.temp }}/scan.sarif
+          category: ${{ matrix.tool }}
+
+      - name: Enforce scan result
+        if: always() && env.SCAN_STATUS != '' && env.SCAN_STATUS != '0'
+        run: exit 1
