@@ -145,5 +145,5 @@ export const getAgentReputation = async (id: string): Promise<import('../types/a
 export const getAgentReputationHistory = async (
   id: string,
 ): Promise<import('../types/agent').ReputationHistory[]> => {
-  return apiClient.get<import('../types/agent').ReputationHistory[]>(`/api/agents/${id}/reputation/history`);
+  return apiClient.get<import('../types/agent').ReputationHistory[]>(`/api/agents/${encodeURIComponent(id)}/reputation-history`);
 };
