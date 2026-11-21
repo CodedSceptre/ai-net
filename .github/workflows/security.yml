@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'schedule' && 'refs/heads/main' || github.ref }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -69,9 +69,10 @@ jobs:
         if: matrix.tool == 'Cargo audit'
         working-directory: smart-contracts
         run: |
-          printf '[advisories]\nseverity_threshold = "critical"\n' > "$RUNNER_TEMP/audit.toml"
+          mkdir -p .cargo
+          printf '[advisories]\nseverity_threshold = "critical"\n' > .cargo/audit.toml
           status=0
-          cargo audit --config "$RUNNER_TEMP/audit.toml" --json > "$RUNNER_TEMP/scan.json" || status=$?
+          cargo audit --json > "$RUNNER_TEMP/scan.json" || status=$?
           echo "SCAN_STATUS=$status" >> "$GITHUB_ENV"
 
       - name: Convert findings to SARIF

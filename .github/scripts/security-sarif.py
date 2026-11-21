@@ -33,14 +33,21 @@ if tool == "TruffleHog":
                     "error", location.get("line"))
 elif tool.startswith("npm "):
     package_dir = tool.split()[1]
-    for name, vulnerability in json.loads(raw)["vulnerabilities"].items():
+    report = json.loads(raw or "{}")
+    vulnerabilities = report.get("vulnerabilities")
+    if vulnerabilities is None:
+        raise SystemExit(f"{tool} did not produce an audit report. See the scanner step for details.")
+    for name, vulnerability in vulnerabilities.items():
         severity = "error" if vulnerability["severity"] in ("high", "critical") else "warning"
         for advisory in vulnerability["via"]:
             if isinstance(advisory, dict):
                 finding(str(advisory["source"]), f"{name}: {advisory['title']}",
                         f"{package_dir}/package-lock.json", severity)
 else:
-    for issue in json.loads(raw)["vulnerabilities"]["list"]:
+    report = json.loads(raw or "{}")
+    if "vulnerabilities" not in report:
+        raise SystemExit("Cargo audit did not produce an audit report. See the scanner step for details.")
+    for issue in report["vulnerabilities"]["list"]:
         advisory = issue["advisory"]
         finding(advisory["id"], advisory["title"], "smart-contracts/Cargo.lock", "error")
 
