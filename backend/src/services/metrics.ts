@@ -1,3 +1,4 @@
+import { requestIdHeaders } from "../utils/requestContext";
 /**
  * Health dashboard metrics collection service.
  *
@@ -1226,7 +1227,7 @@ async function probeHttp(
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   const startedAt = Date.now();
   try {
-    const response = await fetch(url, { headers, signal: controller.signal });
+    const response = await fetch(url, { headers: { ...headers, ...requestIdHeaders() }, signal: controller.signal });
     const latencyMs = Date.now() - startedAt;
     if (response.ok) return { status: "ok", latencyMs };
     return {

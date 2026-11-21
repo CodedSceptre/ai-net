@@ -1,3 +1,4 @@
+import { requestIdHeaders } from "../utils/requestContext";
 /**
  * Contract Event Indexer Service
  *
@@ -140,7 +141,7 @@ export class ContractEventIndexer {
 
   private async _fetchAndIndex(): Promise<void> {
     const url = this._buildUrl();
-    const response = await fetch(url);
+    const response = await fetch(url, { headers: requestIdHeaders() });
 
     if (!response.ok) {
       throw new Error(`Horizon returned ${response.status}: ${await response.text()}`);

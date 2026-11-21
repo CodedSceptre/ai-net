@@ -13,7 +13,8 @@ export function createCorsMiddleware() {
       }
     },
     credentials: true,
+    exposedHeaders: ['X-Request-ID'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'walletpublickey', 'x-challenge', 'x-signature'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'walletpublickey', 'x-challenge', 'x-signature', 'X-Request-ID'],
   });
 }

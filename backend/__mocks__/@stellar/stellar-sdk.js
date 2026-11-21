@@ -29,7 +29,7 @@ const Server = jest.fn().mockImplementation(() => ({
   }),
 }));
 
-const Horizon = { Server };
+const Horizon = { Server, AxiosClient: jest.requireActual("@stellar/stellar-sdk").Horizon.AxiosClient };
 
 const TransactionBuilder = jest.fn().mockImplementation(() => ({
   addOperation: jest.fn().mockReturnThis(),
