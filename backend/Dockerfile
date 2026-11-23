@@ -1,39 +1,36 @@
-FROM node:20-alpine@sha256:2a63a5947ffbaee54a75f2bd47cd0fff0fdb9d0dff5d21f1861facd88fe0d4a6 AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
-
 COPY package*.json ./
-COPY backend/package*.json ./backend/
+RUN npm ci --ignore-scripts
 COPY tsconfig.json ./
-COPY backend/ ./backend/
-
-RUN npm ci --workspace=backend --include-workspace-root --ignore-scripts
-WORKDIR /app/backend
+COPY scripts/copy-migrations.js ./scripts/
+COPY src ./src
 RUN npm run build
+RUN cp -r src/prompts dist/src/prompts && cp package.json dist/package.json
 
-FROM node:20-alpine@sha256:2a63a5947ffbaee54a75f2bd47cd0fff0fdb9d0dff5d21f1861facd88fe0d4a6 AS runner
+FROM node:22-alpine AS production-deps
 
 WORKDIR /app
+COPY package*.json ./
+RUN apk add --no-cache python3 make g++ && \
+    npm ci --omit=dev --no-audit --no-fund
+
+FROM node:22-alpine AS production
 
 ENV NODE_ENV=production
 ENV PORT=3000
 
-COPY --from=builder /app/backend/package*.json ./backend/
-COPY --from=builder /app/backend/dist ./backend/dist
-COPY --from=builder /app/backend/src/db/migrations ./backend/src/db/migrations
-COPY --from=builder /app/backend/scripts ./backend/scripts
+RUN adduser -D appuser && mkdir -p /app/data && chown appuser:appuser /app/data
+COPY --from=production-deps /app/node_modules /app/node_modules
+COPY --from=builder /app/package.json /app/package.json
+COPY --from=builder /app/dist /app/dist
 
-RUN npm ci --prefix ./backend --omit=dev --ignore-scripts && \
-    addgroup -S app && adduser -S app -G app && \
-    chown -R app:app /app && \
-    rm -rf /root/.npm /tmp/*
-
-USER app
-WORKDIR /app/backend
-
+WORKDIR /app/data
+USER appuser
 EXPOSE 3000
 
-HEALTHCHECK --interval=10s --timeout=5s --retries=5 \
+HEALTHCHECK --interval=5s --timeout=3s --retries=5 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
 
-CMD ["node", "dist/index.js"]
+CMD ["node", "/app/dist/src/index.js"]

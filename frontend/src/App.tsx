@@ -100,7 +100,8 @@ const RoutedContent: React.FC = () => {
           path="/*"
           element={
             <AppShell>
-              <Suspense fallback={<RouteLoadingFallback />}>
+              <Suspense fallback={<SuspenseProgress />}>
+                <RouteTransition>
                 <Routes>
                   <Route
                     path="/dashboard"
@@ -152,61 +153,6 @@ const RoutedContent: React.FC = () => {
                       </RouteErrorBoundary>
                     }
                   />
-                  <Route path="/forbidden" element={<ForbiddenPage />} />
-                  <Route path="/server-error" element={<ServerErrorPage />} />
-                  <Route
-                    path="/agents/:id"
-                    element={
-                      <ProtectedRoute>
-                        <AgentDetailPage />
-                      </ProtectedRoute>
-                    }
-                  />
-                  <Route
-                    path="/tasks/new"
-                    element={
-                      <RouteErrorBoundary label="New Task">
-                        <ProtectedRoute>
-                          <PaymentsPage />
-                        </ProtectedRoute>
-                      }
-                    />
-                    <Route
-                      path="/marketplace"
-                      element={<Navigate to="/agents" replace />}
-                    />
-                    <Route
-                      path="/tasks"
-                      element={<Navigate to="/tasks/history" replace />}
-                    />
-                    <Route
-                      path="/notifications"
-                      element={
-                        <ProtectedRoute>
-                          <NotificationsPage />
-                        </ProtectedRoute>
-                      }
-                    />
-                    <Route
-                      path="/agents"
-                      element={
-                        <RouteErrorBoundary label="Agents">
-                          <ProtectedRoute>
-                            <AgentsPage />
-                          </ProtectedRoute>
-                        </RouteErrorBoundary>
-                      }
-                    />
-                    <Route path="/forbidden" element={<ForbiddenPage />} />
-                    <Route path="/server-error" element={<ServerErrorPage />} />
-                    <Route
-                      path="/agents/:id"
-                      element={
-                        <ProtectedRoute>
-                          <AgentDetailPage />
-                        </ProtectedRoute>
-                      }
-                    />
                     <Route
                       path="/tasks/new"
                       element={

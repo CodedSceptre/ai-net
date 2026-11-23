@@ -12,7 +12,7 @@ async function prepareApp() {
 
   // Always prepare MSW if we're in dev or test mode.
   // We can check if mockServiceWorker.js is present or just import mocks.
-  if (import.meta.env.DEV || import.meta.env.MODE === 'test' || window.location.hostname === 'localhost') {
+  if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
     try {
       const { worker } = await import('./mocks/browser')
       await worker.start({

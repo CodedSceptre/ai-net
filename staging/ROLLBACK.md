@@ -93,7 +93,7 @@ docker run -d \
   --name ai-net-staging-frontend \
   --network ai-net-staging \
   --restart unless-stopped \
-  -p 5173:5173 \
+  -p 5173:80 \
   -e VITE_API_BASE_URL=https://staging.ai-net.dev \
   -e VITE_STELLAR_NETWORK=testnet \
   -e VITE_SOROBAN_RPC_URL="https://soroban-testnet.stellar.org" \

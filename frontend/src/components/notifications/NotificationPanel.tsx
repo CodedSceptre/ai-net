@@ -1,9 +1,9 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCheck, Inbox, Trash2, X } from 'lucide-react';
 import { useNotifications } from '../../hooks/useNotifications';
 import NotificationItem from './NotificationItem';
-import type { AppNotification } from '../../types/notification';
+import type { AppNotification, NotificationType } from '../../types/notification';
 import './NotificationCenter.css';
 
 export const NOTIFICATION_PANEL_ID = 'notification-panel';
@@ -11,14 +11,6 @@ export const NOTIFICATION_PANEL_TITLE_ID = 'notification-panel-title';
 export const MAX_RECENT_NOTIFICATIONS = 5;
 
 type NotificationCategory = 'payment' | 'task' | 'system';
-
-const GROUP_ORDER: NotificationCategory[] = ['payment', 'task', 'system'];
-
-const GROUP_LABELS: Record<NotificationCategory, string> = {
-  payment: 'Payment',
-  task: 'Task',
-  system: 'System',
-};
 
 /** Maps every notification type to the category it is displayed under. */
 export function getNotificationCategory(type: NotificationType): NotificationCategory {
@@ -36,13 +28,6 @@ export function getNotificationCategory(type: NotificationType): NotificationCat
     default:
       return 'system';
   }
-}
-
-interface NotificationGroup {
-  category: NotificationCategory;
-  label: string;
-  notifications: AppNotification[];
-  unreadCount: number;
 }
 
 export interface NotificationPanelProps {

@@ -28,7 +28,11 @@ export type WebSocketStatus = 'connecting' | 'connected' | 'disconnected' | 'err
 
 /** Application-defined close code for a stale socket: mirros backend WS_CLOSE.STALE. */
 const WS_CLOSE_STALE = 4408;
-const DEFAULT_BASE_URL = 'ws://localhost:3001';
+function defaultStreamBaseUrl(): string {
+  if (!import.meta.env.PROD) return 'ws://localhost:3001';
+  const httpOrigin = new URL(import.meta.env.VITE_API_BASE_URL || window.location.origin, window.location.origin);
+  return httpOrigin.origin.replace(/^http/, 'ws');
+}
 
 /** Build the event cursor only to be truthy for positive sequences. */
 const seqCursor = (seq: number | undefined): number | undefined =>
@@ -59,7 +63,7 @@ export const useTaskWebSocket = (options: UseTaskWebSocketOptions) => {
     onConnect,
     onDisconnect,
     walletPublicKey,
-    baseUrl = DEFAULT_BASE_URL,
+    baseUrl = defaultStreamBaseUrl(),
     maxReconnectAttempts = 5,
     maxJitterMs = 0,
   } = options;

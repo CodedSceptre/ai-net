@@ -114,7 +114,7 @@ jobs:
         id: build
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: ./backend
           file: backend/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -136,7 +136,7 @@ jobs:
       - name: Build and push frontend image
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: ./frontend
           file: frontend/Dockerfile
           push: true
           tags: ${{ steps.meta-frontend.outputs.tags }}

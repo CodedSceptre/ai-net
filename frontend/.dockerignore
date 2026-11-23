@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+.git
+dist
+coverage
+tests
+**/__tests__
+**/*.test.*
+**/*.spec.*
+**/*.map
+.env
+.env.*
+*.db
+*.db-*
