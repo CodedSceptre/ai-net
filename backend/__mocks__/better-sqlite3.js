@@ -39,8 +39,8 @@ class MockDatabase {
     this.statements = new Map();
   }
 
-  pragma(_sql, _arg) {
-    return undefined;
+  pragma(sql, _arg) {
+    return sql.startsWith("journal_mode") ? "wal" : undefined;
   }
 
   exec(_sql) {
