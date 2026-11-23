@@ -1,0 +1,56 @@
+/* ─── ThemeToggle button ─────────────────────────────────────────────────── */
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--bg-surface, var(--surface-primary));
+  color: var(--text-primary);
+  cursor: pointer;
+  /* Smooth color transition on theme switch */
+  transition:
+    background-color 200ms ease,
+    color 200ms ease,
+    border-color 200ms ease;
+  padding: 0;
+  box-shadow: none;
+  flex-shrink: 0;
+}
+
+.toggle:hover {
+  background: var(--bg-surface-alt, var(--surface-raised));
+  border-color: var(--border-color, var(--border-primary));
+  box-shadow: none;
+  transform: none;
+}
+
+.toggle:active {
+  transform: scale(0.9);
+}
+
+.toggle:focus-visible {
+  outline: 2px solid var(--accent-info);
+  outline-offset: 2px;
+}
+
+/* ─── Icon wrapper — rotation animation on toggle ─────────────────────── */
+
+.iconWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Rotate from previous icon to new one over 200 ms */
+  transition: transform 200ms ease;
+}
+
+.iconWrap[data-dark='true'] {
+  transform: rotate(0deg);
+}
+
+.iconWrap[data-dark='false'] {
+  transform: rotate(180deg);
+}
