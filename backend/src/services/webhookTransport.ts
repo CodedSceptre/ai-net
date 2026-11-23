@@ -44,7 +44,12 @@ export async function postWebhook(value: string, secret: string, body: string): 
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
   const signal = AbortSignal.timeout(8_000);
   // Pin the validated address for the socket while retaining the original TLS identity.
-  const addresses = await lookup(hostname, { all: true });
+  const addresses = await Promise.race([
+    lookup(hostname, { all: true }),
+    new Promise<never>((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }),
+  ]);
   const target = addresses[0];
   if (!target || addresses.some(({ address }) => !isPublic(address)) || signal.aborted) {
     throw new Error("Webhook host did not resolve to a public address");
@@ -53,7 +58,6 @@ export async function postWebhook(value: string, secret: string, body: string): 
   return new Promise((resolve, reject) => {
     const req = request(url, {
       agent: false,
-      autoSelectFamily: false,
       family: target.family,
       lookup: (_name, _options, callback) => callback(null, target.address, target.family),
       method: "POST",
