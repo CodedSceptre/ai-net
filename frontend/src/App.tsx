@@ -47,6 +47,7 @@ const NewTaskPage = lazy(() => import("./pages/tasks/NewTaskPage"));
 const TaskHistoryPage = lazy(() => import("./pages/tasks/TaskHistoryPage"));
 const TaskDetailPage = lazy(() => import("./pages/TaskDetailPage"));
 const RendererDemoPage = lazy(() => import("./pages/RendererDemoPage"));
+const ProfilePage = lazy(() => import("./pages/ProfilePage"));
 
 const RouteLoadingFallback = () => <RouteLoader />;
 
@@ -118,6 +119,16 @@ const RoutedContent: React.FC = () => {
                       <RouteErrorBoundary label="Wallet">
                         <ProtectedRoute>
                           <WalletPage />
+                        </ProtectedRoute>
+                      </RouteErrorBoundary>
+                    }
+                  />
+                  <Route
+                    path="/profile"
+                    element={
+                      <RouteErrorBoundary label="Profile">
+                        <ProtectedRoute>
+                          <ProfilePage />
                         </ProtectedRoute>
                       </RouteErrorBoundary>
                     }
