@@ -4,6 +4,8 @@ import { useParams } from "react-router-dom";
 
 import { useTaskMonitor } from "../hooks/useTaskMonitor";
 import { DAGVisualization } from "../components/tasks/DAGVisualization";
+import { PipelineStepIndicator } from "../components/tasks/PipelineStepIndicator";
+import { TaskMilestoneTimeline } from "../components/tasks/TaskMilestoneTimeline";
 import { TaskDetailTimeline } from "../components/dashboard/TaskDetailTimeline";
 import { PaymentTimeline } from "../components/dashboard/PaymentTimeline";
 import { Skeleton, SkeletonText } from "../components/common/Skeleton";
@@ -274,6 +276,11 @@ const TaskDetailPage: React.FC = () => {
           payments={payments}
           taskId={id}
         />
+      </div>
+
+      {/* Task Milestone Timeline */}
+      <div className="glass-panel">
+        <TaskMilestoneTimeline task={task} nodes={nodes} payments={payments} />
       </div>
 
       {/* Pipeline Step Indicator */}
