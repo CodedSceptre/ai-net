@@ -18,7 +18,7 @@ export function queryMetrics() {
 
 const OPTIMIZE_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 const READ_TABLE = /^\s*SELECT\s+[\w\s*.,"]+\s+FROM\s+([\w]+)(?=\s|;|$)/i;
-const WRITE_TABLE = /^\s*(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+["`\[]?(\w+)\b/i;
+const WRITE_TABLE = /^\s*(?:INSERT\s+INTO|UPDATE(?!\s+OR\b)|DELETE\s+FROM)\s+(\w+)\b(?!\s*\.)/i;
 
 function readTable(sql: string): string | undefined {
   // Complex or nondeterministic queries still get monitored. Cache only
@@ -28,7 +28,9 @@ function readTable(sql: string): string | undefined {
     return undefined;
   }
   const match = READ_TABLE.exec(sql);
-  if (!match || /^\s*[,\.]/.test(sql.slice(match[0].length))) return undefined;
+  if (!match || !/^\s*(?:WHERE\b|ORDER\s+BY\b|GROUP\s+BY\b|LIMIT\b|;?$)/i.test(sql.slice(match[0].length))) {
+    return undefined;
+  }
   return match[1].toLowerCase();
 }
 
