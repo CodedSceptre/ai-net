@@ -36,7 +36,7 @@ mod errors;
 pub use errors::Error;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, Symbol, Vec,
 };
 
 // ─── Scoring constants ────────────────────────────────────────────────────────
@@ -103,6 +103,7 @@ pub struct ReputationDecayedEvent {
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
+    AuthRegistry,
     Admin,
     /// Set of authorized caller addresses (e.g. task_store contract).
     AuthorizedCallers,
@@ -123,6 +124,19 @@ fn require_initialized(env: &Env) -> Result<(), Error> {
     } else {
         Err(Error::NotInitialized)
     }
+}
+
+fn registry_allows(env: &Env, registry: &Address, caller: &Address, function: &str) -> bool {
+    env.invoke_contract(
+        registry,
+        &Symbol::new(env, "is_authorized"),
+        (
+            caller.clone(),
+            env.current_contract_address(),
+            soroban_sdk::String::from_str(env, function),
+        )
+            .into_val(env),
+    )
 }
 
 fn is_authorized_caller(env: &Env, addr: &Address) -> bool {
@@ -152,13 +166,11 @@ fn save_score(env: &Env, score: &ReputationScore) {
     env.storage()
         .persistent()
         .set(&DataKey::Reputation(score.agent_id.clone()), score);
-    env.storage()
-        .persistent()
-        .extend_ttl(
-            &DataKey::Reputation(score.agent_id.clone()),
-            TTL_THRESHOLD,
-            TTL_EXTEND_TO,
-        );
+    env.storage().persistent().extend_ttl(
+        &DataKey::Reputation(score.agent_id.clone()),
+        TTL_THRESHOLD,
+        TTL_EXTEND_TO,
+    );
 }
 
 /// Apply compound time-decay for `weeks_elapsed` weeks:
@@ -201,6 +213,23 @@ impl ReputationContract {
     }
 
     // ── Authorization management ──────────────────────────────────────────────
+
+    /// Configure the platform authorization registry for privileged calls.
+    pub fn set_auth_registry(env: Env, registry: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::AuthRegistry, &registry);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        Ok(())
+    }
 
     /// Add an address that is allowed to call `record_outcome`.
     ///
@@ -299,7 +328,12 @@ impl ReputationContract {
     ) -> Result<(), Error> {
         require_initialized(&env)?;
 
-        if !is_authorized_caller(&env, &caller) {
+        let registry: Option<Address> = env.storage().instance().get(&DataKey::AuthRegistry);
+        let allowed = match registry {
+            Some(registry) => registry_allows(&env, &registry, &caller, "record_outcome"),
+            None => is_authorized_caller(&env, &caller),
+        };
+        if !allowed {
             return Err(Error::Unauthorized);
         }
         caller.require_auth();

@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 soroban-sdk = { version = "=22.0.11" }
 
 [dev-dependencies]
+payment_escrow = { path = "../payment_escrow" }
 soroban-sdk = { version = "=22.0.11", features = ["testutils"] }
 
 [profile.release]

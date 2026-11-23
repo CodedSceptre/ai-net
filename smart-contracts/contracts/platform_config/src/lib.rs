@@ -24,13 +24,14 @@
 //! Every successful `update_config` call emits a `(platform_cfg, cfg_upd)`
 //! event carrying the `ConfigUpdatedEvent` payload.
 
+mod auth_registry;
 mod errors;
+
+pub use auth_registry::ContractRegistered;
 
 pub use errors::Error;
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec};
 
 // ─── Default parameter values ─────────────────────────────────────────────────
 
@@ -190,6 +191,51 @@ fn read_config(env: &Env) -> PlatformConfig {
 
 #[contractimpl]
 impl PlatformConfigContract {
+    pub fn register_contract(
+        env: Env,
+        admin: Address,
+        name: String,
+        address: Address,
+    ) -> Result<(), Error> {
+        auth_registry::require_admin(&env, &admin)?;
+        auth_registry::register(&env, name, address)
+    }
+
+    pub fn get_contract(env: Env, name: String) -> Result<Address, Error> {
+        auth_registry::get(&env, name)
+    }
+
+    pub fn authorize_caller(
+        env: Env,
+        admin: Address,
+        caller: Address,
+        target: Address,
+        function: String,
+    ) -> Result<(), Error> {
+        auth_registry::require_admin(&env, &admin)?;
+        auth_registry::set_permission(&env, caller, target, function, true)
+    }
+
+    pub fn revoke_caller(
+        env: Env,
+        admin: Address,
+        caller: Address,
+        target: Address,
+        function: String,
+    ) -> Result<(), Error> {
+        auth_registry::require_admin(&env, &admin)?;
+        auth_registry::set_permission(&env, caller, target, function, false)
+    }
+
+    pub fn is_authorized(env: Env, caller: Address, target: Address, function: String) -> bool {
+        auth_registry::is_authorized(&env, caller, target, function)
+    }
+
+    pub fn deregister_contract(env: Env, admin: Address, name: String) -> Result<(), Error> {
+        auth_registry::require_admin(&env, &admin)?;
+        auth_registry::deregister(&env, name)
+    }
+
     // ── Initialization ────────────────────────────────────────────────────────
 
     /// Initialise the contract with `admin` as the sole admin.
@@ -232,11 +278,7 @@ impl PlatformConfigContract {
     /// is left to the calling governance contract.
     ///
     /// The current single admin must authorise this call.
-    pub fn set_multisig_admin(
-        env: Env,
-        admins: Vec<Address>,
-        threshold: u32,
-    ) -> Result<(), Error> {
+    pub fn set_multisig_admin(env: Env, admins: Vec<Address>, threshold: u32) -> Result<(), Error> {
         require_admin(&env)?;
 
         if admins.is_empty() {
@@ -261,9 +303,7 @@ impl PlatformConfigContract {
 
     /// Return the current multi-sig admin list, if configured.
     pub fn get_multisig_admins(env: Env) -> Option<Vec<Address>> {
-        env.storage()
-            .instance()
-            .get(&DataKey::MultisigAdmins)
+        env.storage().instance().get(&DataKey::MultisigAdmins)
     }
 
     // ── Configuration management ──────────────────────────────────────────────
@@ -274,7 +314,11 @@ impl PlatformConfigContract {
     /// call this function.
     ///
     /// Emits `(platform_cfg, cfg_upd)` with a [`ConfigUpdatedEvent`] payload.
-    pub fn update_config(env: Env, caller: Address, new_config: PlatformConfig) -> Result<(), Error> {
+    pub fn update_config(
+        env: Env,
+        caller: Address,
+        new_config: PlatformConfig,
+    ) -> Result<(), Error> {
         // Check initialisation.
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::NotInitialized);
@@ -347,7 +391,9 @@ impl PlatformConfigContract {
         require_admin(&env)?;
         caller.require_auth();
         env.storage().instance().set(&DataKey::Treasury, &treasury);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -373,8 +419,12 @@ impl PlatformConfigContract {
             eta,
         };
 
-        env.storage().instance().set(&DataKey::PendingFeeChange, &pending);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingFeeChange, &pending);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
 
         env.events().publish(
             (symbol_short!("plt_cfg"), symbol_short!("fee_prop")),
@@ -404,7 +454,9 @@ impl PlatformConfigContract {
         config.platform_fee_bps = pending.new_fee_bps;
         env.storage().instance().set(&DataKey::Config, &config);
         env.storage().instance().remove(&DataKey::PendingFeeChange);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
 
         env.events().publish(
             (symbol_short!("plt_cfg"), symbol_short!("fee_app")),
@@ -424,7 +476,9 @@ impl PlatformConfigContract {
         }
 
         env.storage().instance().remove(&DataKey::PendingFeeChange);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -438,16 +492,27 @@ impl PlatformConfigContract {
         if fee_amount <= 0 {
             return Ok(());
         }
-        let current: i128 = env.storage().instance().get(&DataKey::TotalFeesCollected).unwrap_or(0);
+        let current: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalFeesCollected)
+            .unwrap_or(0);
         let updated = current.saturating_add(fee_amount);
-        env.storage().instance().set(&DataKey::TotalFeesCollected, &updated);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalFeesCollected, &updated);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
     /// Query cumulative platform fees collected in stroops.
     pub fn get_total_fees_collected(env: Env) -> i128 {
-        env.storage().instance().get(&DataKey::TotalFeesCollected).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalFeesCollected)
+            .unwrap_or(0)
     }
 
     // ── Governance Configuration (Issue #408) ────────────────────────────────
@@ -456,8 +521,12 @@ impl PlatformConfigContract {
     pub fn set_voting_period_ledgers(env: Env, caller: Address, period: u32) -> Result<(), Error> {
         require_admin(&env)?;
         caller.require_auth();
-        env.storage().instance().set(&DataKey::VotingPeriodLedgers, &period);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .set(&DataKey::VotingPeriodLedgers, &period);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -476,8 +545,12 @@ impl PlatformConfigContract {
         if bps > 10_000 {
             return Err(Error::InvalidPlatformFee); // reuse 10,000 max bound
         }
-        env.storage().instance().set(&DataKey::QuorumThresholdBps, &bps);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .set(&DataKey::QuorumThresholdBps, &bps);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -506,7 +579,9 @@ impl PlatformConfigContract {
         env.storage()
             .instance()
             .set(&DataKey::ActionThreshold(action_type), &threshold);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -551,9 +626,15 @@ mod test {
     fn initialize_sets_defaults() {
         let f = fixture();
         let config = f.client.get_config();
-        assert_eq!(config.min_stake_per_capability, DEFAULT_MIN_STAKE_PER_CAPABILITY);
+        assert_eq!(
+            config.min_stake_per_capability,
+            DEFAULT_MIN_STAKE_PER_CAPABILITY
+        );
         assert_eq!(config.escrow_timeout_days, DEFAULT_ESCROW_TIMEOUT_DAYS);
-        assert_eq!(config.max_capabilities_per_agent, DEFAULT_MAX_CAPABILITIES_PER_AGENT);
+        assert_eq!(
+            config.max_capabilities_per_agent,
+            DEFAULT_MAX_CAPABILITIES_PER_AGENT
+        );
         assert_eq!(config.platform_fee_bps, DEFAULT_PLATFORM_FEE_BPS);
     }
 
@@ -574,9 +655,18 @@ mod test {
         let f = fixture();
         let config = f.client.get_config();
         assert_eq!(config.platform_fee_bps, DEFAULT_PLATFORM_FEE_BPS);
-        assert_eq!(f.client.get_min_stake_per_capability(), config.min_stake_per_capability);
-        assert_eq!(f.client.get_escrow_timeout_days(), config.escrow_timeout_days);
-        assert_eq!(f.client.get_max_capabilities_per_agent(), config.max_capabilities_per_agent);
+        assert_eq!(
+            f.client.get_min_stake_per_capability(),
+            config.min_stake_per_capability
+        );
+        assert_eq!(
+            f.client.get_escrow_timeout_days(),
+            config.escrow_timeout_days
+        );
+        assert_eq!(
+            f.client.get_max_capabilities_per_agent(),
+            config.max_capabilities_per_agent
+        );
         assert_eq!(f.client.get_platform_fee_bps(), config.platform_fee_bps);
     }
 
@@ -746,7 +836,9 @@ mod test {
         );
 
         // Advance past timelock (48 hours + 1 second)
-        f.env.ledger().with_mut(|l| l.timestamp = 1_000_000 + TIMELOCK_SECS + 1);
+        f.env
+            .ledger()
+            .with_mut(|l| l.timestamp = 1_000_000 + TIMELOCK_SECS + 1);
         f.client.apply_fee_change(&f.admin);
 
         assert_eq!(f.client.get_platform_fee_bps(), 100);
@@ -758,7 +850,9 @@ mod test {
         let f = fixture();
         f.env.ledger().with_mut(|l| l.timestamp = 1_000_000);
         f.client.propose_fee_change(&f.admin, &0);
-        f.env.ledger().with_mut(|l| l.timestamp = 1_000_000 + TIMELOCK_SECS + 1);
+        f.env
+            .ledger()
+            .with_mut(|l| l.timestamp = 1_000_000 + TIMELOCK_SECS + 1);
         f.client.apply_fee_change(&f.admin);
         assert_eq!(f.client.get_platform_fee_bps(), 0);
     }
@@ -777,12 +871,18 @@ mod test {
     fn governance_and_multisig_config_extensions() {
         let f = fixture();
         // Voting period (Issue #408)
-        assert_eq!(f.client.get_voting_period_ledgers(), DEFAULT_VOTING_PERIOD_LEDGERS);
+        assert_eq!(
+            f.client.get_voting_period_ledgers(),
+            DEFAULT_VOTING_PERIOD_LEDGERS
+        );
         f.client.set_voting_period_ledgers(&f.admin, &20_000);
         assert_eq!(f.client.get_voting_period_ledgers(), 20_000);
 
         // Quorum (Issue #408)
-        assert_eq!(f.client.get_quorum_threshold_bps(), DEFAULT_QUORUM_THRESHOLD_BPS);
+        assert_eq!(
+            f.client.get_quorum_threshold_bps(),
+            DEFAULT_QUORUM_THRESHOLD_BPS
+        );
         f.client.set_quorum_threshold_bps(&f.admin, &1_500);
         assert_eq!(f.client.get_quorum_threshold_bps(), 1_500);
 

@@ -39,7 +39,9 @@
 //! | `slash_bond`      | `(staking, slashed)`           | `BondSlashedEvent` |
 //! | `claim_unbonded`  | `(staking, claimed)`           | `BondClaimedEvent` |
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, IntoVal, Symbol,
+};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -64,6 +66,7 @@ const TTL_EXTEND_TO: u32 = 535_680;
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
+    AuthRegistry,
     /// The governance / admin address.
     Admin,
     /// Destination for slashed funds.
@@ -243,6 +246,19 @@ fn load_treasury(env: &Env) -> Address {
         .unwrap_or_else(|| panic!("not initialized"))
 }
 
+fn registry_allows(env: &Env, registry: &Address, caller: &Address, function: &str) -> bool {
+    env.invoke_contract(
+        registry,
+        &Symbol::new(env, "is_authorized"),
+        (
+            caller.clone(),
+            env.current_contract_address(),
+            soroban_sdk::String::from_str(env, function),
+        )
+            .into_val(env),
+    )
+}
+
 fn load_dispute_resolution(env: &Env) -> Address {
     env.storage()
         .instance()
@@ -285,6 +301,15 @@ impl CapabilityStakingContract {
         env.storage()
             .instance()
             .set(&DataKey::TokenContract, &token);
+        extend_instance_ttl(&env);
+    }
+
+    /// Configure the platform authorization registry for privileged calls.
+    pub fn set_auth_registry(env: Env, registry: Address) {
+        load_admin(&env).require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::AuthRegistry, &registry);
         extend_instance_ttl(&env);
     }
 
@@ -401,12 +426,7 @@ impl CapabilityStakingContract {
     ///
     /// # Errors
     /// Panics with `Error::StakeNotFound` if no active stake exists.
-    pub fn unstake_bond(
-        env: Env,
-        owner: Address,
-        agent_id: Symbol,
-        capability: Symbol,
-    ) {
+    pub fn unstake_bond(env: Env, owner: Address, agent_id: Symbol, capability: Symbol) {
         owner.require_auth();
 
         let stake_key = DataKey::StakeRecord(agent_id.clone(), capability.clone());
@@ -461,12 +481,7 @@ impl CapabilityStakingContract {
     /// - Panics with `Error::UnbondingNotFound` if no unbonding record exists.
     /// - Panics with `Error::UnbondingPeriodNotElapsed` if the waiting period
     ///   has not yet passed.
-    pub fn claim_unbonded(
-        env: Env,
-        owner: Address,
-        agent_id: Symbol,
-        capability: Symbol,
-    ) {
+    pub fn claim_unbonded(env: Env, owner: Address, agent_id: Symbol, capability: Symbol) {
         owner.require_auth();
 
         let unbonding_key = DataKey::UnbondingRecord(agent_id.clone(), capability.clone());
@@ -509,12 +524,7 @@ impl CapabilityStakingContract {
     /// # Errors
     /// Panics if neither an active stake nor an unbonding record is found for
     /// the given (agent_id, capability) pair.
-    pub fn slash_bond(
-        env: Env,
-        agent_id: Symbol,
-        capability: Symbol,
-        reason: Symbol,
-    ) {
+    pub fn slash_bond(env: Env, agent_id: Symbol, capability: Symbol, reason: Symbol) {
         let admin = load_admin(&env);
         admin.require_auth();
 
@@ -588,7 +598,20 @@ impl CapabilityStakingContract {
         reason: Bytes,
     ) {
         // ── Caller verification ──────────────────────────────────────────────
-        let dr_contract = load_dispute_resolution(&env);
+        let registry: Option<Address> = env.storage().instance().get(&DataKey::AuthRegistry);
+        let dr_contract = if let Some(registry) = registry {
+            let caller: Address = env.invoke_contract(
+                &registry,
+                &Symbol::new(&env, "get_contract"),
+                (soroban_sdk::String::from_str(&env, "dispute_resolution"),).into_val(&env),
+            );
+            if !registry_allows(&env, &registry, &caller, "slash") {
+                soroban_sdk::panic_with_error!(&env, Error::CallerNotDisputeResolution);
+            }
+            caller
+        } else {
+            load_dispute_resolution(&env)
+        };
         // The dispute_resolution contract must authorise this call via
         // `env.current_contract_address()` in its own invocation context.
         // We verify the invoker is the dispute_resolution contract.
@@ -626,10 +649,7 @@ impl CapabilityStakingContract {
         // For new stakers the agent owner is tracked via AddressStakeRecord.
 
         let addr_key = DataKey::AddressStakeRecord(agent_id.clone(), capability.clone());
-        let stake_opt: Option<AddressStakeRecord> = env
-            .storage()
-            .persistent()
-            .get(&addr_key);
+        let stake_opt: Option<AddressStakeRecord> = env.storage().persistent().get(&addr_key);
 
         let record = stake_opt.unwrap_or_else(|| panic!("stake not found"));
 
@@ -646,9 +666,7 @@ impl CapabilityStakingContract {
 
             let blacklist_expires = current_ledger + BLACKLIST_PERIOD_LEDGERS;
             let bl_key = DataKey::Blacklist(agent_id.clone());
-            env.storage()
-                .persistent()
-                .set(&bl_key, &blacklist_expires);
+            env.storage().persistent().set(&bl_key, &blacklist_expires);
             extend_persistent_ttl(&env, &bl_key);
         } else {
             // Partial slash: update the stake record.
@@ -689,11 +707,7 @@ impl CapabilityStakingContract {
 
     /// Returns the active `StakeRecord` for an (agent_id, capability) pair, or
     /// `None` if no stake exists.
-    pub fn get_stake(
-        env: Env,
-        agent_id: Symbol,
-        capability: Symbol,
-    ) -> Option<StakeRecord> {
+    pub fn get_stake(env: Env, agent_id: Symbol, capability: Symbol) -> Option<StakeRecord> {
         extend_instance_ttl(&env);
         env.storage()
             .persistent()
@@ -716,11 +730,7 @@ impl CapabilityStakingContract {
     /// Returns `true` if the agent has an active stake >= the capability's
     /// minimum stake, `false` otherwise (no stake, insufficient stake, or
     /// stake is in the unbonding period).
-    pub fn is_sufficiently_staked(
-        env: Env,
-        agent_id: Symbol,
-        capability: Symbol,
-    ) -> bool {
+    pub fn is_sufficiently_staked(env: Env, agent_id: Symbol, capability: Symbol) -> bool {
         extend_instance_ttl(&env);
         let min_stake: i128 = env
             .storage()
@@ -743,11 +753,7 @@ impl CapabilityStakingContract {
     pub fn is_blacklisted(env: Env, agent_id: Address) -> bool {
         extend_instance_ttl(&env);
         let key = DataKey::Blacklist(agent_id);
-        match env
-            .storage()
-            .persistent()
-            .get::<DataKey, u32>(&key)
-        {
+        match env.storage().persistent().get::<DataKey, u32>(&key) {
             Some(expires_at) => env.ledger().sequence() < expires_at,
             None => false,
         }

@@ -24,4 +24,8 @@ pub enum Error {
     TimelockNotElapsed = 9,
     /// No pending fee change exists.
     NoPendingFeeChange = 10,
+    ContractNotFound = 11,
+    ContractHasActiveAuthorizations = 12,
+    RegistryFull = 13,
+    InvalidRegistryName = 14,
 }

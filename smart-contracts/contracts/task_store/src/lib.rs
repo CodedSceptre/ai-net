@@ -34,15 +34,14 @@
 mod types;
 
 pub use types::{
-    CoordinatorSetEvent, DataKey, Error, OracleManagerSetEvent, TaskAssignedEvent,
-    TaskAssignmentRecord, TaskCreatedEvent, TaskFinalizedEvent, TaskMetadata, TaskStatus,
-    TaskUpdatedEvent, DEFAULT_TTL_DAYS, LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES, MAX_TTL_DAYS,
-    TASK_LIFECYCLE_EVENT_VERSION,
+    ContractUpgradedEvent, CoordinatorSetEvent, DataKey, Error, OracleManagerSetEvent,
+    TaskAssignedEvent, TaskAssignmentRecord, TaskCreatedEvent, TaskFinalizedEvent, TaskMetadata,
+    TaskStatus, TaskUpdatedEvent, DEFAULT_TTL_DAYS, LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES,
+    MAX_TTL_DAYS, TASK_CONFIG_EVENT_VERSION, TASK_LIFECYCLE_EVENT_VERSION,
 };
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
-    Val, Vec,
+    contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 
 const SECONDS_PER_DAY: u64 = 86_400;
@@ -289,19 +288,45 @@ impl TaskStoreContract {
         Ok(())
     }
 
+    /// Configure platform_config as the source of the reputation address.
+    pub fn set_auth_registry(env: Env, registry: Address) -> Result<(), Error> {
+        require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::AuthRegistry, &registry);
+        Ok(())
+    }
+
     /// Configure the optional reputation contract (admin only).
     pub fn set_reputation_contract(env: Env, contract: Option<Address>) -> Result<(), Error> {
         require_admin(&env)?;
         match &contract {
-            Some(addr) => env.storage().instance().set(&DataKey::ReputationContract, addr),
-            None => env.storage().instance().remove(&DataKey::ReputationContract),
+            Some(addr) => env
+                .storage()
+                .instance()
+                .set(&DataKey::ReputationContract, addr),
+            None => env
+                .storage()
+                .instance()
+                .remove(&DataKey::ReputationContract),
         }
         Ok(())
     }
 
     /// Read the configured reputation contract, if any.
     pub fn get_reputation_contract(env: Env) -> Option<Address> {
-        env.storage().instance().get(&DataKey::ReputationContract)
+        let registry: Option<Address> = env.storage().instance().get(&DataKey::AuthRegistry);
+        match registry {
+            Some(registry) => env
+                .try_invoke_contract::<Address, soroban_sdk::Error>(
+                    &registry,
+                    &Symbol::new(&env, "get_contract"),
+                    (String::from_str(&env, "reputation"),).into_val(&env),
+                )
+                .ok()
+                .and_then(Result::ok),
+            None => env.storage().instance().get(&DataKey::ReputationContract),
+        }
     }
 
     /// Assign a task using on-chain reputation-weighted deterministic selection.
@@ -369,7 +394,10 @@ impl TaskStoreContract {
         env.storage().persistent().set(&key, &metadata);
 
         env.events().publish(
-            (symbol_short!("task_meta"), Symbol::new(&env, "task_assigned")),
+            (
+                symbol_short!("task_meta"),
+                Symbol::new(&env, "task_assigned"),
+            ),
             TaskAssignedEvent {
                 version: TASK_LIFECYCLE_EVENT_VERSION,
                 task_id: task_id.clone(),
@@ -403,7 +431,10 @@ impl TaskStoreContract {
     }
 
     /// Read the budget and reserve price for a task.
-    pub fn get_task_budget(env: Env, task_id: BytesN<32>) -> Result<(Option<i128>, Option<i128>), Error> {
+    pub fn get_task_budget(
+        env: Env,
+        task_id: BytesN<32>,
+    ) -> Result<(Option<i128>, Option<i128>), Error> {
         let metadata = read_metadata(&env, &task_id)?;
         Ok((metadata.max_budget, metadata.reserve_price))
     }

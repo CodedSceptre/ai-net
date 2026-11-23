@@ -27,7 +27,7 @@ pub use types::*;
 
 use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, symbol_short, token, Address, Bytes,
-    BytesN, Env, String, Symbol, Vec,
+    BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 
 // ── Thin client for capability_staking.slash() ───────────────────────────────
@@ -35,13 +35,7 @@ use soroban_sdk::{
 /// Minimal interface used to invoke `capability_staking::slash` via cross-contract call.
 #[contractclient(name = "CapabilityStakingClient")]
 pub trait ICapabilityStaking {
-    fn slash(
-        env: Env,
-        agent_id: Address,
-        capability: Bytes,
-        slash_amount: i128,
-        reason: Bytes,
-    );
+    fn slash(env: Env, agent_id: Address, capability: Bytes, slash_amount: i128, reason: Bytes);
 }
 
 /// Voting window: 72 hours in seconds.
@@ -75,6 +69,7 @@ pub enum DataKey {
     NextDisputeId,
     /// capability_staking contract address — called on Reject resolutions.
     CapabilityStakingContract,
+    AuthRegistry,
 }
 
 #[contract]
@@ -130,9 +125,7 @@ fn next_dispute_id(env: &Env) -> Result<u64, Error> {
         .get(&DataKey::NextDisputeId)
         .unwrap_or(0);
     let next = id.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-    env.storage()
-        .instance()
-        .set(&DataKey::NextDisputeId, &next);
+    env.storage().instance().set(&DataKey::NextDisputeId, &next);
     Ok(next)
 }
 
@@ -163,7 +156,11 @@ impl DisputeResolutionContract {
             return Err(Error::InvalidArbiterSet);
         }
         for (index, arbiter) in arbiters.iter().enumerate() {
-            if arbiters.iter().skip(index + 1).any(|other| other == arbiter) {
+            if arbiters
+                .iter()
+                .skip(index + 1)
+                .any(|other| other == arbiter)
+            {
                 return Err(Error::InvalidArbiterSet);
             }
         }
@@ -175,9 +172,7 @@ impl DisputeResolutionContract {
         if next_dispute_id != 0 {
             return Err(Error::InvalidArbiterSet);
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::Arbiters, &arbiters);
+        env.storage().instance().set(&DataKey::Arbiters, &arbiters);
         Ok(())
     }
 
@@ -264,6 +259,15 @@ impl DisputeResolutionContract {
     pub fn set_paused(env: Env, paused: bool) -> Result<(), Error> {
         require_admin(&env)?;
         env.storage().instance().set(&DataKey::Paused, &paused);
+        Ok(())
+    }
+
+    /// Configure platform_config as the source of the capability_staking address.
+    pub fn set_auth_registry(env: Env, registry: Address) -> Result<(), Error> {
+        require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::AuthRegistry, &registry);
         Ok(())
     }
 
@@ -516,9 +520,7 @@ impl DisputeResolutionContract {
             &settled_escrow.amount,
         );
         settled_escrow.settled = true;
-        env.storage()
-            .persistent()
-            .set(&escrow_key, &settled_escrow);
+        env.storage().persistent().set(&escrow_key, &settled_escrow);
         extend_ttl(&env, &escrow_key);
         env.storage().persistent().set(&dispute_key, &record);
         extend_ttl(&env, &dispute_key);
@@ -535,11 +537,22 @@ impl DisputeResolutionContract {
 
         // On Reject: slash the agent's capability bond via cross-contract call.
         if resolution == Resolution::Reject {
-            if let Some(staking_contract) = env
-                .storage()
-                .instance()
-                .get::<DataKey, Address>(&DataKey::CapabilityStakingContract)
-            {
+            let registry: Option<Address> = env.storage().instance().get(&DataKey::AuthRegistry);
+            let staking: Option<Address> = match registry {
+                Some(registry) => env
+                    .try_invoke_contract::<Address, soroban_sdk::Error>(
+                        &registry,
+                        &Symbol::new(&env, "get_contract"),
+                        (String::from_str(&env, "capability_staking"),).into_val(&env),
+                    )
+                    .ok()
+                    .and_then(Result::ok),
+                None => env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::CapabilityStakingContract),
+            };
+            if let Some(staking_contract) = staking {
                 // Use the full escrow amount as the slash amount; the staking
                 // contract will cap it at the agent's actual bond.
                 let slash_amount = settled_escrow.amount;
@@ -550,12 +563,8 @@ impl DisputeResolutionContract {
                 let client = CapabilityStakingClient::new(&env, &staking_contract);
                 // Best-effort: if the slash panics (e.g. no stake registered),
                 // we swallow the error so dispute settlement is never blocked.
-                let _ = client.try_slash(
-                    &settled_escrow.agent,
-                    &capability,
-                    &slash_amount,
-                    &reason,
-                );
+                let _ =
+                    client.try_slash(&settled_escrow.agent, &capability, &slash_amount, &reason);
             }
         }
 
@@ -592,6 +601,6 @@ impl DisputeResolutionContract {
 }
 
 #[cfg(test)]
-mod test;
-#[cfg(test)]
 mod integration_tests;
+#[cfg(test)]
+mod test;
