@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { LayoutGrid, List, Plus } from 'lucide-react'
+import { ArrowDownUp, Check, ChevronDown, Filter, LayoutGrid, List, Plus, X } from 'lucide-react'
 
 import { useAgentRegistry } from '../hooks/useAgentRegistry'
 import { AgentTable } from '../components/agents/AgentTable'
@@ -454,7 +454,6 @@ function AgentsPage() {
                 />
               )}
             </main>
-          </div>
         </div>
       )}
 

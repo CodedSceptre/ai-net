@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useWallet } from '../../context/WalletContext'
 import { useWalletBalance } from '../../hooks/useWalletBalance'
@@ -10,6 +10,7 @@ import { NAV_ITEMS } from './navigation'
 import type { SupportedLanguage } from '../../i18n/options'
 import type { WsConnectionState } from '../../hooks/useAgentStatusSocket'
 import './TopNav.css'
+import { useOnboarding } from '../../context/OnboardingContext'
 import useTheme from '../../hooks/useTheme'
 import { Sun, Moon, Wallet } from 'lucide-react'
 
@@ -96,6 +97,9 @@ const TopNav: React.FC<TopNavProps> = ({
   const { showToast } = useToast()
   const { t, i18n } = useTranslation()
   const location = useLocation()
+  const navigate = useNavigate()
+  const onboarding = useOnboarding()
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const { setMode, effectiveTheme } = useTheme()
   const [isConnecting, setIsConnecting] = useState(false)
 
@@ -179,6 +183,22 @@ const TopNav: React.FC<TopNavProps> = ({
           <WsStatusIndicator state={wsConnectionState} />
         )}
         <NotificationBell />
+        {onboarding && connected && (
+          <div className="tour-settings">
+            <button type="button" aria-expanded={settingsOpen} aria-controls={settingsOpen ? "tour-settings-menu" : undefined} onClick={() => setSettingsOpen(!settingsOpen)}>
+              Settings
+            </button>
+            {settingsOpen && (
+              <div id="tour-settings-menu" className="tour-settings-menu">
+                <button type="button" onClick={() => {
+                  setSettingsOpen(false)
+                  onboarding.startTour()
+                  navigate('/dashboard')
+                }}>Restart Tour</button>
+              </div>
+            )}
+          </div>
+        )}
 
         <button
           className="theme-toggle"

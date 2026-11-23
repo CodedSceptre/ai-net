@@ -48,6 +48,7 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, currentPath, onNavigate })
                   <li key={item.path}>
                     <button
                       className={`nav-item ${isActive ? 'active' : ''}`}
+                      data-tour-nav={item.path}
                       onClick={() => onNavigate(item.path)}
                       onKeyDown={(e) => handleKeyDown(e, item.path)}
                       aria-current={isActive ? 'page' : undefined}

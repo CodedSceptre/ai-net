@@ -1,13 +1,16 @@
 // src/pages/dashboard.tsx
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Navigate } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
 import { useNetworkStats } from "../hooks/useNetworkStats";
 import { DashboardLayout } from "../components/dashboard/DashboardLayout";
 import { NetworkStatsWidget } from "../components/dashboard/NetworkStatsWidget";
 import { NetworkHealthBadge } from "../components/dashboard/NetworkHealthBadge";
 import { RecentTasksTable } from "../components/dashboard/RecentTasksTable";
+import { useMediaQuery } from "../hooks/useMediaQuery";
+import { MOBILE_BREAKPOINT_QUERY } from "../components/layout/AppShell";
+import OnboardingTour from "../components/onboarding/OnboardingTour";
 import { useToast } from "../hooks/useToast";
 import {
   Skeleton,
@@ -57,6 +60,7 @@ export const DashboardSkeleton: React.FC = () => {
 };
 
 export const DashboardPage: React.FC = () => {
+  const isMobile = useMediaQuery(MOBILE_BREAKPOINT_QUERY);
   const { address, connected } = useWallet();
   const { data, loading, error } = useNetworkStats();
   const { showToast } = useToast();
@@ -98,7 +102,15 @@ export const DashboardPage: React.FC = () => {
 
   return (
     <DashboardLayout className="fade-in">
-      <section className={styles.statsSection}>
+      {isMobile && (
+        <nav className={styles.quickLinks} aria-label="Dashboard shortcuts">
+          <Link data-tour-nav="/agents" to="/agents">Agents</Link>
+          <Link data-tour-nav="/tasks/new" to="/tasks/new">New task</Link>
+          <Link data-tour-nav="/payments" to="/payments">Payments</Link>
+        </nav>
+      )}
+      <OnboardingTour />
+      <section id="tour-dashboard-metrics" className={styles.statsSection}>
         <NetworkStatsWidget />
       </section>
       <section className={styles.health}>
