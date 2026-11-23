@@ -1,3 +1,4 @@
+import { ReputationChart } from '../components/agents/ReputationChart';
 /**
  * AgentDetailPage
  *

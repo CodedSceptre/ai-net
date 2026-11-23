@@ -406,7 +406,7 @@
   "nav.group.overview": "Overview",
   "nav.group.work": "Work",
   "nav.group.account": "Account",
-  "a11y.skipToContent": "Skip to content",
+  "a11y.skipToContent": "Skip to main content",
   "a11y.dismissNotification": "Dismiss notification",
 
   "palette.label": "Command palette",
@@ -445,5 +445,4 @@
   "agent.status.offline": "Offline",
   "agent.status.busy": "Busy",
   "agent.status.error": "Error"
-}
 }

@@ -1,4 +1,4 @@
-import React, { useContext } from 'react';
+import React, { useContext, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -23,6 +23,8 @@ const ResearchReportRenderer: React.FC<Props> = ({ result, searchQuery }) => {
   const { t } = useTranslation();
   const { effectiveTheme } = useContext(ThemeContext);
   const markdown = getMarkdown(result);
+  const lightbox = useLightbox();
+  const reportRef = useRef<HTMLDivElement>(null);
 
   if (!markdown) {
     return (
@@ -66,7 +68,9 @@ const ResearchReportRenderer: React.FC<Props> = ({ result, searchQuery }) => {
   const isLongReport = markdown.length > 500;
 
   const content = (
+    <>
     <div
+      ref={reportRef}
       className="markdown-body"
       id="research-markdown"
       data-testid="research-markdown"
@@ -137,11 +141,17 @@ const ResearchReportRenderer: React.FC<Props> = ({ result, searchQuery }) => {
             );
           },
           img({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
-            const imageIndex = images.findIndex((image) => image.url === src);
             return (
               <button
                 type="button"
-                onClick={() => lightbox.openLightbox(images, Math.max(imageIndex, 0))}
+                onClick={(event) => {
+                  const elements = Array.from(reportRef.current?.querySelectorAll('img') ?? []);
+                  const images: LightboxImage[] = elements.map(image => ({
+                    url: image.src, alt: image.alt, title: image.title,
+                  }));
+                  const index = elements.findIndex(image => event.currentTarget.contains(image));
+                  if (index >= 0) lightbox.openLightbox(images, index);
+                }}
                 aria-label={`Open image: ${alt || title || 'report image'}`}
                 style={{ display: 'block', maxWidth: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}
               >

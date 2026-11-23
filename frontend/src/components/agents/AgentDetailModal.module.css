@@ -37,7 +37,7 @@
   max-width: 620px;
   max-height: 90dvh;
   overflow-y: auto;
-  outline: none; /* focus is managed via useFocusTrap */
+  outline: none; /* focus is managed by the modal focus trap */
 }
 
 /* Close button */

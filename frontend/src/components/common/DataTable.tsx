@@ -168,7 +168,7 @@ export function DataTable<T>({
     observer.observe(viewport);
     if (viewport.firstElementChild) observer.observe(viewport.firstElementChild);
     return () => observer.disconnect();
-  }, [columns.length, rows.length, updateScrollState]);
+  }, [columns.length, allRows.length, updateScrollState]);
 
   // Re-sync controlled pageSize if the prop changes
   useEffect(() => {
@@ -300,6 +300,7 @@ export function DataTable<T>({
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div
+      aria-busy={loading}
       className={`${styles.wrapper} ${className ?? ''}`}
       style={{ maxHeight }}
       data-overflowing={scrollState.overflowing || undefined}
@@ -361,8 +362,12 @@ export function DataTable<T>({
             </tr>
           </thead>
           <tbody>
-            {visibleRows.map((row, rowIndex) => {
-              const rowKey = getRowKey(row);
+            {loading
+              ? Array.from({ length: Math.min(pageSize, 5) }, (_, i) => (
+                  <SkeletonRow key={i} colCount={columns.length + Number(Boolean(onRowSelect))} />
+                ))
+              : visibleRows.map((row, rowIndex) => {
+              const rowKey = resolveRowKey(row, startIndex + rowIndex);
               const isSelected = selectedRowKeys.includes(rowKey);
               const classes = [styles.row, rowClassName ? rowClassName(row) : ''];
               if (isSelected) classes.push(styles.selectedRow);
@@ -384,7 +389,7 @@ export function DataTable<T>({
                       <input
                         type="checkbox"
                         checked={isSelected}
-                        onChange={() => handleSelect(rowKey, row)}
+                        onChange={() => onRowSelect(row)}
                         onClick={(event) => event.stopPropagation()}
                         aria-label={`Select row ${String(rowKey)}`}
                       />
@@ -405,6 +410,25 @@ export function DataTable<T>({
                       {column.render ? column.render(row) : getCellValue(row, column.key) ?? '—'}
                     </td>
                   ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {virtualization && itemCount > 0 && (
+        <div className={styles.virtualizationMeta}>
+          Showing {Math.max(0, endIndex - startIndex)} of {itemCount} rows
+        </div>
+      )}
+      {isPaginated && totalRows > 0 && !loading && (
+        <div className={styles.pagination} aria-label="Table pagination">
+          <div className={styles.paginationLeft}>
+            {pageSizeOptions.length > 1 && (
+              <label>
+                Rows per page
+                <select value={pageSize} onChange={(event) => handlePageSizeChange(Number(event.target.value))}>
+                  {pageSizeOptions.map(size => <option key={size} value={size}>{size}</option>)}
                 </select>
               </label>
             )}

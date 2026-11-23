@@ -40,7 +40,7 @@ const ValuePropsSection: React.FC = () => {
         <h2 className="text-[11px] font-bold text-text-secondary uppercase tracking-[0.2em] mb-2">
           {t('landing.valueProps.title')}
         </h2>
-        <p className="text-sm text-text-secondary/60 max-w-[440px] mx-auto">
+        <p className="text-sm text-text-secondary max-w-[440px] mx-auto">
           {t('landing.valueProps.subtitle')}
         </p>
       </motion.div>

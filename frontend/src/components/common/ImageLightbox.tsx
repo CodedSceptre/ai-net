@@ -1,3 +1,4 @@
+import ModalFocusTrap from './ModalFocusTrap';
 import { useTranslation } from 'react-i18next';
 import React, { useEffect, useRef } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -135,174 +136,186 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
 
   return (
     <AnimatePresence>
-      <motion.div
-        className={styles.overlay}
-        data-testid="lightbox-overlay"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.2 }}
-        onClick={(e) => {
-          if (e.target === e.currentTarget) onClose();
-        }}
-      >
-        {/* Header / Toolbar */}
-        <div className={styles.header} data-testid="lightbox-header">
-          <div className={styles.titleArea}>
-            {images.length > 0 && (
-              <span className={styles.counterBadge} data-testid="image-counter">
-                {currentIndex + 1} / {images.length}
-              </span>
-            )}
-            {currentImage.title && (
-              <span className={styles.imageTitle} title={currentImage.title}>
-                {currentImage.title}
-              </span>
-            )}
-          </div>
-
-          <div className={styles.toolbar}>
-            {onZoomOut && (
-              <button
-                className={styles.iconBtn}
-                onClick={onZoomOut}
-                title={t('a11y.zoomOut')}
-                data-testid="zoom-out-btn"
-                disabled={scale <= 1}
-              >
-                <ZoomOut size={18} />
-              </button>
-            )}
-
-            {onResetZoom && (
-              <button
-                className={styles.iconBtn}
-                onClick={onResetZoom}
-                title={t('a11y.resetZoom')}
-                data-testid="zoom-reset-btn"
-              >
-                <RotateCcw size={16} style={{ marginRight: 6 }} />
-                <span>{formattedScale}</span>
-              </button>
-            )}
-
-            {onZoomIn && (
-              <button
-                className={styles.iconBtn}
-                onClick={onZoomIn}
-                title={t('a11y.zoomIn')}
-                data-testid="zoom-in-btn"
-              >
-                <ZoomIn size={18} />
-              </button>
-            )}
-
-            <button
-              className={styles.iconBtn}
-              onClick={handleDownload}
-              title={t('a11y.downloadImage')}
-              data-testid="download-btn"
-            >
-              <Download size={18} />
-            </button>
-
-            <button
-              className={`${styles.iconBtn} ${styles.closeBtn}`}
-              onClick={onClose}
-              title={t('a11y.closeLightbox')}
-              data-testid="close-btn"
-            >
-              <X size={20} />
-            </button>
-          </div>
-        </div>
-
-        {/* Main Viewing Stage */}
-        <div
-          className={styles.mainStage}
-          onWheel={onWheel}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
+      <ModalFocusTrap>
+        <motion.div
+          className={styles.overlay}
+          data-testid="lightbox-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('a11y.imageViewer', { defaultValue: 'Image viewer' })}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2 }}
           onClick={(e) => {
             if (e.target === e.currentTarget) onClose();
           }}
         >
-          {/* Navigation Chevron Left */}
-          {images.length > 1 && (
-            <button
-              className={`${styles.navBtn} ${styles.navBtnLeft}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onPrev();
-              }}
-              title={t('a11y.previousImage')}
-              data-testid="prev-btn"
-            >
-              <ChevronLeft size={24} />
-            </button>
-          )}
+          {/* Header / Toolbar */}
+          <div className={styles.header} data-testid="lightbox-header">
+            <div className={styles.titleArea}>
+              {images.length > 0 && (
+                <span className={styles.counterBadge} data-testid="image-counter">
+                  {currentIndex + 1} / {images.length}
+                </span>
+              )}
+              {currentImage.title && (
+                <span className={styles.imageTitle} title={currentImage.title}>
+                  {currentImage.title}
+                </span>
+              )}
+            </div>
 
-          {/* Draggable & Zoomable Image Wrapper */}
-          <div className={styles.imageWrapper}>
-            <motion.img
-              key={currentImage.url}
-              src={currentImage.url}
-              alt={currentImage.alt || currentImage.title || t('a11y.designAsset')}
-              className={styles.lightboxImage}
-              data-testid="lightbox-image"
-              drag={scale > 1}
-              dragConstraints={{ left: -1000, right: 1000, top: -1000, bottom: 1000 }}
-              dragElastic={0.1}
-              animate={{
-                scale: scale,
-                x: scale > 1 ? position.x : 0,
-                y: scale > 1 ? position.y : 0
-              }}
-              onDragEnd={(_, info) => {
-                if (scale > 1 && onPositionChange) {
-                  onPositionChange({
-                    x: position.x + info.offset.x,
-                    y: position.y + info.offset.y
-                  });
-                }
-              }}
-              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            />
-          </div>
+            <div className={styles.toolbar}>
+              {onZoomOut && (
+                <button
+                  className={styles.iconBtn}
+                  onClick={onZoomOut}
+                  title={t('a11y.zoomOut')}
+                aria-label={t('a11y.zoomOut')}
+                  data-testid="zoom-out-btn"
+                  disabled={scale <= 1}
+                >
+                  <ZoomOut size={18} />
+                </button>
+              )}
 
-          {/* Navigation Chevron Right */}
-          {images.length > 1 && (
-            <button
-              className={`${styles.navBtn} ${styles.navBtnRight}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onNext();
-              }}
-              title={t('a11y.nextImage')}
-              data-testid="next-btn"
-            >
-              <ChevronRight size={24} />
-            </button>
-          )}
-        </div>
+              {onResetZoom && (
+                <button
+                  className={styles.iconBtn}
+                  onClick={onResetZoom}
+                  title={t('a11y.resetZoom')}
+                aria-label={t('a11y.resetZoom')}
+                  data-testid="zoom-reset-btn"
+                >
+                  <RotateCcw size={16} style={{ marginRight: 6 }} />
+                  <span>{formattedScale}</span>
+                </button>
+              )}
 
-        {/* Thumbnails Bar (for multi-image outputs) */}
-        {images.length > 1 && (
-          <div className={styles.thumbnailsBar} data-testid="thumbnails-bar">
-            {images.map((img, idx) => (
-              <div
-                key={`${img.url}-${idx}`}
-                className={`${styles.thumbItem} ${idx === currentIndex ? styles.thumbActive : ''}`}
-                onClick={() => onSelectIndex(idx)}
-                data-testid={`thumb-${idx}`}
+              {onZoomIn && (
+                <button
+                  className={styles.iconBtn}
+                  onClick={onZoomIn}
+                  title={t('a11y.zoomIn')}
+                aria-label={t('a11y.zoomIn')}
+                  data-testid="zoom-in-btn"
+                >
+                  <ZoomIn size={18} />
+                </button>
+              )}
+
+              <button
+                className={styles.iconBtn}
+                onClick={handleDownload}
+                title={t('a11y.downloadImage')}
+                aria-label={t('a11y.downloadImage')}
+                data-testid="download-btn"
               >
-                <img src={img.url} alt={img.title || t('a11y.thumbnail', { index: idx + 1 })} className={styles.thumbImg} />
-              </div>
-            ))}
+                <Download size={18} />
+              </button>
+
+              <button
+                className={`${styles.iconBtn} ${styles.closeBtn}`}
+                onClick={onClose}
+                title={t('a11y.closeLightbox')}
+                aria-label={t('a11y.closeLightbox')}
+                data-testid="close-btn"
+              >
+                <X size={20} />
+              </button>
+            </div>
           </div>
-        )}
-      </motion.div>
+
+          {/* Main Viewing Stage */}
+          <div
+            className={styles.mainStage}
+            onWheel={onWheel}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) onClose();
+            }}
+          >
+            {/* Navigation Chevron Left */}
+            {images.length > 1 && (
+              <button
+                className={`${styles.navBtn} ${styles.navBtnLeft}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onPrev();
+                }}
+                title={t('a11y.previousImage')}
+                aria-label={t('a11y.previousImage')}
+                data-testid="prev-btn"
+              >
+                <ChevronLeft size={24} />
+              </button>
+            )}
+
+            {/* Draggable & Zoomable Image Wrapper */}
+            <div className={styles.imageWrapper}>
+              <motion.img
+                key={currentImage.url}
+                src={currentImage.url}
+                alt={currentImage.alt || currentImage.title || t('a11y.designAsset')}
+                className={styles.lightboxImage}
+                data-testid="lightbox-image"
+                drag={scale > 1}
+                dragConstraints={{ left: -1000, right: 1000, top: -1000, bottom: 1000 }}
+                dragElastic={0.1}
+                animate={{
+                  scale: scale,
+                  x: scale > 1 ? position.x : 0,
+                  y: scale > 1 ? position.y : 0
+                }}
+                onDragEnd={(_, info) => {
+                  if (scale > 1 && onPositionChange) {
+                    onPositionChange({
+                      x: position.x + info.offset.x,
+                      y: position.y + info.offset.y
+                    });
+                  }
+                }}
+                transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+              />
+            </div>
+
+            {/* Navigation Chevron Right */}
+            {images.length > 1 && (
+              <button
+                className={`${styles.navBtn} ${styles.navBtnRight}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onNext();
+                }}
+                title={t('a11y.nextImage')}
+                aria-label={t('a11y.nextImage')}
+                data-testid="next-btn"
+              >
+                <ChevronRight size={24} />
+              </button>
+            )}
+          </div>
+
+          {/* Thumbnails Bar (for multi-image outputs) */}
+          {images.length > 1 && (
+            <div className={styles.thumbnailsBar} data-testid="thumbnails-bar">
+              {images.map((img, idx) => (
+                <div
+                  key={`${img.url}-${idx}`}
+                  className={`${styles.thumbItem} ${idx === currentIndex ? styles.thumbActive : ''}`}
+                  onClick={() => onSelectIndex(idx)}
+                  data-testid={`thumb-${idx}`}
+                >
+                  <img src={img.url} alt={img.title || t('a11y.thumbnail', { index: idx + 1 })} className={styles.thumbImg} />
+                </div>
+              ))}
+            </div>
+          )}
+        </motion.div>
+      </ModalFocusTrap>
     </AnimatePresence>
   );
 };

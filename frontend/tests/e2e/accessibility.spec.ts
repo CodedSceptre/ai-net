@@ -27,6 +27,7 @@ test.beforeEach(async ({ page }) => {
     localStorage.setItem('walletAddress', publicKey);
     localStorage.setItem('wallet_connection_method', 'freighter');
     localStorage.setItem('wallet_wizard_completed', 'true');
+    localStorage.setItem('onboarding_dismissed', 'true');
   }, TEST_WALLET);
 });
 
@@ -71,6 +72,7 @@ const majorRoutes = [
   { path: '/tasks', expectedPath: '/tasks/history', readySelector: 'h1' },
   { path: '/tasks/task-123', expectedPath: '/tasks/task-123', readySelector: 'h1' },
   { path: '/wallet', expectedPath: '/wallet', readySelector: 'h1' },
+  { path: '/notifications', expectedPath: '/notifications', readySelector: 'h1' },
   { path: '/payments', expectedPath: '/payments', readySelector: 'h1' },
 ];
 
@@ -258,4 +260,18 @@ test.describe('accessibility: 404 Not Found page', () => {
     await page.waitForLoadState('networkidle');
     await assertNoWcagViolations(page);
   });
+});
+
+test('the first Tab reveals the skip link and Enter focuses main content', async ({ page }) => {
+  for (const path of ['/', '/agents']) {
+    await page.goto(path);
+    const main = page.locator('main#main-content');
+    await expect(main).toBeAttached();
+    await page.keyboard.press('Tab');
+    const skipLink = page.getByRole('link', { name: 'Skip to main content' });
+    await expect(skipLink).toBeFocused();
+    await expect(skipLink).toBeInViewport();
+    await page.keyboard.press('Enter');
+    await expect(main).toBeFocused();
+  }
 });

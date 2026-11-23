@@ -1,3 +1,4 @@
+import ModalFocusTrap from '../common/ModalFocusTrap';
 import { useMemo, useState } from 'react'
 import { useTranslation, Trans } from 'react-i18next'
 import { useForm } from 'react-hook-form'
@@ -271,58 +272,60 @@ export function SendXLMForm() {
 
       {/* Confirmation Modal */}
       {confirmation && (
-        <div className={styles.overlay} onClick={handleCancelConfirm}>
-          <div
-            className={styles.modal}
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="confirm-title"
-          >
-            <h3 id="confirm-title" className={styles.modalTitle}>
-              {t('wallet.send.confirmTitle', { defaultValue: 'Confirm Payment' })}
-            </h3>
-            <div className={styles.modalBody}>
-              <div className={styles.confirmRow}>
-                <span className={styles.confirmLabel}>{t('wallet.send.to', { defaultValue: 'To' })}</span>
-                <span className={styles.confirmValue}>{confirmation.destination}</span>
-              </div>
-              <div className={styles.confirmRow}>
-                <span className={styles.confirmLabel}>{t('wallet.send.amount', { defaultValue: 'Amount' })}</span>
-                <span className={styles.confirmValue}>{confirmation.amount} XLM</span>
-              </div>
-              {confirmation.memo && (
+        <div data-modal-backdrop className={styles.overlay} onClick={handleCancelConfirm}>
+          <ModalFocusTrap onEscape={handleCancelConfirm}>
+            <div
+              className={styles.modal}
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="confirm-title"
+            >
+              <h3 id="confirm-title" className={styles.modalTitle}>
+                {t('wallet.send.confirmTitle', { defaultValue: 'Confirm Payment' })}
+              </h3>
+              <div className={styles.modalBody}>
                 <div className={styles.confirmRow}>
-                  <span className={styles.confirmLabel}>{t('wallet.send.memo', { defaultValue: 'Memo' })}</span>
-                  <span className={styles.confirmValue}>{confirmation.memo}</span>
+                  <span className={styles.confirmLabel}>{t('wallet.send.to', { defaultValue: 'To' })}</span>
+                  <span className={styles.confirmValue}>{confirmation.destination}</span>
                 </div>
-              )}
+                <div className={styles.confirmRow}>
+                  <span className={styles.confirmLabel}>{t('wallet.send.amount', { defaultValue: 'Amount' })}</span>
+                  <span className={styles.confirmValue}>{confirmation.amount} XLM</span>
+                </div>
+                {confirmation.memo && (
+                  <div className={styles.confirmRow}>
+                    <span className={styles.confirmLabel}>{t('wallet.send.memo', { defaultValue: 'Memo' })}</span>
+                    <span className={styles.confirmValue}>{confirmation.memo}</span>
+                  </div>
+                )}
+              </div>
+              <div className={styles.modalActions}>
+                <button
+                  id="btn-cancel-payment"
+                  type="button"
+                  className={styles.cancelButton}
+                  onClick={handleCancelConfirm}
+                  disabled={submitting}
+                >
+                  {t('common.cancel', { defaultValue: 'Cancel' })}
+                </button>
+                <button
+                  id="btn-confirm-payment"
+                  type="button"
+                  className={styles.confirmButton}
+                  onClick={handleConfirm}
+                  disabled={submitting}
+                >
+                  {submitting
+                    ? connectionMethod === 'freighter'
+                      ? t('wallet.send.signingFreighter', { defaultValue: 'Signing with Freighter...' })
+                      : t('wallet.send.signingSending', { defaultValue: 'Sending...' })
+                    : t('wallet.send.confirmSend', { defaultValue: 'Confirm & Send' })}
+                </button>
+              </div>
             </div>
-            <div className={styles.modalActions}>
-              <button
-                id="btn-cancel-payment"
-                type="button"
-                className={styles.cancelButton}
-                onClick={handleCancelConfirm}
-                disabled={submitting}
-              >
-                {t('common.cancel', { defaultValue: 'Cancel' })}
-              </button>
-              <button
-                id="btn-confirm-payment"
-                type="button"
-                className={styles.confirmButton}
-                onClick={handleConfirm}
-                disabled={submitting}
-              >
-                {submitting
-                  ? connectionMethod === 'freighter'
-                    ? t('wallet.send.signingFreighter', { defaultValue: 'Signing with Freighter...' })
-                    : t('wallet.send.signingSending', { defaultValue: 'Sending...' })
-                  : t('wallet.send.confirmSend', { defaultValue: 'Confirm & Send' })}
-              </button>
-            </div>
-          </div>
+          </ModalFocusTrap>
         </div>
       )}
     </div>

@@ -1,3 +1,4 @@
+import { assertPageAccessibility } from '../utils/assertPageAccessibility'
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -217,4 +218,11 @@ describe('AgentsPage - auto-refresh', () => {
     expect(screen.queryByTestId('agent-skeleton-row')).not.toBeInTheDocument()
     expect(getAgents).toHaveBeenCalledTimes(2)
   })
+})
+
+
+it('AgentsPage has no critical or serious axe violations', async () => {
+  const { container } = renderPage()
+  await screen.findByTestId('agent-row-agent-research-001')
+  await assertPageAccessibility(container)
 })

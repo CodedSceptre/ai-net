@@ -1,6 +1,6 @@
+import ModalFocusTrap from './ModalFocusTrap';
 import { useEffect, useRef } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
 import styles from './ConfirmDialog.module.css';
 
 export interface ConfirmDialogProps {
@@ -44,17 +44,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
-  const containerRef = useFocusTrap<HTMLDivElement>(open);
-  const cancelBtnRef = useRef<HTMLButtonElement>(null);
-
-  // Move focus to Cancel button (safe default) when dialog opens
-  useEffect(() => {
-    if (open) {
-      // Small delay lets the focus trap initialise first
-      const id = setTimeout(() => cancelBtnRef.current?.focus(), 10);
-      return () => clearTimeout(id);
-    }
-  }, [open]);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Escape → cancel; block Enter from confirming
   useEffect(() => {
@@ -86,57 +76,58 @@ export function ConfirmDialog({
   const descId = `${dialogId}-desc`;
 
   return (
-    <div className={styles.overlay} onClick={onCancel}>
+    <div data-modal-backdrop className={styles.overlay} onClick={onCancel}>
       {/* Stop overlay click from closing dialog when clicking inside it */}
-      <div
-        ref={containerRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={descId}
-        className={styles.dialog}
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className={styles.iconWrap} aria-hidden="true">
-          <AlertTriangle size={24} />
-        </div>
+      <ModalFocusTrap>
+        <div
+          ref={containerRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          aria-describedby={descId}
+          className={styles.dialog}
+          tabIndex={-1}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className={styles.iconWrap} aria-hidden="true">
+            <AlertTriangle size={24} />
+          </div>
 
-        <h2 id={titleId} className={styles.title}>
-          {title}
-        </h2>
+          <h2 id={titleId} className={styles.title}>
+            {title}
+          </h2>
 
-        <p id={descId} className={styles.body}>
-          {description}
-        </p>
-
-        {consequence && (
-          <p className={styles.consequence} role="note">
-            {consequence}
+          <p id={descId} className={styles.body}>
+            {description}
           </p>
-        )}
 
-        <div className={styles.actions}>
-          <button
-            ref={cancelBtnRef}
-            type="button"
-            className={styles.cancelBtn}
-            onClick={onCancel}
-            data-testid="confirm-dialog-cancel"
-          >
-            {cancelLabel}
-          </button>
-          <button
-            type="button"
-            className={styles.confirmBtn}
-            onClick={onConfirm}
-            data-confirm="true"
-            data-testid="confirm-dialog-confirm"
-          >
-            {confirmLabel}
-          </button>
+          {consequence && (
+            <p className={styles.consequence} role="note">
+              {consequence}
+            </p>
+          )}
+
+          <div className={styles.actions}>
+            <button
+              type="button"
+              className={styles.cancelBtn}
+              onClick={onCancel}
+              data-testid="confirm-dialog-cancel"
+            >
+              {cancelLabel}
+            </button>
+            <button
+              type="button"
+              className={styles.confirmBtn}
+              onClick={onConfirm}
+              data-confirm="true"
+              data-testid="confirm-dialog-confirm"
+            >
+              {confirmLabel}
+            </button>
+          </div>
         </div>
-      </div>
+      </ModalFocusTrap>
     </div>
   );
 }

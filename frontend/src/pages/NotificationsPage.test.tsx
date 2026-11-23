@@ -1,4 +1,5 @@
 import React from 'react';
+import { assertPageAccessibility } from '../utils/assertPageAccessibility'
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -93,3 +94,9 @@ describe('NotificationsPage', () => {
     expect(screen.queryByTestId('mark-all-read-btn')).not.toBeInTheDocument();
   });
 });
+
+
+test('NotificationsPage has no critical or serious axe violations', async () => {
+  const { container } = renderPage(buildNotifications(3))
+  await assertPageAccessibility(container)
+})

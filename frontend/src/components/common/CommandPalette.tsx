@@ -1,7 +1,7 @@
+import ModalFocusTrap from './ModalFocusTrap';
 import React, { useEffect, useMemo, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { CornerDownLeft, Search } from 'lucide-react';
-import { useFocusTrap } from '../../hooks/useFocusTrap';
 import styles from './CommandPalette.module.css';
 
 export interface Command {
@@ -78,7 +78,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
 
-  const overlayRef = useFocusTrap<HTMLDivElement>(isOpen);
 
   // Reset state every time the palette opens/closes.
   useEffect(() => {
@@ -189,101 +188,102 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     filtered.length > 0 ? `command-palette-option-${safeIndex}` : undefined;
 
   return (
-    <div
-      ref={overlayRef}
-      className={styles.overlay}
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Command palette"
-    >
-      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-        <div className={styles.inputWrapper}>
-          <Search size={16} className={styles.searchIcon} aria-hidden="true" />
-          <input
-            type="text"
-            className={styles.input}
-            placeholder={placeholder}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            role="combobox"
-            aria-expanded={isOpen}
-            aria-controls={LISTBOX_ID}
-            aria-activedescendant={selectedId}
-            aria-autocomplete="list"
-            autoComplete="off"
-            spellCheck={false}
-          />
-          <span className={styles.shortcutHint}>
-            <kbd className={styles.keyHint}>esc</kbd>
-          </span>
-        </div>
-
-        {filtered.length > 0 ? (
-          <div className={styles.resultsWrapper} id={LISTBOX_ID} role="listbox" aria-label="Commands">
-            {groups.map((group) => (
-              <div key={group.category} className={styles.categoryGroup}>
-                <div className={styles.categoryLabel}>{group.label}</div>
-                {group.items.map((command, i) => {
-                  const globalIndex = group.startIndex + i;
-                  const Icon = command.icon;
-                  return (
-                    <button
-                      key={command.id}
-                      id={`command-palette-option-${globalIndex}`}
-                      role="option"
-                      aria-selected={globalIndex === safeIndex}
-                      className={`${styles.resultItem} ${
-                        globalIndex === safeIndex ? styles.selected : ''
-                      }`}
-                      onClick={() => executeCommand(command)}
-                      onMouseEnter={() => setSelectedIndex(globalIndex)}
-                    >
-                      {Icon && (
-                        <span className={styles.resultIcon}>
-                          <Icon size={16} aria-hidden="true" />
-                        </span>
-                      )}
-                      <span className={styles.resultContent}>
-                        <span className={styles.resultTitle}>{command.label}</span>
-                      </span>
-                      {command.shortcut && (
-                        <span className={styles.resultShortcut}>
-                          <kbd className={styles.keyHint}>{command.shortcut}</kbd>
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
+    <ModalFocusTrap>
+      <div
+        className={styles.overlay}
+        onClick={onClose}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+      >
+        <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+          <div className={styles.inputWrapper}>
+            <Search size={16} className={styles.searchIcon} aria-hidden="true" />
+            <input
+              type="text"
+              className={styles.input}
+              placeholder={placeholder}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              role="combobox"
+              aria-expanded={isOpen}
+              aria-controls={LISTBOX_ID}
+              aria-activedescendant={selectedId}
+              aria-autocomplete="list"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <span className={styles.shortcutHint}>
+              <kbd className={styles.keyHint}>esc</kbd>
+            </span>
           </div>
-        ) : (
-          <div className={styles.emptyState}>
-            <p className={styles.emptyText}>No commands found</p>
-            <p className={styles.emptySubtext}>Try a different search</p>
-          </div>
-        )}
 
-        <div className={styles.footer}>
-          <span className={styles.shortcutHint}>
-            <kbd className={styles.keyHint}>↑</kbd>
-            <kbd className={styles.keyHint}>↓</kbd>
-            navigate
-          </span>
-          <span className={styles.shortcutHint}>
-            <kbd className={styles.keyHint}>
-              <CornerDownLeft size={10} aria-hidden="true" />
-            </kbd>
-            select
-          </span>
-          <span className={styles.shortcutHint}>
-            <kbd className={styles.keyHint}>esc</kbd>
-            close
-          </span>
+          {filtered.length > 0 ? (
+            <div className={styles.resultsWrapper} id={LISTBOX_ID} role="listbox" aria-label="Commands">
+              {groups.map((group) => (
+                <div key={group.category} className={styles.categoryGroup}>
+                  <div className={styles.categoryLabel}>{group.label}</div>
+                  {group.items.map((command, i) => {
+                    const globalIndex = group.startIndex + i;
+                    const Icon = command.icon;
+                    return (
+                      <button
+                        key={command.id}
+                        id={`command-palette-option-${globalIndex}`}
+                        role="option"
+                        aria-selected={globalIndex === safeIndex}
+                        className={`${styles.resultItem} ${
+                          globalIndex === safeIndex ? styles.selected : ''
+                        }`}
+                        onClick={() => executeCommand(command)}
+                        onMouseEnter={() => setSelectedIndex(globalIndex)}
+                      >
+                        {Icon && (
+                          <span className={styles.resultIcon}>
+                            <Icon size={16} aria-hidden="true" />
+                          </span>
+                        )}
+                        <span className={styles.resultContent}>
+                          <span className={styles.resultTitle}>{command.label}</span>
+                        </span>
+                        {command.shortcut && (
+                          <span className={styles.resultShortcut}>
+                            <kbd className={styles.keyHint}>{command.shortcut}</kbd>
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className={styles.emptyState}>
+              <p className={styles.emptyText}>No commands found</p>
+              <p className={styles.emptySubtext}>Try a different search</p>
+            </div>
+          )}
+
+          <div className={styles.footer}>
+            <span className={styles.shortcutHint}>
+              <kbd className={styles.keyHint}>↑</kbd>
+              <kbd className={styles.keyHint}>↓</kbd>
+              navigate
+            </span>
+            <span className={styles.shortcutHint}>
+              <kbd className={styles.keyHint}>
+                <CornerDownLeft size={10} aria-hidden="true" />
+              </kbd>
+              select
+            </span>
+            <span className={styles.shortcutHint}>
+              <kbd className={styles.keyHint}>esc</kbd>
+              close
+            </span>
+          </div>
         </div>
       </div>
-    </div>
+    </ModalFocusTrap>
   );
 };

@@ -1,3 +1,4 @@
+import { assertPageAccessibility } from '../utils/assertPageAccessibility'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -274,4 +275,10 @@ describe('SendXLMForm Validation', () => {
     const sendBtn = screen.getByRole('button', { name: /^send$/i })
     expect(sendBtn).not.toBeDisabled()
   })
+})
+
+
+it('WalletPage has no critical or serious axe violations', async () => {
+  const { container } = renderPage()
+  await assertPageAccessibility(container)
 })
