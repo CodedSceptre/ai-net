@@ -1,0 +1,153 @@
+name: Performance Benchmarks
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    # Nightly at 01:00 UTC
+    - cron: '0 1 * * *'
+
+permissions:
+  contents: write   # needed to push baseline to gh-pages
+  pull-requests: write  # needed to post PR comment
+
+jobs:
+  benchmark:
+    name: Run benchmarks & compare against baseline
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Install benchmark dev dependencies
+        run: npm install --save-dev autocannon tsx
+        working-directory: backend
+
+      # ── Run all three benchmark suites ──────────────────────────────────────
+
+      - name: Run dag-decomposition benchmark
+        run: npx tsx ../../tests/benchmarks/dag-decomposition.bench.ts
+        working-directory: backend
+
+      - name: Run agent-matching benchmark
+        run: npx tsx ../../tests/benchmarks/agent-matching.bench.ts
+        working-directory: backend
+
+      - name: Run api-agents-endpoint benchmark
+        run: npx tsx ../../tests/benchmarks/api-agents-endpoint.bench.ts
+        working-directory: backend
+
+      # ── Merge results into a single baseline-shaped JSON ────────────────────
+
+      - name: Merge benchmark results
+        run: |
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const dir = 'tests/benchmarks/results';
+            const files = ['dag-decomposition', 'agent-matching', 'api-agents-endpoint'];
+            const merged = {};
+            for (const name of files) {
+              const p = path.join(dir, name + '.json');
+              if (fs.existsSync(p)) merged[name] = JSON.parse(fs.readFileSync(p, 'utf8'));
+            }
+            merged._timestamp = new Date().toISOString();
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, 'merged.json'), JSON.stringify(merged, null, 2));
+            console.log('Merged:', JSON.stringify(merged, null, 2));
+          "
+
+      # ── Compare against stored baseline (gh-pages branch) ───────────────────
+
+      - name: Fetch baseline from gh-pages
+        id: fetch_baseline
+        continue-on-error: true
+        run: |
+          git fetch origin gh-pages --depth=1 2>/dev/null || true
+          if git show origin/gh-pages:benchmarks/baseline.json > tests/benchmarks/results/baseline.json 2>/dev/null; then
+            echo "baseline_found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "baseline_found=false" >> "$GITHUB_OUTPUT"
+            echo "No baseline found — this run will establish it."
+          fi
+
+      - name: Compare and detect regressions
+        id: compare
+        if: steps.fetch_baseline.outputs.baseline_found == 'true' && github.event_name == 'pull_request'
+        run: |
+          node -e "
+            const fs = require('fs');
+            const baseline = JSON.parse(fs.readFileSync('tests/benchmarks/results/baseline.json', 'utf8'));
+            const current  = JSON.parse(fs.readFileSync('tests/benchmarks/results/merged.json', 'utf8'));
+
+            const THRESHOLD = 0.10; // 10 % regression threshold
+            const metrics = {
+              'dag-decomposition':     { key: 'meanMs',        label: 'DAG Decomposition (mean ms)' },
+              'agent-matching':        { key: 'meanMs',        label: 'Agent Matching (mean ms)' },
+              'api-agents-endpoint':   { key: 'latencyMeanMs', label: 'GET /api/agents latency (mean ms)' },
+            };
+
+            let comment = '## 📊 Benchmark Results\n\n| Benchmark | Baseline | Current | Change |\n|---|---|---|---|\n';
+            let failed = false;
+
+            for (const [name, { key, label }] of Object.entries(metrics)) {
+              const base = baseline[name]?.[key];
+              const curr = current[name]?.[key];
+              if (base == null || curr == null) {
+                comment += \`| \${label} | — | — | ⚠️ missing |\n\`;
+                continue;
+              }
+              const pct = (curr - base) / base;
+              const pctStr = (pct >= 0 ? '+' : '') + (pct * 100).toFixed(1) + '%';
+              const icon = pct > THRESHOLD ? '🔴' : pct < -0.05 ? '🟢' : '🟡';
+              comment += \`| \${label} | \${base.toFixed(3)} ms | \${curr.toFixed(3)} ms | \${icon} \${pctStr} |\n\`;
+              if (pct > THRESHOLD) failed = true;
+            }
+
+            if (failed) {
+              comment += '\n> ❌ **One or more benchmarks regressed by more than 10%.** Please investigate before merging.';
+            } else {
+              comment += '\n> ✅ All benchmarks within acceptable range (< 10% regression).';
+            }
+
+            fs.writeFileSync('tests/benchmarks/results/pr-comment.md', comment);
+            if (failed) { process.exit(1); }
+          "
+
+      - name: Post PR comment with benchmark results
+        if: github.event_name == 'pull_request' && always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: tests/benchmarks/results/pr-comment.md
+          header: benchmark-results
+
+      # ── Update baseline on gh-pages (nightly only, only if no regression) ───
+
+      - name: Update baseline on gh-pages
+        if: github.event_name == 'schedule' && success()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Check out gh-pages or create it
+          git fetch origin gh-pages --depth=1 2>/dev/null || true
+          git checkout gh-pages 2>/dev/null || git checkout --orphan gh-pages
+
+          mkdir -p benchmarks
+          cp tests/benchmarks/results/merged.json benchmarks/baseline.json
+
+          git add benchmarks/baseline.json
+          git diff --cached --quiet || git commit -m "chore(benchmarks): update nightly baseline [skip ci]"
+          git push origin gh-pages

@@ -1,0 +1,227 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Performance benchmark history for DAG decomposition, agent matching, and GET /api/agents. Data sourced from JSON results stored in the gh-pages branch under benchmarks/baseline.json.",
+  "editable": true,
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-json-datasource",
+        "uid": "benchmark-json"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max", "lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-json-datasource",
+            "uid": "benchmark-json"
+          },
+          "fields": [
+            { "name": "timestamp", "type": "time" },
+            { "name": "dag-decomposition.meanMs", "alias": "DAG Decomposition (mean ms)" },
+            { "name": "agent-matching.meanMs", "alias": "Agent Matching (mean ms)" },
+            { "name": "api-agents-endpoint.latencyMeanMs", "alias": "GET /api/agents latency (mean ms)" }
+          ]
+        }
+      ],
+      "title": "Benchmark mean latency over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-json-datasource",
+        "uid": "benchmark-json"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max", "lastNotNull"]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "grafana-json-datasource",
+            "uid": "benchmark-json"
+          },
+          "fields": [
+            { "name": "timestamp", "type": "time" },
+            { "name": "dag-decomposition.p95Ms", "alias": "DAG Decomposition (p95 ms)" },
+            { "name": "agent-matching.p95Ms", "alias": "Agent Matching (p95 ms)" },
+            { "name": "api-agents-endpoint.latencyP99Ms", "alias": "GET /api/agents latency (p99 ms)" }
+          ]
+        }
+      ],
+      "title": "Benchmark p95/p99 latency over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-json-datasource",
+        "uid": "benchmark-json"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "grafana-json-datasource",
+            "uid": "benchmark-json"
+          },
+          "fields": [
+            { "name": "timestamp", "type": "time" },
+            { "name": "api-agents-endpoint.throughputRps", "alias": "Throughput (req/s)" }
+          ]
+        }
+      ],
+      "title": "GET /api/agents throughput (req/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-json-datasource",
+        "uid": "benchmark-json"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "grafana-json-datasource",
+            "uid": "benchmark-json"
+          },
+          "fields": [
+            { "name": "timestamp", "type": "time" },
+            { "name": "api-agents-endpoint.errors", "alias": "HTTP errors" }
+          ]
+        }
+      ],
+      "title": "GET /api/agents HTTP errors",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "1h",
+  "schemaVersion": 39,
+  "tags": [
+    "ai-net",
+    "benchmarks",
+    "performance"
+  ],
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "title": "Performance Benchmark History",
+  "uid": "ai-net-benchmark-history",
+  "version": 1
+}
