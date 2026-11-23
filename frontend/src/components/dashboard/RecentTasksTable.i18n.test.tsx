@@ -1,12 +1,14 @@
 import { render, screen, waitFor, act } from '@testing-library/react';
 import { vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
+import { SWRConfig } from 'swr';
 import i18n from 'i18next';
 import { RecentTasksTable } from './RecentTasksTable';
 import { ToastProvider } from '../../context/ToastContext';
 import type { TaskResponse } from '../../types/api';
 
-const getRecentTasks = vi.hoisted(() => vi.fn());
-vi.mock('@services/api', () => ({ getRecentTasks }));
+const get = vi.hoisted(() => vi.fn());
+vi.mock('@services/api', () => ({ apiClient: { get } }));
 
 const WALLET = 'GABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRXYZ';
 
@@ -23,9 +25,13 @@ const task: TaskResponse = {
 
 const renderTable = () =>
   render(
-    <ToastProvider>
-      <RecentTasksTable walletAddress={WALLET} loading={false} />
-    </ToastProvider>
+    <SWRConfig value={{ provider: () => new Map(), shouldRetryOnError: false }}>
+      <MemoryRouter>
+        <ToastProvider>
+          <RecentTasksTable walletAddress={WALLET} loading={false} />
+        </ToastProvider>
+      </MemoryRouter>
+    </SWRConfig>
   );
 
 describe('RecentTasksTable i18n', () => {
@@ -37,7 +43,7 @@ describe('RecentTasksTable i18n', () => {
   });
 
   it('translates the column headers and the view link', async () => {
-    getRecentTasks.mockResolvedValue([task]);
+    get.mockResolvedValue({ tasks: [task] });
     renderTable();
 
     await waitFor(() => expect(screen.getByText('Task ID')).toBeInTheDocument());
@@ -55,7 +61,7 @@ describe('RecentTasksTable i18n', () => {
   });
 
   it('leaves the task status untranslated, because it is data', async () => {
-    getRecentTasks.mockResolvedValue([task]);
+    get.mockResolvedValue({ tasks: [task] });
     renderTable();
 
     await waitFor(() => expect(screen.getByText('completed')).toBeInTheDocument());
@@ -68,7 +74,7 @@ describe('RecentTasksTable i18n', () => {
   });
 
   it('translates the empty state', async () => {
-    getRecentTasks.mockResolvedValue([]);
+    get.mockResolvedValue({ tasks: [] });
     renderTable();
 
     await waitFor(() =>
@@ -83,7 +89,7 @@ describe('RecentTasksTable i18n', () => {
   });
 
   it('formats the created date for the active language, not the browser locale', async () => {
-    getRecentTasks.mockResolvedValue([task]);
+    get.mockResolvedValue({ tasks: [task] });
     renderTable();
 
     // Patterns rather than exact strings: without a `timeZone` option the
@@ -101,7 +107,7 @@ describe('RecentTasksTable i18n', () => {
   });
 
   it('shows the fetch error toast in the language active when it fires', async () => {
-    getRecentTasks.mockRejectedValue(new Error('boom'));
+    get.mockRejectedValue(new Error('boom'));
     await act(async () => {
       await i18n.changeLanguage('zh');
     });

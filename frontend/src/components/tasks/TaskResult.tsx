@@ -22,7 +22,6 @@ interface CodeProps {
   inline?: boolean;
   className?: string;
   children?: React.ReactNode;
-  [key: string]: unknown;
 }
 
 function CodeBlock({ inline, className, children }: CodeProps) {
@@ -43,7 +42,7 @@ function CodeBlock({ inline, className, children }: CodeProps) {
 
   if (inline) {
     return (
-      <code className={styles.inlineCode} {...(className ? { className } : {})}>
+      <code className={[styles.inlineCode, className].filter(Boolean).join(' ')}>
         {children}
       </code>
     );
@@ -111,7 +110,6 @@ export const TaskResult: React.FC<TaskResultProps> = ({
     try {
       // Dynamically import jsPDF to keep initial bundle small
       const { default: jsPDF } = await import('jspdf');
-      // @ts-expect-error jspdf-autotable attaches itself to the jsPDF prototype
       await import('jspdf-autotable');
 
       const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });

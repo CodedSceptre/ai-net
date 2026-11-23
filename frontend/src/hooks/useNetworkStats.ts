@@ -1,6 +1,6 @@
 // src/hooks/useNetworkStats.ts
-import { useEffect, useState, useCallback, useRef } from "react";
-import { getStats } from "../services/api";
+import { useCallback, useEffect, useState } from "react";
+import { useStats } from "./useStats";
 import type { TimePoint } from "../types/api";
 
 export interface NetworkStats {
@@ -24,78 +24,31 @@ export interface UseNetworkStatsReturn {
   refetch: () => Promise<void>;
 }
 
-const POLL_INTERVAL_MS = 60_000;
 const STALE_THRESHOLD_MS = 65_000;
 
 export const useNetworkStats = (): UseNetworkStatsReturn => {
-  const [data, setData] = useState<NetworkStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-  const [isStale, setIsStale] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const lastSuccessRef = useRef<number>(0);
-
-  const fetchStats = useCallback(async (isBackground = false) => {
-    if (!isBackground) {
-      setLoading(true);
+  const { data: sample, isLoading: loading, error, mutate } = useStats();
+  const [stale, setStale] = useState(false);
+  useEffect(() => {
+    if (!sample) return;
+    const delay = STALE_THRESHOLD_MS - (Date.now() - sample.fetchedAt);
+    setStale(delay <= 0);
+    if (delay > 0) {
+      const timer = window.setTimeout(() => setStale(true), delay);
+      return () => window.clearTimeout(timer);
     }
-    try {
-      const res = await getStats();
-      setData(res);
-      setError(null);
-      setIsStale(false);
-      const now = Date.now();
-      lastSuccessRef.current = now;
-      setLastUpdated(new Date(now));
-    } catch (e) {
-      const err = e as Error;
-      setError(err);
-      if (lastSuccessRef.current > 0) {
-        // We have older data, so mark it as stale rather than blowing away previous stats
-        setIsStale(true);
-      }
-    } finally {
-      if (!isBackground) {
-        setLoading(false);
-      }
-    }
-  }, []);
+  }, [sample]);
 
   const refetch = useCallback(async () => {
-    await fetchStats(false);
-  }, [fetchStats]);
+    await mutate().catch(() => undefined);
+  }, [mutate]);
 
-  useEffect(() => {
-    fetchStats(false);
-
-    // 60-second polling interval
-    const intervalId = window.setInterval(() => {
-      fetchStats(true);
-    }, POLL_INTERVAL_MS);
-
-    // Stale check timer
-    const staleCheckId = window.setInterval(() => {
-      if (
-        lastSuccessRef.current > 0 &&
-        Date.now() - lastSuccessRef.current > STALE_THRESHOLD_MS
-      ) {
-        setIsStale(true);
-      }
-    }, 10_000);
-
-    const onFocus = () => {
-      if (Date.now() - lastSuccessRef.current >= POLL_INTERVAL_MS) {
-        fetchStats(true);
-      }
-    };
-    window.addEventListener("focus", onFocus);
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.clearInterval(staleCheckId);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [fetchStats]);
-
-  return { data, loading, error, isStale, lastUpdated, refetch };
+  return {
+    data: sample?.data ?? null,
+    loading,
+    error: sample ? null : error ?? null,
+    isStale: Boolean(sample && (stale || error)),
+    lastUpdated: sample ? new Date(sample.fetchedAt) : null,
+    refetch,
+  };
 };

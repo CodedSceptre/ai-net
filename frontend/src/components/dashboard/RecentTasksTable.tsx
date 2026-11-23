@@ -1,9 +1,10 @@
 // src/components/dashboard/RecentTasksTable.tsx
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { SkeletonTable } from '../common/Skeleton';
 import styles from './RecentTasksTable.module.css';
-import { getRecentTasks } from '@services/api';
+import { useTasks } from '../../hooks/useTasks';
 import { useToast } from '../../hooks/useToast';
 import type { TaskResponse } from '../../types/api';
 import { formatDateTime } from '../../utils/format';
@@ -19,37 +20,25 @@ interface Props {
 }
 
 export const RecentTasksTable: React.FC<Props> = ({ walletAddress, loading, onTasksLoaded }) => {
-  const [tasks, setTasks] = React.useState<TaskResponse[]>([]);
   const { showToast } = useToast();
   const { t, i18n } = useTranslation();
+  const { data, error, isLoading } = useTasks(walletAddress, new URLSearchParams({ pageSize: '5' }));
+  const tasks = React.useMemo(() => (data ?? []).map(task => ({
+    ...task,
+    id: task.id || task.taskId,
+  })), [data]);
 
   React.useEffect(() => {
-    if (!walletAddress) return;
-    const fetchTasks = async () => {
-      try {
-        const data = await getRecentTasks(walletAddress);
-        const mappedTasks = data.map(task => ({
-          ...task,
-          id: task.id || task.taskId,
-        }));
-        setTasks(mappedTasks);
-        onTasksLoaded?.(mappedTasks.length);
-      } catch (e) {
-        const message = e instanceof Error ? e.message : 'Failed to load recent tasks.';
-        showToast(message, 'error');
-        showToast('Failed to fetch recent tasks', 'error');
-        // i18n.t (not the captured t) so the toast always uses the current
-        // language without putting t in the deps, which would refetch on every
-        // language change.
-        const fallback = i18n.t('dashboard.recentTasks.fetchError');
-        showToast(e instanceof Error ? e.message : fallback, 'error');
-        setTasks([]);
-      }
-    };
-    fetchTasks();
-  }, [walletAddress, showToast, i18n, onTasksLoaded]);
+    if (data) onTasksLoaded?.(data.length);
+  }, [data, onTasksLoaded]);
 
-  if (loading) {
+  React.useEffect(() => {
+    if (!data && error) {
+      showToast(i18n.t('dashboard.recentTasks.fetchError'), 'error');
+    }
+  }, [data, error, i18n, showToast]);
+
+  if (loading || isLoading) {
     return (
       <div className={styles.table}>
         <SkeletonTable rows={5} columns={4} />
@@ -79,7 +68,7 @@ export const RecentTasksTable: React.FC<Props> = ({ walletAddress, loading, onTa
     { key: 'id', header: t('dashboard.recentTasks.taskId'), render: (task) => <span>{(task.id || task.taskId).slice(0, 8)}…</span> },
     { key: 'status', header: t('common.status'), render: (task) => <span className={styles[task.status.toLowerCase()] || styles.default}>{task.status}</span> },
     { key: 'createdAt', header: t('dashboard.recentTasks.created'), render: (task) => <span>{formatDateTime(task.createdAt, i18n.language)}</span> },
-    { key: 'action', header: t('dashboard.recentTasks.action'), render: (task) => <a href={`/tasks/${task.id || task.taskId}`} className={styles.viewLink}>{t('dashboard.recentTasks.view')}</a> },
+    { key: 'action', header: t('dashboard.recentTasks.action'), render: (task) => <Link to={`/tasks/${task.id || task.taskId}`} className={styles.viewLink}>{t('dashboard.recentTasks.view')}</Link> },
   ];
 
   return (

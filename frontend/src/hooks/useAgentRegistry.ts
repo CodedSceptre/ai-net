@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { getAgents } from '../services/api'
+import { useCallback, useMemo } from 'react'
+import { useAgents } from './useAgents'
 import type { AgentRecord } from '../types/api'
 import { normalizeAgent, allCapabilities } from '@utils/agentRegistry'
 import { fuzzyMatch, fuzzyMatchFields, type WeightedField } from '../utils/fuzzy'
@@ -47,60 +47,10 @@ export interface AgentRegistryResult {
  */
 export function useAgentRegistry(options: AgentRegistryOptions = {}): AgentRegistryResult {
   const refreshInterval = options.refreshInterval ?? REFRESH_INTERVAL
-  const [agents, setAgents] = useState<AgentRecord[]>([])
-  const [loading, setLoading] = useState<boolean>(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const isFirstLoad = useRef(true)
-  const fetchingRef = useRef(false)
-  const mountedRef = useRef(true)
-
-  const fetchAgents = useCallback(async () => {
-    if (fetchingRef.current) return
-    fetchingRef.current = true
-
-    if (isFirstLoad.current) setLoading(true)
-
-    try {
-      const data = await getAgents()
-      if (!mountedRef.current) return
-      setAgents(Array.isArray(data) ? data.map(normalizeAgent) : [])
-      setError(null)
-    } catch (err) {
-      if (!mountedRef.current) return
-      setError(err instanceof Error ? err.message : 'Failed to load agents')
-    } finally {
-      if (mountedRef.current) {
-        setLoading(false)
-      }
-      isFirstLoad.current = false
-      fetchingRef.current = false
-    }
-  }, [])
-
-  useEffect(() => {
-    mountedRef.current = true
-    fetchAgents()
-
-    const interval = setInterval(fetchAgents, refreshInterval)
-    const handleFocus = () => fetchAgents()
-    if (typeof window !== 'undefined') {
-      window.addEventListener('focus', handleFocus)
-    }
-
-    return () => {
-      mountedRef.current = false
-      clearInterval(interval)
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('focus', handleFocus)
-      }
-    }
-  }, [fetchAgents, refreshInterval])
-
-
-  const refetch = useCallback(() => {
-    fetchAgents()
-  }, [fetchAgents])
+  const { data, isLoading: loading, error: requestError, mutate } = useAgents(undefined, refreshInterval)
+  const agents = useMemo(() => Array.isArray(data) ? data.map(normalizeAgent) : [], [data])
+  const error = !data && requestError ? requestError.message : null
+  const refetch = useCallback(() => { void mutate().catch(() => undefined) }, [mutate])
 
   const searchAgents = useCallback((query: string): AgentRecord[] => {
     const q = query.trim()

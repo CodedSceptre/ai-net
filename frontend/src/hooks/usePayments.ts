@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import useSWR from 'swr'
+import { apiClient } from '../services/api'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -60,21 +61,17 @@ function stroopsToXlm(stroops: string): string {
   return `${sign}${whole}.${fraction}`
 }
 
-async function fetchBackendPayments(walletPublicKey: string, signal: AbortSignal): Promise<BackendPayment[]> {
-  const response = await fetch('/api/payments', {
-    signal,
+async function fetchBackendPayments(path: string, walletPublicKey: string): Promise<BackendPayment[]> {
+  const body = await apiClient.get<{ payments?: BackendPayment[] }>(path, {
     headers: { walletpublickey: walletPublicKey },
-  })
-  if (!response.ok) throw new Error(`Payments API error: ${response.status}`)
-  const body = (await response.json()) as { payments?: BackendPayment[] }
+  }, true)
   if (!Array.isArray(body.payments)) throw new Error('Payments API returned an invalid response')
   return body.payments
 }
 
-async function fetchHorizonPayments(walletPublicKey: string, signal: AbortSignal): Promise<PaymentRow[]> {
+async function fetchHorizonPayments(walletPublicKey: string): Promise<PaymentRow[]> {
   const response = await fetch(
     `https://horizon-testnet.stellar.org/accounts/${encodeURIComponent(walletPublicKey)}/payments?limit=200&order=desc`,
-    { signal },
   )
   if (response.status === 404) return []
   if (!response.ok) throw new Error(`Stellar Horizon error: ${response.status}`)
@@ -114,26 +111,16 @@ export function usePayments(
   publicKey: string | null,
   filters: PaymentFilters
 ): UsePaymentsResult {
-  const backendQuery = useQuery({
-    queryKey: ['payments', 'backend', publicKey],
-    queryFn: ({ signal }) => {
-      if (!publicKey) throw new Error('Connect a wallet to load payments')
-      return fetchBackendPayments(publicKey, signal)
-    },
-    enabled: Boolean(publicKey),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-  })
-  const horizonQuery = useQuery({
-    queryKey: ['payments', 'horizon', publicKey],
-    queryFn: ({ signal }) => {
-      if (!publicKey) throw new Error('Connect a wallet to load payments')
-      return fetchHorizonPayments(publicKey, signal)
-    },
-    enabled: Boolean(publicKey),
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-  })
+  const backendQuery = useSWR(
+    publicKey ? ['/api/payments', publicKey] as const : null,
+    ([path, wallet]) => fetchBackendPayments(path, wallet),
+    { refreshInterval: 60_000 },
+  )
+  const horizonQuery = useSWR(
+    publicKey ? ['/api/payments', publicKey, 'horizon'] as const : null,
+    ([, wallet]) => fetchHorizonPayments(wallet),
+    { refreshInterval: 60_000 },
+  )
 
   const allRows = useMemo(() => {
     const backendRows: PaymentRow[] = (backendQuery.data ?? []).map((payment) => ({
@@ -169,8 +156,8 @@ export function usePayments(
   }, [allRows, filters.dateFrom, filters.dateTo, filters.status])
 
   const refresh = useCallback(() => {
-    void Promise.all([backendQuery.refetch(), horizonQuery.refetch()])
-  }, [backendQuery.refetch, horizonQuery.refetch])
+    void Promise.allSettled([backendQuery.mutate(), horizonQuery.mutate()])
+  }, [backendQuery.mutate, horizonQuery.mutate])
 
   const exportCsv = useCallback((data: PaymentRow[]) => {
     const headers = ['Date', 'Task ID', 'Agent Paid', 'Amount (XLM)', 'Status', 'TX Hash']
@@ -194,12 +181,14 @@ export function usePayments(
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
-  }, [])
+    refresh()
+  }, [refresh])
 
   return {
     rows,
     loading: backendQuery.isLoading || horizonQuery.isLoading,
-    error: backendQuery.error?.message ?? horizonQuery.error?.message ?? null,
+    error: (backendQuery.data ? undefined : backendQuery.error?.message) ??
+      (horizonQuery.data ? undefined : horizonQuery.error?.message) ?? null,
     refresh,
     exportCsv,
   }

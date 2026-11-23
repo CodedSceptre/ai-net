@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import useSWR from 'swr';
 import { getAgent, getAgentReputation } from '../services/api';
 import type { AgentRecord } from '../types/api';
 import type { AgentReputation } from '../types/agent';
@@ -23,81 +23,29 @@ export interface AgentDetailResult {
  * @returns Combined loading/error/data state for the agent detail page
  */
 export function useAgentDetail(agentId: string): AgentDetailResult {
-  const [agent, setAgent] = useState<AgentRecord | null>(null);
-  const [reputation, setReputation] = useState<AgentReputation | null>(null);
-  const [reputationHistory, setReputationHistory] = useState<import('../types/agent').ReputationHistory[]>([]);
-  const [reputationHistoryLoading, setReputationHistoryLoading] = useState(true);
-  const [agentLoading, setAgentLoading] = useState(true);
-  const [reputationLoading, setReputationLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notFound, setNotFound] = useState(false);
-  const [fetchKey, setFetchKey] = useState(0);
+  const path = agentId ? `/api/agents/${encodeURIComponent(agentId)}` : null;
+  const agentQuery = useSWR(path, () => getAgent(agentId));
+  const reputationQuery = useSWR(path ? `${path}/reputation` : null, () => getAgentReputation(agentId));
+  const historyQuery = useSWR(path ? `${path}/reputation/history` : null, async () => {
+    const { getAgentReputationHistory } = await import('../services/api');
+    return getAgentReputationHistory(agentId);
+  });
 
-  useEffect(() => {
-    if (!agentId) return;
-
-    let mounted = true;
-
-    setAgentLoading(true);
-    setReputationLoading(true);
-    setReputationHistoryLoading(true);
-    setError(null);
-    setNotFound(false);
-
-    // Fetch agent and reputation in parallel
-    getAgent(agentId)
-      .then((data) => {
-        if (mounted) {
-          setAgent(data);
-          setAgentLoading(false);
-        }
-      })
-      .catch((err) => {
-        if (mounted) {
-          const isNotFound =
-            err?.statusCode === 404 ||
-            (err instanceof Error && err.message.includes('404'));
-          setNotFound(isNotFound);
-          setError(isNotFound ? null : (err instanceof Error ? err.message : 'Failed to load agent'));
-          setAgentLoading(false);
-        }
-      });
-
-    getAgentReputation(agentId)
-      .then((data) => {
-        if (mounted) {
-          setReputation(data);
-          setReputationLoading(false);
-        }
-      })
-      .catch(() => {
-        if (mounted) {
-          // Reputation is non-critical — show page without it
-          setReputationLoading(false);
-        }
-      });
-
-    import('../services/api').then(({ getAgentReputationHistory }) =>
-      getAgentReputationHistory(agentId)
-        .then((history) => {
-          if (mounted) setReputationHistory(history);
-        })
-        .catch(() => {
-          if (mounted) setReputationHistory([]);
-        })
-        .finally(() => {
-          if (mounted) setReputationHistoryLoading(false);
-        }),
-    );
-
-    return () => {
-      mounted = false;
-    };
-  }, [agentId, fetchKey]);
-
+  const agent = agentQuery.data ?? null;
+  const reputation = reputationQuery.data ?? null;
+  const reputationHistory = historyQuery.data ?? [];
+  const reputationHistoryLoading = historyQuery.isLoading;
+  const agentLoading = agentQuery.isLoading;
+  const reputationLoading = reputationQuery.isLoading;
+  const requestError = agent ? null : agentQuery.error;
+  const notFound = requestError?.statusCode === 404 ||
+    (requestError instanceof Error && requestError.message.includes('404'));
+  const error = notFound || !requestError ? null :
+    requestError instanceof Error ? requestError.message : 'Failed to load agent';
   const loading = agentLoading && reputationLoading;
-
-  const refetch = () => setFetchKey((k) => k + 1);
+  const refetch = () => {
+    void Promise.allSettled([agentQuery.mutate(), reputationQuery.mutate(), historyQuery.mutate()]);
+  };
 
   return {
     agent,
