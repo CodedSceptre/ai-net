@@ -1,3 +1,4 @@
+import { observeAgentDispatch } from "../services/dashboardMetrics";
 /**
  * HTTP dispatch layer for the coordinator.
  *
@@ -55,6 +56,7 @@ export async function httpDispatch(
   options: DispatchOptions = DEFAULT_DISPATCH_OPTIONS,
   fetchImpl: typeof fetch = fetch,
 ): Promise<unknown> {
+  observeAgentDispatch(agent.id, "submitted");
   const url = `${agent.endpoint.replace(/\/$/, '')}/execute`;
   let lastError: Error = new Error(`Dispatch to agent ${agent.id} failed before first attempt`);
 
@@ -84,7 +86,9 @@ export async function httpDispatch(
         );
       } else {
         const text = await response.text();
-        return text ? (JSON.parse(text) as unknown) : {};
+        const result: unknown = text ? JSON.parse(text) : {};
+        observeAgentDispatch(agent.id, "completed");
+        return result;
       }
     } catch (err) {
       clearTimeout(timer);
@@ -103,7 +107,10 @@ export async function httpDispatch(
         // Preserve errors we already constructed above or non-retryable 4xx.
         const isNonRetryable =
           err.message.includes('non-retryable') || err.message.includes('returned non-retryable');
-        if (isNonRetryable) throw err;
+        if (isNonRetryable) {
+          observeAgentDispatch(agent.id, "failed");
+          throw err;
+        }
         lastError = err;
       } else {
         lastError = new Error(String(err));
@@ -117,6 +124,7 @@ export async function httpDispatch(
     }
   }
 
+  observeAgentDispatch(agent.id, "failed");
   throw lastError;
 }
 

@@ -1,3 +1,4 @@
+import { observePayment, observePaymentFailure } from "../services/dashboardMetrics";
 import {
   Keypair,
   Server,
@@ -223,6 +224,7 @@ export class PaymentService {
             txHash: null,
           });
 
+          observePayment("locked", amountStroops);
           return bid;
         },
       );
@@ -230,6 +232,7 @@ export class PaymentService {
       if (span) tracingService.endSpan(span.spanId, 'completed', { balanceId });
       return balanceId;
     } catch (err) {
+      observePaymentFailure();
       if (span) tracingService.endSpan(span.spanId, 'failed', { error: String(err) });
       throw err;
     }
@@ -256,6 +259,7 @@ export class PaymentService {
     coordinatorKeypair: Keypair,
     correlationId?: string
   ): Promise<string> {
+    const startedAt = process.hrtime.bigint();
     const record = this.db.findByKey(taskId, nodeId);
     if (!record) throw new Error(`No payment record for task=${taskId} node=${nodeId}`);
 
@@ -289,6 +293,8 @@ export class PaymentService {
 
       this.db.updateStatus(taskId, nodeId, "released", txHash);
 
+      observePayment("released", record.amountStroops, Number(process.hrtime.bigint() - startedAt) / 1e9);
+
       this.hooks.reconciliationHook?.({
         ...record,
         status: "released",
@@ -298,6 +304,7 @@ export class PaymentService {
       if (span) tracingService.endSpan(span.spanId, 'completed', { txHash });
       return txHash;
     } catch (err) {
+      observePaymentFailure();
       if (span) tracingService.endSpan(span.spanId, 'failed', { error: String(err) });
       throw err;
     }
@@ -331,25 +338,31 @@ export class PaymentService {
       throw new PaymentAlreadyReleasedError(taskId, nodeId);
     }
 
-    const txHash = await this.withSequenceRetry(
-      coordinatorKeypair.publicKey(),
-      async () => {
-        const account = await withRetry(() => this.server.loadAccount(coordinatorKeypair.publicKey()));
-        const tx = new TransactionBuilder(account, {
-          fee: BASE_FEE,
-          networkPassphrase: this.networkPassphrase,
-        })
-          .addOperation(Operation.claimClaimableBalance({ balanceId: record.balanceId }))
-          .setTimeout(30)
-          .build();
-        tx.sign(coordinatorKeypair);
-        const result = await withRetry(() => this.server.submitTransaction(tx));
-        return (result as unknown as { hash: string }).hash;
-      },
-    );
+    try {
+      const txHash = await this.withSequenceRetry(
+        coordinatorKeypair.publicKey(),
+        async () => {
+          const account = await withRetry(() => this.server.loadAccount(coordinatorKeypair.publicKey()));
+          const tx = new TransactionBuilder(account, {
+            fee: BASE_FEE,
+            networkPassphrase: this.networkPassphrase,
+          })
+            .addOperation(Operation.claimClaimableBalance({ balanceId: record.balanceId }))
+            .setTimeout(30)
+            .build();
+          tx.sign(coordinatorKeypair);
+          const result = await withRetry(() => this.server.submitTransaction(tx));
+          return (result as unknown as { hash: string }).hash;
+        },
+      );
 
-    this.db.updateStatus(taskId, nodeId, "refunded", txHash);
-    return txHash;
+      this.db.updateStatus(taskId, nodeId, "refunded", txHash);
+      observePayment("refunded", record.amountStroops);
+      return txHash;
+    } catch (error) {
+      observePaymentFailure();
+      throw error;
+    }
   }
 
   /**

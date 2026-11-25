@@ -1,3 +1,4 @@
+import { exportDashboardMetrics, observeHttpRoute } from "./dashboardMetrics";
 /**
  * Health dashboard metrics collection service.
  *
@@ -1038,6 +1039,7 @@ export class MetricsService {
     lines.push("# TYPE ainet_process_memory_external_bytes gauge");
     lines.push(`ainet_process_memory_external_bytes ${mem.external}`);
 
+    lines.push(exportDashboardMetrics());
     return lines.join("\n") + "\n";
   }
 
@@ -1333,6 +1335,7 @@ export const metricsService = new MetricsService();
 export function metricsMiddleware(req: Request, res: Response, next: NextFunction): void {
   const startedAt = process.hrtime.bigint();
 
+  const requestPath = req.path;
   res.on("finish", () => {
     const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
     // Normalize path to avoid high-cardinality label explosion.
@@ -1344,6 +1347,15 @@ export function metricsMiddleware(req: Request, res: Response, next: NextFunctio
       .replace(/\/[0-9]+/g, "/:id");
     const method = req.method ?? "UNKNOWN";
     metricsService.recordRequest(durationMs, res.statusCode, method, normalizedPath);
+    // The matched Express route template avoids labeling with wallet and task IDs.
+    const routePath: unknown = req.route?.path;
+    const base = requestPath.match(/^\/api\/(tasks|agents|payments|auth|admin|stats|reconciliation|events|versions|metrics)(?=\/|$)/)?.[0] ?? "";
+    const route = typeof routePath === "string"
+      ? `${base}${routePath === "/" && base ? "" : routePath}`
+      : "unmatched";
+    if (requestPath !== "/metrics" && requestPath !== "/api/metrics") {
+      observeHttpRoute(`${method} ${route}`, res.statusCode, durationMs / 1000);
+    }
   });
 
   next();

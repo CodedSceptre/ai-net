@@ -153,3 +153,16 @@ groups:
         annotations:
           summary: "High heap memory usage"
           description: "Node.js heap usage exceeds 90% for 5 minutes."
+
+  - name: ai-net-dashboard-thresholds
+    rules:
+      - alert: ApiErrorThresholdExceeded
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.05
+        labels:
+          severity: warning
+          description: "HTTP 5xx error rate exceeds 5%"
+      - alert: StellarPaymentFailureThresholdExceeded
+        expr: sum(rate(stellar_payment_failures_total[2m])) * 60 > 3
+        labels:
+          severity: warning
+          description: "Stellar payment failures exceed 3 per minute"
