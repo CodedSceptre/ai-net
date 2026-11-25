@@ -18,7 +18,8 @@
     "db:migrate": "ts-node src/db/cli.ts migrate",
     "db:rollback": "ts-node src/db/cli.ts rollback",
     "db:seed": "ts-node src/db/cli.ts seed",
-    "docs:generate": "typedoc --options typedoc.json"
+    "docs:generate": "typedoc --options typedoc.json",
+    "audit:archive": "ts-node src/utils/auditArchive.ts"
   },
   "license": "MIT",
   "dependencies": {

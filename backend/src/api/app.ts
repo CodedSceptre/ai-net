@@ -66,6 +66,9 @@ import { createV2TasksRouter } from "./routes/v2/tasks";
 import { createAuthRouter } from "./routes/auth";
 import { createFlagsRouter } from "./routes/flags";
 import { createVersionsRouter } from "./routes/versions";
+import { createAuditRouter } from "./routes/audit";
+import { createAuditMiddleware } from "./middleware/auditMiddleware";
+import { getAuditDb } from "../db/auditDb";
 import { optionalAuthMiddleware } from "./middleware/auth";
 import { createAdminRouter } from "./routes/admin";
 import { type AuthService } from "../services/auth";
@@ -137,6 +140,7 @@ export function createApp(opts: AppOptions = {}): {
   app.use(createCorsMiddleware());
   app.use(requestId);
   app.use(requestLogger);
+  app.use(createAuditMiddleware(getAuditDb()));
   app.use(metricsMiddleware);
   app.use(rateLimitMiddleware);
   app.use(versioningMiddleware);
@@ -249,6 +253,9 @@ export function createApp(opts: AppOptions = {}): {
 
   // ── Events and payment history ─────────────────────────────────────────────
   app.use("/api/payments", createPaymentsRouter());
+
+  // ── Audit log ──────────────────────────────────────────────────────────────
+  app.use('/api/audit', createAuditRouter(getAuditDb()));
 
   // ── Payment reconciliation routes ──────────────────────────────────────────
   app.use("/api/reconciliation", createReconciliationRouter(opts.reconciliation));
