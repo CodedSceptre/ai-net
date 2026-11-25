@@ -105,9 +105,9 @@ export function createAgentOnboardingRouter(options: AgentOnboardingOptions = {}
   const drafts = options.draftStore ?? createAgentRegistrationDraftStore(getAgentDb());
   const probe = options.checkEndpoint ?? checkReachability;
 
-  function getDraft(draftId: string, res: Response): AgentRegistrationDraft | undefined {
+  function getDraft(draftId: string, wallet: string | undefined, res: Response): AgentRegistrationDraft | undefined {
     const draft = drafts.find(draftId);
-    if (!draft) {
+    if (!draft || wallet !== draft.stellarPublicKey) {
       res.status(404).json({ error: "Onboarding draft not found or expired", code: "DRAFT_NOT_FOUND" });
       return undefined;
     }
@@ -122,6 +122,10 @@ export function createAgentOnboardingRouter(options: AgentOnboardingOptions = {}
       return;
     }
     const now = new Date().toISOString();
+    if (data.stellarPublicKey !== req.wallet) {
+      res.status(403).json({ error: "WALLET_MISMATCH" });
+      return;
+    }
     const draft: AgentRegistrationDraft = {
       draftId: randomUUID(),
       ...data,
@@ -135,7 +139,7 @@ export function createAgentOnboardingRouter(options: AgentOnboardingOptions = {}
   });
 
   router.get("/:draft_id", (req: Request, res: Response): void => {
-    const draft = getDraft(req.params.draft_id, res);
+    const draft = getDraft(req.params.draft_id, req.wallet, res);
     if (!draft) return;
     const refreshed = refreshDraft(draft);
     drafts.update(refreshed);
@@ -160,7 +164,7 @@ export function createAgentOnboardingRouter(options: AgentOnboardingOptions = {}
   router.put("/:draft_id/capabilities", (req: Request, res: Response): void => {
     const data = validBody(CapabilitiesSchema, req.body, res);
     if (!data) return;
-    const draft = getDraft(req.params.draft_id, res);
+    const draft = getDraft(req.params.draft_id, req.wallet, res);
     if (!draft) return;
     const updated = refreshDraft({ ...draft, capabilities: data.capabilities });
     drafts.update(updated);
@@ -170,7 +174,7 @@ export function createAgentOnboardingRouter(options: AgentOnboardingOptions = {}
   router.put("/:draft_id/pricing", (req: Request, res: Response): void => {
     const data = validBody(PricingSchema, req.body, res);
     if (!data) return;
-    const draft = getDraft(req.params.draft_id, res);
+    const draft = getDraft(req.params.draft_id, req.wallet, res);
     if (!draft) return;
     const updated = refreshDraft({ ...draft, pricingXLM: data.pricingXLM });
     drafts.update(updated);
@@ -180,7 +184,7 @@ export function createAgentOnboardingRouter(options: AgentOnboardingOptions = {}
   router.put("/:draft_id/endpoint", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const data = validBody(EndpointSchema, req.body, res);
     if (!data) return;
-    const draft = getDraft(req.params.draft_id, res);
+    const draft = getDraft(req.params.draft_id, req.wallet, res);
     if (!draft) return;
     try {
       if (!(await probe(data.endpoint))) {
@@ -196,7 +200,7 @@ export function createAgentOnboardingRouter(options: AgentOnboardingOptions = {}
   });
 
   router.post("/:draft_id/submit", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    const draft = getDraft(req.params.draft_id, res);
+    const draft = getDraft(req.params.draft_id, req.wallet, res);
     if (!draft) return;
     if (!draft.capabilities || draft.pricingXLM === undefined || !draft.endpoint) {
       res.status(409).json({ error: "Complete all onboarding steps before submitting", code: "ONBOARDING_INCOMPLETE" });

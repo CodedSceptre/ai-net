@@ -79,6 +79,7 @@ export function createIdempotencyMiddleware(store?: IdempotencyStore) {
     }
 
     const walletAddress =
+      req.wallet ||
       (typeof req.body?.walletAddress === 'string' && req.body.walletAddress) ||
       (typeof req.body?.walletPublicKey === 'string' && req.body.walletPublicKey) ||
       req.get('X-Wallet-Address') ||

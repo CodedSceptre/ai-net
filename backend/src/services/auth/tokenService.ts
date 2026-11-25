@@ -8,6 +8,7 @@ export interface AccessTokenPayload {
   iat: number; // seconds
   exp: number; // seconds
   jti: string; // unique token identifier
+  type?: "access";
   scope?: string | string[];
 }
 
@@ -50,6 +51,7 @@ export class TokenService {
     sessionId: string;
     familyId: string;
     deviceId: string;
+    type?: "access";
     scope?: string | string[];
     accessTokenTtlSeconds?: number;
   }): { token: string; expiresIn: number } {
@@ -67,6 +69,7 @@ export class TokenService {
       iat: now,
       exp,
       jti,
+      ...(params.type ? { type: params.type } : {}),
       ...(params.scope ? { scope: params.scope } : {}),
     };
 
@@ -122,8 +125,14 @@ export class TokenService {
       throw new Error("Malformed token payload");
     }
 
+    const header: unknown = JSON.parse(base64UrlDecode(encodedHeader));
+    if (!header || typeof header !== "object" || !("alg" in header) || header.alg !== "HS256") {
+      throw new Error("Unexpected JWT algorithm");
+    }
+
     const now = Math.floor(Date.now() / 1000);
-    if (payload.exp && payload.exp < now) {
+    if (!payload || typeof payload.sub !== "string" || !Number.isInteger(payload.iat) ||
+        !Number.isInteger(payload.exp) || payload.exp <= now) {
       throw new Error("Token expired");
     }
 

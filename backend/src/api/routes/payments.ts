@@ -1,3 +1,4 @@
+import { createTaskDb, getTaskDb } from "../../db/tasks";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { createPaymentDb, getDb } from "../../db/index";
 import type { PaymentRecord } from "../../db/index";
@@ -30,12 +31,13 @@ export interface PaymentsRouterOptions {
  * @openapi
  * /api/payments:
  *   get:
- *     summary: List all payment records
+ *     summary: List payment records for the authenticated wallet
  *     operationId: listPayments
  *     tags: [Payments]
- *     security: []
+ *     security:
+ *       - BearerAuth: []
  *     description: >
- *       Returns the full local payment history — every locked, released, and
+ *       Returns the wallet’s local payment history — every locked, released, and
  *       refunded record. Records are ordered by taskId + nodeId (composite
  *       primary key). This is the reconciliation source of truth for the
  *       network's Stellar claimable-balance payment flow.
@@ -68,7 +70,10 @@ export function createPaymentsRouter(options: PaymentsRouterOptions = {}): Route
   router.get("/", (req: Request, res: Response, next: NextFunction): void => {
     try {
       const db = getPaymentDb();
-      const records = db.listAll();
+      const tasks = createTaskDb(getTaskDb());
+      const records = db.listAll().filter((record) =>
+        req.wallet !== undefined && tasks.findById(record.taskId)?.walletPublicKey === req.wallet,
+      );
       res.json({
         payments: records.map(serializeRecord),
         total: records.length,

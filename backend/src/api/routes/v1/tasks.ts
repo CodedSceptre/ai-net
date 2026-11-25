@@ -97,7 +97,7 @@ export function createV1TasksRouter(
 
   // GET /api/tasks — v1 format
   tasksRouter.get("/", (req: Request, res: Response): void => {
-    const walletPublicKey = (req.headers["walletpublickey"] as string) ?? "";
+    const walletPublicKey = req.wallet ?? "";
     const parse = listTasksQuerySchema.safeParse(req.query);
     if (!parse.success) {
       res.status(400).json({ error: parse.error.flatten() });

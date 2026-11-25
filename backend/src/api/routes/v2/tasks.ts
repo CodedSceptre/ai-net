@@ -126,7 +126,7 @@ export function createV2TasksRouter(
 
   // GET /api/tasks — v2 format: cursor pagination when ?cursor or ?limit present, offset otherwise
   tasksRouter.get("/", (req: Request, res: Response): void => {
-    const walletPublicKey = (req.headers["walletpublickey"] as string) ?? "";
+    const walletPublicKey = req.wallet ?? "";
     const now = new Date().toISOString();
 
     // Use cursor mode when an explicit cursor or limit (without page) is provided
