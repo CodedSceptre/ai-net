@@ -463,6 +463,8 @@ docker compose stop --timeout 30 ainet-node
 
 ## 11. Backup & Disaster Recovery
 
+> 📖 **Incident Response**: For structured recovery procedures during active production incidents, see the **[Disaster Recovery Runbook](./DISASTER_RECOVERY_RUNBOOK.md)**. The runbook covers six recovery scenarios with Symptoms → Diagnosis → Recovery → Verification structure, RTOs, and an escalation matrix.
+
 ### 11.1 PostgreSQL Database Backups
 
 Schedule regular automated database backups using `pg_dump`:
