@@ -1,7 +1,8 @@
-# 📡 AI-Net Canonical Event Schema
+# 📡 AI-Net Event Flow Notes
 
-This document is the authoritative reference for every event emitted by the
-ai-net system. It covers:
+> The [Event Schema Reference](EVENT_SCHEMA_REFERENCE.md) is the maintained source for on-chain and WebSocket schemas. This page retains historical schema notes and event-flow diagrams.
+
+Topics covered by these notes include:
 
 1. The backend event-sourcing schema (versioned payloads, migration rules)
 2. **All on-chain Soroban contract events** emitted by `agent_registry` and `task_store`
