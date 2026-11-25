@@ -261,7 +261,7 @@ mod legacy {
 
         // Move forward by only half the unbonding period.
         env.ledger().with_mut(|li| {
-            li.sequence_number = 1000 + (UNBONDING_PERIOD_LEDGERS / 2) as u64;
+            li.sequence_number = 1000 + (UNBONDING_PERIOD_LEDGERS / 2);
         });
 
         // This must panic.
@@ -283,7 +283,7 @@ mod legacy {
 
         // Jump past the full unbonding period.
         env.ledger().with_mut(|li| {
-            li.sequence_number = 1000 + UNBONDING_PERIOD_LEDGERS as u64 + 1;
+            li.sequence_number = 1000 + UNBONDING_PERIOD_LEDGERS + 1;
         });
 
         // Should succeed without panic.
@@ -308,7 +308,7 @@ mod legacy {
 
         // Set ledger to exactly claimable_at.
         env.ledger().with_mut(|li| {
-            li.sequence_number = 500 + UNBONDING_PERIOD_LEDGERS as u64;
+            li.sequence_number = 500 + UNBONDING_PERIOD_LEDGERS;
         });
 
         client.claim_unbonded(&owner, &agent_id, &capability);
