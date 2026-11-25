@@ -1810,6 +1810,14 @@ impl AgentRegistryContract {
 
     // ── Agent health ─────────────────────────────────────────────────────────
 
+    /// Return the owner of an existing registered agent without scanning the registry.
+    pub fn get_agent_owner(env: Env, agent_id: Symbol) -> Option<Address> {
+        env.storage()
+            .persistent()
+            .get::<_, AgentRecord>(&DataKey::Agent(agent_id))
+            .map(|agent| agent.owner)
+    }
+
     pub fn get_agent_health(
         env: Env,
         agent_id: Symbol,

@@ -302,6 +302,12 @@ jobs:
         run: npm run test:unit
 
       # ── Soroban contracts ─────────────────────────────────────────────
+      - name: Capability staking checks
+        run: |
+          cargo fmt --manifest-path contracts/capability_staking/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path contracts/capability_staking/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path contracts/capability_staking/Cargo.toml
+
       - name: Cargo format check
         run: cargo fmt --all -- --check
 
