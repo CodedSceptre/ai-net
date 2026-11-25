@@ -1,216 +1,82 @@
-# ai-net Infrastructure (Terraform)
+# ai-net ECS infrastructure
 
-This directory contains all Terraform code for deploying ai-net to AWS.
-Two workspaces are used — **staging** and **production** — with separate
-variable files and a shared module tree.
+Staging and production share these Terraform modules and use separate S3 state
+workspaces. The public ALB redirects HTTP to HTTPS and routes API requests to
+the backend. Nginx serves the Vite app and its client-side routes. Both services
+run in private subnets. The backend scales between 2 and 10 tasks at 70% CPU.
 
----
+RDS PostgreSQL is provisioned with an AWS-managed master credential. The current
+backend still uses local SQLite stores for task, agent, payment, and queue data.
+Those stores are separate per Fargate task. Deploy a backend with shared storage
+support before using the autoscaled service for live workloads. The Redis
+module creates an encrypted private ElastiCache replication group and injects
+its TLS connection URL through Secrets Manager.
 
-## Directory Layout
+## Bootstrap state and select an environment
 
-```
-infra/
-├── bootstrap/          # One-time setup: S3 state bucket + DynamoDB lock table
-├── modules/
-│   ├── networking/     # VPC, subnets, NAT, security groups
-│   ├── ecs/            # ECS Fargate cluster + ALB + task definition + service
-│   ├── rds/            # PostgreSQL (RDS)
-│   ├── s3/             # Task results, Redis backups, frontend static assets
-│   ├── cloudfront/     # CloudFront CDN for frontend
-│   ├── route53/        # DNS records (optional)
-│   ├── iam/            # Least-privilege roles for ECS tasks and GitHub Actions
-│   ├── secrets/        # AWS Secrets Manager secret definitions
-│   └── logging/        # CloudWatch log groups, metric filters, alarms
-├── main.tf             # Root module — wires all modules together
-├── variables.tf        # Input variable declarations
-├── outputs.tf          # Exported values (ALB DNS, S3 buckets, etc.)
-├── staging.tfvars      # Staging workspace overrides
-└── production.tfvars   # Production workspace overrides
+Use Terraform 1.6 or later and AWS credentials with access to your deployment
+account. Run the bootstrap once per account.
+
+```sh
+terraform -chdir=infra/bootstrap init
+terraform -chdir=infra/bootstrap apply
+terraform -chdir=infra init
+terraform -chdir=infra workspace new staging
+terraform -chdir=infra workspace new production
+terraform -chdir=infra workspace select staging
 ```
 
----
+The bootstrap creates the versioned, encrypted `ai-net-tfstate` bucket and the
+`ai-net-tfstate-lock` DynamoDB table. If that globally unique bucket name is
+unavailable, use your own name in both the bootstrap and backend configuration.
+State for each environment is under
+`env:/<workspace>/ai-net/terraform.tfstate`.
 
-## Prerequisites
+## Supply DNS, images, and application secrets
 
-| Tool | Version |
-|------|---------|
-| [Terraform](https://developer.hashicorp.com/terraform/install) | ≥ 1.6 |
-| [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) | ≥ 2.x |
-| AWS credentials | `AdministratorAccess` for initial apply, least-privilege after |
+Set the real domain in a local variable override for the selected environment.
+Supply a Route 53 hosted zone ID for automatic ACM DNS validation and aliases,
+or provide an issued ACM certificate covering the site, API, and www names in
+the ALB region. With external DNS, point those names at the ALB DNS output.
 
----
+On the first deployment, create the ECR repositories and Secrets Manager
+metadata before starting the services.
 
-## Step 1 — Bootstrap remote state (one-time)
-
-The S3 bucket and DynamoDB lock table must exist before the main workspace
-can use the remote backend.
-
-```bash
-cd infra/bootstrap
-terraform init
-terraform apply
-# Note the outputs: state_bucket and lock_table_name
+```sh
+terraform -chdir=infra apply -var-file=staging.tfvars \
+  -target=aws_ecr_repository.services -target=module.secrets
+terraform -chdir=infra output ecr_repository_urls
+docker build -f backend/Dockerfile -t "$BACKEND_ECR_URL:initial" .
+docker build -f frontend/Dockerfile.ecs -t "$FRONTEND_ECR_URL:initial" .
+docker push "$BACKEND_ECR_URL:initial"
+docker push "$FRONTEND_ECR_URL:initial"
 ```
 
----
+Log in to ECR and set the two ECR URL variables from the output before building.
+Populate `ai-net/<environment>/venice_api_key`, `jwt_secret`,
+`stellar_coordinator_secret`, and `admin_api_key` using Secrets Manager. Supply
+secrets through your secure credential workflow. Redis credentials are generated
+by Terraform. Restrict access to remote state because it contains the Redis
+credential. Credentials are omitted from the Terraform outputs.
 
-## Step 2 — Configure the backend
+## Plan and apply
 
-The `main.tf` backend block is already configured:
+Set `TF_VAR_hosted_zone_id` or `TF_VAR_acm_certificate_arn` for the environment.
+The tracked domain names are examples. Override `domain_name` through
+`-var='domain_name=your-domain'` or a local variable file loaded after the
+environment file. Images default to the environment ECR repositories' immutable
+`initial` tag. For subsequent deployments set `TF_VAR_backend_image` and
+`TF_VAR_frontend_image` to the new image tags or digests.
 
-```hcl
-backend "s3" {
-  bucket         = "ai-net-tfstate"
-  key            = "ai-net/terraform.tfstate"
-  region         = "us-east-1"
-  encrypt        = true
-  dynamodb_table = "ai-net-tfstate-lock"
-}
+```sh
+terraform -chdir=infra workspace select staging
+terraform -chdir=infra plan -var-file=staging.tfvars -out=staging.plan
+terraform -chdir=infra apply staging.plan
+
+terraform -chdir=infra workspace select production
+terraform -chdir=infra plan -var-file=production.tfvars -out=production.plan
+terraform -chdir=infra apply production.plan
 ```
 
-If your bucket name differs, update it before running `terraform init`.
-
----
-
-## Step 3 — Populate secrets
-
-Before applying, set the real secret values in AWS Secrets Manager.
-Terraform creates placeholder versions; overwrite them:
-
-```bash
-# Replace each secret with the real value:
-aws secretsmanager put-secret-value \
-  --secret-id "ai-net/staging/venice_api_key" \
-  --secret-string "sk-..."
-
-aws secretsmanager put-secret-value \
-  --secret-id "ai-net/staging/stellar_coordinator_secret" \
-  --secret-string "SBXXX..."
-
-aws secretsmanager put-secret-value \
-  --secret-id "ai-net/staging/admin_api_key" \
-  --secret-string "your-admin-key"
-
-aws secretsmanager put-secret-value \
-  --secret-id "ai-net/staging/redis_url" \
-  --secret-string "redis://user:password@host:6379"
-```
-
----
-
-## Step 4 — Initialise and select workspace
-
-```bash
-cd infra
-terraform init
-
-# Staging
-terraform workspace new staging   # first time only
-terraform workspace select staging
-
-# Production
-terraform workspace new production  # first time only
-terraform workspace select production
-```
-
----
-
-## Step 5 — Plan
-
-```bash
-# Staging
-terraform workspace select staging
-terraform plan -var-file=staging.tfvars \
-  -var="backend_image=<ECR_IMAGE_URI>"
-
-# Production
-terraform workspace select production
-terraform plan -var-file=production.tfvars \
-  -var="backend_image=<ECR_IMAGE_URI>"
-```
-
-The plan output must show **no unexpected destroys** before applying.
-
----
-
-## Step 6 — Apply
-
-```bash
-# Staging
-terraform workspace select staging
-terraform apply -var-file=staging.tfvars \
-  -var="backend_image=<ECR_IMAGE_URI>"
-
-# Production
-terraform workspace select production
-terraform apply -var-file=production.tfvars \
-  -var="backend_image=<ECR_IMAGE_URI>"
-```
-
----
-
-## Required Variables
-
-| Variable | Description | Required |
-|---|---|---|
-| `environment` | `staging` or `production` | ✅ |
-| `backend_image` | Docker image URI (ECR) | ✅ |
-| `aws_region` | AWS region | default `us-east-1` |
-| `vpc_cidr` | VPC CIDR block | default `10.0.0.0/16` |
-| `domain_name` | Custom domain (e.g. `ai-net.example.com`) | optional |
-| `hosted_zone_id` | Route53 hosted zone ID | optional |
-| `acm_certificate_arn` | ACM certificate ARN (us-east-1) for HTTPS | optional |
-| `db_instance_class` | RDS instance class | default `db.t3.micro` |
-| `desired_count` | Number of backend ECS tasks | default `1` |
-
-Variables without defaults **must** be supplied via a `.tfvars` file or
-`TF_VAR_*` environment variables.
-
----
-
-## Passing Sensitive Vars via Environment Variables
-
-Never commit real values to `.tfvars` files. Use environment variables:
-
-```bash
-export TF_VAR_backend_image="123456789012.dkr.ecr.us-east-1.amazonaws.com/ai-net-backend:v1.2.3"
-export TF_VAR_domain_name="ai-net.example.com"
-export TF_VAR_hosted_zone_id="Z1234567890ABC"
-export TF_VAR_acm_certificate_arn="arn:aws:acm:us-east-1:..."
-```
-
----
-
-## Remote State
-
-State is stored in S3 with DynamoDB locking. Multiple engineers can apply
-simultaneously without conflicts:
-
-```
-s3://ai-net-tfstate/ai-net/terraform.tfstate   (workspace: staging)
-s3://ai-net-tfstate/ai-net/terraform.tfstate   (workspace: production)
-```
-
-Workspace-isolated state keys are managed by Terraform automatically when
-you switch workspaces.
-
----
-
-## CI/CD Deployment
-
-GitHub Actions uses OIDC to assume the `ai-net-{env}-github-actions-deploy`
-IAM role (created by the `iam` module). No long-lived AWS credentials are
-stored in GitHub Secrets. See `.github/workflows/release.yml` for the
-deployment workflow.
-
----
-
-## Destroy
-
-```bash
-# Staging only — confirm at the interactive prompt
-terraform workspace select staging
-terraform destroy -var-file=staging.tfvars -var="backend_image=placeholder"
-```
-
-⚠️ **Never run `terraform destroy` on production without a full team review.**
+Review the proposed changes before applying. After deployment, check the
+frontend at `/healthz` and the backend at `/health` on the HTTPS domain.

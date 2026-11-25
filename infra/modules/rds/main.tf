@@ -14,7 +14,7 @@ resource "aws_db_subnet_group" "main" {
 resource "aws_db_instance" "main" {
   identifier     = "ai-net-${var.environment}-postgres"
   engine         = "postgres"
-  engine_version = "16.3"
+  engine_version = "16"
   instance_class = var.db_instance_class
 
   db_name  = var.db_name
@@ -32,10 +32,10 @@ resource "aws_db_instance" "main" {
   vpc_security_group_ids = [var.db_sg_id]
   db_subnet_group_name   = aws_db_subnet_group.main.name
 
-  multi_az               = var.environment == "production"
-  publicly_accessible    = false
-  deletion_protection    = var.environment == "production"
-  skip_final_snapshot    = var.environment != "production"
+  multi_az                  = var.environment == "production"
+  publicly_accessible       = false
+  deletion_protection       = var.environment == "production"
+  skip_final_snapshot       = var.environment != "production"
   final_snapshot_identifier = var.environment == "production" ? "ai-net-${var.environment}-final-snapshot" : null
 
   backup_retention_period = var.environment == "production" ? 7 : 1

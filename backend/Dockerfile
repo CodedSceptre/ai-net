@@ -23,7 +23,10 @@ COPY --from=builder /app/backend/dist ./backend/dist
 COPY --from=builder /app/backend/src/db/migrations ./backend/src/db/migrations
 COPY --from=builder /app/backend/scripts ./backend/scripts
 
-RUN npm ci --prefix ./backend --omit=dev --ignore-scripts && \
+RUN apk add --no-cache --virtual .sqlite-build python3 make g++ && \
+    npm ci --prefix ./backend --omit=dev --ignore-scripts && \
+    npm rebuild --prefix ./backend better-sqlite3 && \
+    apk del .sqlite-build && \
     addgroup -S app && adduser -S app -G app && \
     chown -R app:app /app && \
     rm -rf /root/.npm /tmp/*

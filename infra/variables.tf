@@ -20,8 +20,9 @@ variable "vpc_cidr" {
 }
 
 variable "backend_image" {
-  description = "Docker image URI for the backend service (ECR or Docker Hub)"
+  description = "Backend image URI. Defaults to the environment ECR repository initial tag."
   type        = string
+  default     = ""
 }
 
 variable "backend_cpu" {
@@ -39,7 +40,11 @@ variable "backend_memory" {
 variable "desired_count" {
   description = "Desired number of ECS backend tasks"
   type        = number
-  default     = 1
+  default     = 2
+  validation {
+    condition     = var.desired_count >= 2 && var.desired_count <= 10
+    error_message = "Backend desired count must be between 2 and 10."
+  }
 }
 
 variable "db_instance_class" {
@@ -73,7 +78,38 @@ variable "hosted_zone_id" {
 }
 
 variable "acm_certificate_arn" {
-  description = "ACM certificate ARN (us-east-1) for CloudFront HTTPS"
+  description = "Issued ACM certificate ARN in the ALB region. Terraform requests a DNS-validated certificate if omitted."
   type        = string
   default     = ""
+}
+
+variable "frontend_image" {
+  description = "Frontend image URI. Defaults to the environment ECR repository initial tag."
+  type        = string
+  default     = ""
+}
+
+variable "frontend_cpu" {
+  type    = number
+  default = 256
+}
+
+variable "frontend_memory" {
+  type    = number
+  default = 512
+}
+
+variable "frontend_desired_count" {
+  type    = number
+  default = 1
+}
+
+variable "redis_node_type" {
+  type    = string
+  default = "cache.t4g.micro"
+}
+
+variable "redis_node_count" {
+  type    = number
+  default = 1
 }
