@@ -508,4 +508,156 @@ mod test {
         let expected: u32 = 7 * 24 * 3600 / 5;
         assert_eq!(UNBONDING_PERIOD_LEDGERS, expected);
     }
+
+    // ── SlashReason / slash_by_reason ─────────────────────────────────────────
+
+    use crate::{AddressStakeRecord, DataKey, SlashReason};
+    use soroban_sdk::Bytes;
+
+    /// Deploy and initialise the contract with an explicit token address for
+    /// slash tests. Returns (env, client, contract_id, dr_contract).
+    fn setup_slash() -> (
+        Env,
+        CapabilityStakingContractClient<'static>,
+        soroban_sdk::Address,
+        soroban_sdk::Address,
+    ) {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(CapabilityStakingContract, ());
+        let client = CapabilityStakingContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let token = Address::generate(&env);
+        client.initialize(&admin, &treasury, &token);
+
+        let dr = Address::generate(&env);
+        client.set_dispute_resolution(&dr);
+
+        (env, client, contract_id, dr)
+    }
+
+    /// Directly write an `AddressStakeRecord` into the contract's persistent
+    /// storage, bypassing `stake_bond` (which uses Symbol-keyed records).
+    fn seed_address_stake(
+        env: &Env,
+        contract_id: &Address,
+        agent_id: &Address,
+        capability: &Bytes,
+        amount: i128,
+    ) {
+        let key = DataKey::AddressStakeRecord(agent_id.clone(), capability.clone());
+        let record = AddressStakeRecord {
+            agent_id: agent_id.clone(),
+            capability: capability.clone(),
+            amount_stroops: amount,
+            staked_at: env.ledger().sequence(),
+        };
+        env.as_contract(contract_id, || {
+            env.storage().persistent().set(&key, &record);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "slash percentage mismatch")]
+    fn test_slash_by_reason_wrong_percentage_panics() {
+        let (env, client, contract_id, _dr) = setup_slash();
+        let agent = Address::generate(&env);
+        let cap = Bytes::from_slice(&env, b"research");
+
+        seed_address_stake(&env, &contract_id, &agent, &cap, 1_000_000_000);
+
+        // TaskFailure requires 5%; passing 10 must panic.
+        client.slash_by_reason(&agent, &cap, &SlashReason::TaskFailure, &10u32);
+    }
+
+    #[test]
+    fn test_slash_by_reason_task_failure_takes_5_percent() {
+        let (env, client, contract_id, _dr) = setup_slash();
+        let agent = Address::generate(&env);
+        let cap = Bytes::from_slice(&env, b"research");
+        let initial: i128 = 1_000_000_000; // 100 XLM in stroops
+
+        seed_address_stake(&env, &contract_id, &agent, &cap, initial);
+
+        client.slash_by_reason(&agent, &cap, &SlashReason::TaskFailure, &5u32);
+
+        let history = client.get_slash_history(&agent);
+        assert_eq!(history.len(), 1);
+        let entry = history.get(0).unwrap();
+        assert_eq!(entry.amount_slashed, initial * 5 / 100);
+        assert_eq!(entry.remaining_stake, initial - initial * 5 / 100);
+        assert_eq!(entry.reason, SlashReason::TaskFailure);
+    }
+
+    #[test]
+    fn test_slash_by_reason_sla_breach_takes_25_percent() {
+        let (env, client, contract_id, _dr) = setup_slash();
+        let agent = Address::generate(&env);
+        let cap = Bytes::from_slice(&env, b"coding");
+        let initial: i128 = 1_000_000_000;
+
+        seed_address_stake(&env, &contract_id, &agent, &cap, initial);
+
+        client.slash_by_reason(&agent, &cap, &SlashReason::SLABreach, &25u32);
+
+        let history = client.get_slash_history(&agent);
+        assert_eq!(history.len(), 1);
+        let entry = history.get(0).unwrap();
+        assert_eq!(entry.amount_slashed, initial * 25 / 100);
+        assert_eq!(entry.remaining_stake, initial - initial * 25 / 100);
+        assert_eq!(entry.reason, SlashReason::SLABreach);
+    }
+
+    #[test]
+    fn test_slash_by_reason_fraud_takes_100_percent_and_blacklists() {
+        let (env, client, contract_id, _dr) = setup_slash();
+        let agent = Address::generate(&env);
+        let cap = Bytes::from_slice(&env, b"risk");
+        let initial: i128 = 500_000_000;
+
+        seed_address_stake(&env, &contract_id, &agent, &cap, initial);
+
+        client.slash_by_reason(&agent, &cap, &SlashReason::FraudProven, &100u32);
+
+        // Entire stake slashed.
+        let history = client.get_slash_history(&agent);
+        assert_eq!(history.len(), 1);
+        let entry = history.get(0).unwrap();
+        assert_eq!(entry.amount_slashed, initial);
+        assert_eq!(entry.remaining_stake, 0);
+        assert_eq!(entry.reason, SlashReason::FraudProven);
+
+        // Agent must be blacklisted after a full fraud slash.
+        assert!(client.is_blacklisted(&agent));
+    }
+
+    #[test]
+    fn test_get_slash_history_empty_for_new_agent() {
+        let (env, client, _contract_id, _dr) = setup_slash();
+        let agent = Address::generate(&env);
+        let history = client.get_slash_history(&agent);
+        assert_eq!(history.len(), 0);
+    }
+
+    #[test]
+    fn test_slash_history_accumulates_multiple_slashes() {
+        let (env, client, contract_id, _dr) = setup_slash();
+        let agent = Address::generate(&env);
+        let cap1 = Bytes::from_slice(&env, b"research");
+        let cap2 = Bytes::from_slice(&env, b"coding");
+
+        seed_address_stake(&env, &contract_id, &agent, &cap1, 1_000_000_000);
+        seed_address_stake(&env, &contract_id, &agent, &cap2, 2_000_000_000);
+
+        client.slash_by_reason(&agent, &cap1, &SlashReason::TaskFailure, &5u32);
+        client.slash_by_reason(&agent, &cap2, &SlashReason::SLABreach, &25u32);
+
+        let history = client.get_slash_history(&agent);
+        assert_eq!(history.len(), 2);
+        assert_eq!(history.get(0).unwrap().reason, SlashReason::TaskFailure);
+        assert_eq!(history.get(1).unwrap().reason, SlashReason::SLABreach);
+    }
 }
