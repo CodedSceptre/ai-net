@@ -514,32 +514,23 @@ stellar contract invoke \
   --target_version "1.1.0"
 # Output: { "compatible": true, "migration_type": "minor" }
 
-# 3. Propose the upgrade
+# Submit with the configured multisig governance authorization.
 stellar contract invoke \
-  --network testnet \
-  --source $STELLAR_SECRET_KEY \
-  --id $UPGRADE_MANAGER_ID \
-  -- propose_self_upgrade \
-  --new_version "1.1.0" \
-  --new_wasm_hash $NEW_WASM_HASH \
-  --description "Add paginated agent listing" \
-  --migration_plan '{"pre_migration_checks":["validate_data_integrity"],"data_transformations":[],"post_migration_validations":["verify_data_integrity"]}'
+  --network "$NETWORK" \
+  --source-account "$GOVERNANCE_IDENTITY" \
+  --id "$UPGRADE_MANAGER_ID" \
+  -- propose_upgrade \
+  --contract "$AGENT_REGISTRY_ID" \
+  --new_wasm_hash "$NEW_WASM_HASH" \
+  --from_version "$CURRENT_VERSION" \
+  --to_version "$TARGET_VERSION"
 
-# 4. Validate the proposal
+# Execute with manager admin authorization after the 48-hour window.
 stellar contract invoke \
-  --network testnet \
-  --source $STELLAR_SECRET_KEY \
-  --id $UPGRADE_MANAGER_ID \
-  -- validate_proposal
-# Output: { "valid": true, "estimated_gas": 500000 }
-
-# 5. Execute the upgrade
-stellar contract invoke \
-  --network testnet \
-  --source $STELLAR_SECRET_KEY \
-  --id $UPGRADE_MANAGER_ID \
-  -- execute_self_upgrade
-# Output: { "success": true, "new_version": "1.1.0" }
+  --network "$NETWORK" \
+  --source-account "$ADMIN_IDENTITY" \
+  --id "$UPGRADE_MANAGER_ID" \
+  -- execute_upgrade --proposal_id "$PROPOSAL_ID"
 ```
 
 ### 5.4 Version Compatibility Rules

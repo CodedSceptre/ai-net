@@ -35,7 +35,7 @@ OPTIONS:
     -b, --skip-backup        Skip state backup before upgrade
     -f, --force              Skip safety checks and proceed with upgrade
     -d, --dry-run            Show what would be upgraded without making changes
-    -u, --use-upgrade-manager Use upgrade manager for safe upgrades (recommended)
+    -u, --use-upgrade-manager Submit managed upgrade proposals for execution after 48 hours
     -r, --no-rollback        Disable rollback capability for this upgrade
     -v, --version VERSION    Set explicit version for the upgrade
     -h, --help               Show this help message
@@ -255,86 +255,31 @@ check_upgrade_compatibility() {
     fi
 }
 
-# Propose upgrade via upgrade manager
-propose_self_upgrade() {
-    local contract_name="$1"
+# Submit an upgrade proposal for an independently deployed target.
+propose_target_upgrade() {
+    local contract_id="$1"
     local new_version="$2"
     local new_wasm_hash="$3"
-    local description="$4"
-    local upgrade_manager_id="$5"
-    
-    echo -e "${BLUE}Proposing upgrade via upgrade manager...${NC}"
-    
+    local upgrade_manager_id="$4"
+    local current_version
+    current_version=$(get_contract_version "$contract_id")
+
     if [[ "$DRY_RUN" == "true" ]]; then
-        echo -e "${YELLOW}[DRY RUN] Would propose upgrade:${NC}"
-        echo -e "  Contract: $contract_name"
-        echo -e "  Version: $new_version"
-        echo -e "  WASM Hash: $new_wasm_hash"
-        echo -e "  Description: $description"
+        echo "Would propose $contract_id from $current_version to $new_version"
         return 0
     fi
-    
-    # Create migration plan (simplified)
-    local migration_plan="{
-        \"pre_migration_checks\": [\"validate_data_integrity\", \"check_storage_compatibility\"],
-        \"data_transformations\": [\"migrate_agent_records\"],
-        \"post_migration_validations\": [\"verify_data_integrity\"],
-        \"estimated_items\": 100
-    }"
-    
-    # Propose upgrade
-    stellar contract invoke \
+
+    local proposal_id
+    proposal_id=$(stellar contract invoke \
         --network "$NETWORK" \
         --source-account "$STELLAR_SECRET_KEY" \
         --id "$upgrade_manager_id" \
-        -- propose_self_upgrade \
-        --new_version "$new_version" \
+        -- propose_upgrade \
+        --contract "$contract_id" \
         --new_wasm_hash "$new_wasm_hash" \
-        --description "$description" \
-        --migration_plan "$migration_plan"
-    
-    echo -e "${GREEN}✓ Upgrade proposed successfully${NC}"
-}
-
-# Validate upgrade proposal
-validate_upgrade_proposal() {
-    local upgrade_manager_id="$1"
-    
-    echo -e "${BLUE}Validating upgrade proposal...${NC}"
-    
-    if [[ "$DRY_RUN" == "true" ]]; then
-        echo -e "${YELLOW}[DRY RUN] Would validate upgrade proposal${NC}"
-        return 0
-    fi
-    
-    local gas_estimate
-    gas_estimate=$(stellar contract invoke \
-        --network "$NETWORK" \
-        --source-account "$STELLAR_SECRET_KEY" \
-        --id "$upgrade_manager_id" \
-        -- validate_proposal)
-    
-    echo -e "${GREEN}✓ Proposal validated, estimated gas: $gas_estimate${NC}"
-}
-
-# Execute upgrade via upgrade manager
-execute_self_upgrade_via_manager() {
-    local upgrade_manager_id="$1"
-    
-    echo -e "${BLUE}Executing upgrade via upgrade manager...${NC}"
-    
-    if [[ "$DRY_RUN" == "true" ]]; then
-        echo -e "${YELLOW}[DRY RUN] Would execute upgrade via manager${NC}"
-        return 0
-    fi
-    
-    stellar contract invoke \
-        --network "$NETWORK" \
-        --source-account "$STELLAR_SECRET_KEY" \
-        --id "$upgrade_manager_id" \
-        -- execute_self_upgrade
-    
-    echo -e "${GREEN}✓ Upgrade executed successfully${NC}"
+        --from_version "$current_version" \
+        --to_version "$new_version") || return 1
+    echo "Submitted proposal $proposal_id. After 48 hours, invoke execute_upgrade on $upgrade_manager_id with that proposal ID."
 }
 
 # Direct contract upgrade (legacy method)
@@ -428,36 +373,15 @@ upgrade_single_contract() {
     # Backup state if not skipped
     backup_contract_state "$name" "$contract_id"
     
-    # Choose upgrade method
     if [[ "$USE_UPGRADE_MANAGER" == "true" ]]; then
-        # Use upgrade manager for safe upgrade
         local upgrade_manager_id
         upgrade_manager_id=$(get_upgrade_manager_id)
-        
-        # Check if contract supports upgrade manager
-        if ! supports_upgrade_manager "$name" "$contract_id"; then
-            echo -e "${YELLOW}Warning: Contract $name doesn't support upgrade manager${NC}"
-            echo -e "${YELLOW}Falling back to direct upgrade${NC}"
-            upgrade_contract_direct "$name" "$contract_id" "$new_wasm_hash" "$new_version" "$description"
-        else
-            # Check compatibility if not forced
-            if [[ "$FORCE" != "true" ]]; then
-                if ! check_upgrade_compatibility "$contract_id" "$new_version"; then
-                    echo -e "${RED}✗ Upgrade compatibility check failed for $name${NC}"
-                    return 1
-                fi
-            fi
-            
-            # Upgrade via manager
-            propose_self_upgrade "$name" "$new_version" "$new_wasm_hash" "$description" "$upgrade_manager_id"
-            validate_upgrade_proposal "$upgrade_manager_id"
-            execute_self_upgrade_via_manager "$upgrade_manager_id"
-        fi
-    else
-        # Direct upgrade
-        upgrade_contract_direct "$name" "$contract_id" "$new_wasm_hash" "$new_version" "$description"
+        propose_target_upgrade "$contract_id" "$new_version" "$new_wasm_hash" "$upgrade_manager_id"
+        return $?
     fi
-    
+
+    upgrade_contract_direct "$name" "$contract_id" "$new_wasm_hash" "$new_version" "$description"
+
     # Update deployment metadata
     update_deployment_metadata "$name" "$new_wasm_hash" "$new_version"
     
@@ -541,7 +465,11 @@ main() {
         done
         
         echo -e "\n${BLUE}=== Upgrade Summary ===${NC}"
-        echo -e "${GREEN}Successfully upgraded: $upgraded/$total contracts${NC}"
+        if [[ "$USE_UPGRADE_MANAGER" == "true" ]]; then
+            echo -e "${GREEN}Submitted managed proposals: $upgraded/$total contracts${NC}"
+        else
+            echo -e "${GREEN}Successfully upgraded: $upgraded/$total contracts${NC}"
+        fi
         
         if [[ $upgraded -lt $total ]]; then
             exit 1
