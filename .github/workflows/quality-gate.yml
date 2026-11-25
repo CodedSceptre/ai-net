@@ -267,6 +267,12 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: XLM/USD oracle checks
+        run: |
+          cargo fmt --manifest-path contracts/price_oracle/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path contracts/price_oracle/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path contracts/price_oracle/Cargo.toml
+
       - name: Cargo format check
         run: cargo fmt --all -- --check
 

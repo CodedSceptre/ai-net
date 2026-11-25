@@ -28,4 +28,6 @@ pub enum Error {
     PriceDeviationTooHigh = 10,
     /// Feeder address is already registered.
     FeederAlreadyRegistered = 11,
+    /// Fewer than two fresh XLM/USD observations.
+    PriceStaleError = 12,
 }

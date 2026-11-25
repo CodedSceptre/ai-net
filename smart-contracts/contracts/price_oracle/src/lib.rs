@@ -11,8 +11,8 @@ mod types;
 pub use errors::Error;
 pub use types::{
     DataKey, FeederSubmission, MaxAgeUpdatedEvent, PriceDeviationRejectedEvent, PriceEntry,
-    PriceResult, PriceUpdatedEvent, AGGREGATION_WINDOW_SECS, DEFAULT_MAX_LEDGER_AGE,
-    MAX_DEVIATION_PCT, MAX_FEEDERS,
+    PriceResult, PriceUpdatedEvent, XlmUsdPriceUpdatedEvent, AGGREGATION_WINDOW_SECS,
+    DEFAULT_MAX_LEDGER_AGE, MAX_DEVIATION_PCT, MAX_FEEDERS,
 };
 
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Symbol, Vec};
@@ -20,7 +20,10 @@ use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Symbol, Ve
 /// Default maximum price age: 3 600 seconds (1 hour).
 pub const DEFAULT_MAX_PRICE_AGE: u64 = 3_600;
 
-/// Persistent-storage TTL to use for price entries: ~7 days at 5 s/ledger.
+/// Temporary observation TTL: ~1 hour at 5 s/ledger.
+const OBSERVATION_TTL_LEDGERS: u32 = 720;
+
+/// Persistent-storage TTL to use for legacy pair entries: ~7 days at 5 s/ledger.
 const PRICE_TTL_LEDGERS: u32 = 17_280 * 7;
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -59,7 +62,7 @@ fn read_feeders(env: &Env) -> Vec<Address> {
         .unwrap_or_else(|| Vec::new(env))
 }
 
-fn compute_median(_env: &Env, mut prices: Vec<i128>) -> i128 {
+fn compute_median(mut prices: Vec<i128>) -> i128 {
     let n = prices.len();
     if n == 0 {
         return 0;
@@ -87,7 +90,7 @@ fn compute_median(_env: &Env, mut prices: Vec<i128>) -> i128 {
     } else {
         let a = prices.get(n / 2 - 1).unwrap();
         let b = prices.get(n / 2).unwrap();
-        (a + b) / 2
+        a + (b - a) / 2
     }
 }
 
@@ -150,6 +153,9 @@ impl PriceOracleContract {
             }
         }
         env.storage().instance().set(&DataKey::Feeders, &updated);
+        env.storage()
+            .temporary()
+            .remove(&DataKey::XlmUsdObservation(feeder));
         Ok(())
     }
 
@@ -162,12 +168,91 @@ impl PriceOracleContract {
         if max_age == 0 {
             return Err(Error::InvalidTimestamp);
         }
-        env.storage().instance().set(&DataKey::MaxLedgerAge, &max_age);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxLedgerAge, &max_age);
         Ok(())
     }
 
     pub fn get_max_ledger_age(env: Env) -> u32 {
         read_max_ledger_age(&env)
+    }
+
+    pub fn add_oracle_source(env: Env, source: Address) -> Result<(), Error> {
+        Self::register_feeder(env, source)
+    }
+
+    pub fn remove_oracle_source(env: Env, source: Address) -> Result<(), Error> {
+        Self::remove_feeder(env, source)
+    }
+
+    pub fn get_all_sources(env: Env) -> Vec<Address> {
+        read_feeders(&env)
+    }
+
+    /// Publish a positive fixed-point XLM/USD observation using a Unix timestamp.
+    pub fn update_price(
+        env: Env,
+        source: Address,
+        price_usd: i128,
+        timestamp: u64,
+    ) -> Result<(), Error> {
+        read_admin(&env)?;
+        if !read_feeders(&env).contains(&source) {
+            return Err(Error::Unauthorized);
+        }
+        source.require_auth();
+        if price_usd <= 0 {
+            return Err(Error::InvalidPrice);
+        }
+        let key = DataKey::XlmUsdObservation(source.clone());
+        let storage = env.storage().temporary();
+        let previous: Option<PriceEntry> = storage.get(&key);
+        if timestamp > env.ledger().timestamp()
+            || previous.is_some_and(|entry| timestamp < entry.timestamp)
+        {
+            return Err(Error::InvalidTimestamp);
+        }
+        storage.set(
+            &key,
+            &PriceEntry {
+                price: price_usd,
+                timestamp,
+                ledger: env.ledger().sequence(),
+            },
+        );
+        let ttl = OBSERVATION_TTL_LEDGERS.min(env.storage().max_ttl());
+        storage.extend_ttl(&key, ttl, ttl);
+        env.events().publish(
+            (symbol_short!("oracle"), symbol_short!("xlm_usd")),
+            XlmUsdPriceUpdatedEvent {
+                source,
+                price: price_usd,
+                timestamp,
+            },
+        );
+        Ok(())
+    }
+
+    /// Return the median of at least two authorized observations younger than five minutes.
+    pub fn get_xlm_usd(env: Env) -> Result<i128, Error> {
+        let mut prices = Vec::new(&env);
+        let now = env.ledger().timestamp();
+        for source in read_feeders(&env) {
+            let entry: Option<PriceEntry> = env
+                .storage()
+                .temporary()
+                .get(&DataKey::XlmUsdObservation(source));
+            if let Some(entry) = entry.filter(|entry| {
+                entry.timestamp <= now && now - entry.timestamp < AGGREGATION_WINDOW_SECS
+            }) {
+                prices.push_back(entry.price);
+            }
+        }
+        if prices.len() < 2 {
+            return Err(Error::PriceStaleError);
+        }
+        Ok(compute_median(prices))
     }
 
     // ── Price Submission ──────────────────────────────────────────────────────
@@ -204,7 +289,8 @@ impl PriceOracleContract {
         let mut active_subs = Vec::new(&env);
         let mut active_prices = Vec::new(&env);
         for sub in current_subs.iter() {
-            if sub.feeder != feeder && now.saturating_sub(sub.timestamp) <= AGGREGATION_WINDOW_SECS {
+            if sub.feeder != feeder && now.saturating_sub(sub.timestamp) <= AGGREGATION_WINDOW_SECS
+            {
                 active_subs.push_back(sub.clone());
                 active_prices.push_back(sub.price);
             }
@@ -212,7 +298,7 @@ impl PriceOracleContract {
 
         // Deviation check against current median if other active submissions exist
         if !active_prices.is_empty() {
-            let current_median = compute_median(&env, active_prices.clone());
+            let current_median = compute_median(active_prices.clone());
             let diff = if price >= current_median {
                 price - current_median
             } else {
@@ -253,7 +339,7 @@ impl PriceOracleContract {
         );
 
         // Compute median
-        let median = compute_median(&env, active_prices);
+        let median = compute_median(active_prices);
         let current_ledger = env.ledger().sequence();
         let entry = PriceEntry {
             price: median,
@@ -348,5 +434,50 @@ impl PriceOracleContract {
 
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         read_admin(&env)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::{storage::Temporary as _, Address as _, Events as _, Ledger};
+
+    #[test]
+    fn aggregates_only_fresh_authorized_prices() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+        let admin = Address::generate(&env);
+        let second = Address::generate(&env);
+        let third = Address::generate(&env);
+        let contract = env.register(PriceOracleContract, ());
+        let client = PriceOracleContractClient::new(&env, &contract);
+        client.initialize(&admin, &0);
+        client.add_oracle_source(&second);
+        client.add_oracle_source(&third);
+        assert_eq!(client.try_get_xlm_usd(), Err(Ok(Error::PriceStaleError)));
+        assert_eq!(
+            client.try_update_price(&Address::generate(&env), &100, &1_000),
+            Err(Ok(Error::Unauthorized))
+        );
+        let events_before = env.events().all().len();
+        client.update_price(&admin, &200, &900);
+        assert_eq!(env.events().all().len(), events_before + 1);
+        env.as_contract(&contract, || {
+            assert_eq!(
+                env.storage()
+                    .temporary()
+                    .get_ttl(&DataKey::XlmUsdObservation(admin.clone())),
+                OBSERVATION_TTL_LEDGERS,
+            );
+        });
+        assert_eq!(client.try_get_xlm_usd(), Err(Ok(Error::PriceStaleError)));
+        client.update_price(&second, &100, &1_000);
+        client.update_price(&third, &110, &1_000);
+        assert_eq!(client.get_xlm_usd(), 110);
+        env.ledger().set_timestamp(1_200);
+        assert_eq!(client.get_xlm_usd(), 105);
+        client.remove_oracle_source(&second);
+        assert_eq!(client.try_get_xlm_usd(), Err(Ok(Error::PriceStaleError)));
     }
 }
