@@ -551,22 +551,24 @@ pub struct AnomalyDetectedEvent {
     pub observed: i128,
 }
 
-// ─── Batch registration event (issue batch_register) ─────────────────────────
+// ─── Reputation events (issue #191) ──────────────────────────────────────────
 
-/// Data payload for `(registry, batch_reg)`.
+/// Data payload for `(registry, rep_upd)`.
 ///
-/// Emitted once at the end of a successful `batch_register` call, summarising
-/// the overall outcome. Individual `agent_registered` events are still emitted
-/// per successfully committed agent so indexers can process them uniformly.
+/// Published every time an agent's reputation score is updated via
+/// `update_reputation`. Indexers can stream this event to power real-time
+/// leaderboard updates and agent quality dashboards.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
-pub struct BatchRegisteredEvent {
-    /// Total number of registrations in the input batch.
-    pub total: u32,
-    /// Number of agents successfully registered.
-    pub success_count: u32,
-    /// Number of registrations that failed validation.
-    pub failure_count: u32,
-    /// Zero-based indices of the entries that failed (up to 20 entries).
-    pub failed_indices: soroban_sdk::Vec<u32>,
+pub struct ReputationUpdatedEvent {
+    /// Agent whose reputation changed.
+    pub agent_id: Address,
+    /// Score before this update.
+    pub old_score: u32,
+    /// Score after this update.
+    pub new_score: u32,
+    /// Cumulative successful task count after this update.
+    pub tasks_completed: u32,
+    /// Cumulative failed task count after this update.
+    pub tasks_failed: u32,
 }

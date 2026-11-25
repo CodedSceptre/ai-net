@@ -9,7 +9,10 @@ import { createTask, getTask } from "../../coordinator/taskStore";
 import { createLogger } from "../../utils/logger";
 import { validate } from "../middleware/validate";
 import { rateLimitMiddleware } from "../middleware/rateLimit";
-import { ValidationError, NotFoundError, AppError, RateLimitError } from "../../errors";
+import { ValidationError, NotFoundError, AppError, RateLimitError, ForbiddenError, ConflictError } from "../../errors";
+import { idempotencyMiddleware } from "../middleware/idempotency";
+import { getConfig } from "../../config";
+import { getOrGenerateReceiptJson, getOrGenerateReceiptPdf } from "../../services/receiptService";
 
 import { getGlobalJobQueue, type JobQueue, type JobPriority } from "../../queue";
 
@@ -62,6 +65,14 @@ export function createTasksRouter(
    *     tags: [Tasks]
    *     security:
    *       - WalletAuth: []
+  *     parameters:
+  *       - in: header
+  *         name: Idempotency-Key
+  *         required: false
+  *         schema:
+  *           type: string
+  *           format: uuid
+  *         description: UUID v4 key scoped to the wallet. Repeated requests replay the original response for 24 hours.
    *     requestBody:
    *       required: true
    *       content:
@@ -360,6 +371,77 @@ export function createTasksRouter(
         throw new ForbiddenError("Access denied", undefined, correlationId);
       }
       res.json(task);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * @openapi
+   * /api/tasks/{id}/receipt:
+   *   get:
+   *     summary: Get payment receipt for a completed task
+   *     description: Generates and returns a payment receipt for the task in JSON or PDF format.
+   *     tags: [Tasks]
+   *     security:
+   *       - WalletAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema: { type: string }
+   *       - in: header
+   *         name: Accept
+   *         required: false
+   *         schema:
+   *           type: string
+   *           enum: [application/json, application/pdf]
+   *     responses:
+   *       200:
+   *         description: Payment receipt in JSON or PDF format
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/TaskReceipt'
+   *           application/pdf:
+   *             schema:
+   *               type: string
+   *               format: binary
+   *       403:
+   *         description: Access denied (only requester can access)
+   *       404:
+   *         description: Task not found
+   */
+  // GET /api/tasks/:id/receipt
+  tasksRouter.get("/:id/receipt", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const correlationId = res.locals.correlationId as string | undefined;
+      const db = createTaskDb(getTaskDb());
+      const task = db.findById(req.params.id);
+      if (!task) {
+        throw new NotFoundError("Task", req.params.id, undefined, correlationId);
+      }
+      const requesterKey = req.user?.sub ?? (req.headers["walletpublickey"] as string);
+      if (!requesterKey || requesterKey !== task.walletPublicKey) {
+        throw new ForbiddenError("Access denied", undefined, correlationId);
+      }
+
+      const acceptHeader = req.headers["accept"] || "";
+      const isPdf = typeof acceptHeader === "string" && acceptHeader.includes("application/pdf");
+
+      if (isPdf) {
+        const pdf = await getOrGenerateReceiptPdf(task.id, { taskDb: db });
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `inline; filename="receipt-${task.id}.pdf"`);
+        res.setHeader("Cache-Control", "private, max-age=86400");
+        res.send(pdf);
+        return;
+      }
+
+      const receipt = await getOrGenerateReceiptJson(task.id, { taskDb: db });
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Cache-Control", "private, max-age=86400");
+      res.json(receipt);
     } catch (err) {
       next(err);
     }
