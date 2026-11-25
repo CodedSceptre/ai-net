@@ -189,70 +189,23 @@ echo ""
 get_upgrade_manager_id() {
     local upgrade_mgr_info
     upgrade_mgr_info=$(get_contract_info "upgrade-manager")
-    
+
     if [[ -z "$upgrade_mgr_info" ]]; then
         echo -e "${RED}Error: Upgrade manager not deployed${NC}" >&2
         echo -e "${YELLOW}Hint: Deploy upgrade-manager first or use direct upgrade mode${NC}" >&2
         exit 1
     fi
-    
+
     echo "$upgrade_mgr_info" | jq -r '.contract_id'
 }
 
-# Check if contract supports upgrade manager
-supports_upgrade_manager() {
-    local name="$1"
-    local contract_id="$2"
-    
-    # Try to call is_upgradeable method
-    local result
-    result=$(stellar contract invoke \
-        --network "$NETWORK" \
-        --source-account "$STELLAR_SECRET_KEY" \
-        --id "$contract_id" \
-        -- is_upgradeable 2>/dev/null || echo "false")
-    
-    [[ "$result" == "true" ]]
-}
-
-# Get current contract version
+# Get the current version using the target upgrade ABI.
 get_contract_version() {
-    local contract_id="$1"
-    
     stellar contract invoke \
         --network "$NETWORK" \
         --source-account "$STELLAR_SECRET_KEY" \
-        --id "$contract_id" \
-        -- get_version 2>/dev/null || echo "unknown"
-}
-
-# Check upgrade compatibility
-check_upgrade_compatibility() {
-    local contract_id="$1"
-    local target_version="$2"
-    
-    echo -e "${BLUE}Checking upgrade compatibility...${NC}"
-    
-    local compatibility_result
-    compatibility_result=$(stellar contract invoke \
-        --network "$NETWORK" \
-        --source-account "$STELLAR_SECRET_KEY" \
-        --id "$contract_id" \
-        -- check_upgrade_compatibility \
-        --target_version "$target_version" 2>/dev/null || echo "{}")
-    
-    # Parse compatibility result (simplified)
-    local is_compatible
-    is_compatible=$(echo "$compatibility_result" | jq -r '.is_compatible // false' 2>/dev/null || echo "false")
-    
-    if [[ "$is_compatible" == "true" ]]; then
-        echo -e "${GREEN}✓ Upgrade compatibility check passed${NC}"
-        return 0
-    else
-        echo -e "${RED}✗ Upgrade compatibility check failed${NC}"
-        echo -e "${YELLOW}Compatibility result:${NC} $compatibility_result"
-        return 1
-    fi
+        --id "$1" \
+        -- contract_version | jq -er 'strings'
 }
 
 # Submit an upgrade proposal for an independently deployed target.
@@ -261,13 +214,7 @@ propose_target_upgrade() {
     local new_version="$2"
     local new_wasm_hash="$3"
     local upgrade_manager_id="$4"
-    local current_version
-    current_version=$(get_contract_version "$contract_id")
-
-    if [[ "$DRY_RUN" == "true" ]]; then
-        echo "Would propose $contract_id from $current_version to $new_version"
-        return 0
-    fi
+    local current_version="$5"
 
     local proposal_id
     proposal_id=$(stellar contract invoke \
@@ -282,109 +229,70 @@ propose_target_upgrade() {
     echo "Submitted proposal $proposal_id. After 48 hours, invoke execute_upgrade on $upgrade_manager_id with that proposal ID."
 }
 
-# Direct contract upgrade (legacy method)
-upgrade_contract_direct() {
-    local name="$1"
-    local contract_id="$2"
-    local new_wasm_hash="$3"
-    local new_version="$4"
-    local description="$5"
-    
-    echo -e "${BLUE}Performing direct contract upgrade...${NC}"
-    
-    if [[ "$DRY_RUN" == "true" ]]; then
-        echo -e "${YELLOW}[DRY RUN] Would upgrade $name directly${NC}"
-        echo -e "  Contract ID: $contract_id"
-        echo -e "  New WASM Hash: $new_wasm_hash"
-        return 0
-    fi
-    
-    # Check if contract supports upgrade_contract method
-    if supports_upgrade_manager "$name" "$contract_id"; then
-        # Use the contract's own upgrade method
-        stellar contract invoke \
-            --network "$NETWORK" \
-            --source-account "$STELLAR_SECRET_KEY" \
-            --id "$contract_id" \
-            -- upgrade_contract \
-            --new_wasm_hash "$new_wasm_hash" \
-            --new_version "$new_version" \
-            --description "$description"
-    else
-        # Use Soroban CLI direct upgrade
-        stellar contract install \
-            --network "$NETWORK" \
-            --source-account "$STELLAR_SECRET_KEY" \
-            --wasm "$TARGET_DIR/${name//-/_}.wasm"
-        
-        # Update deployment metadata
-        echo -e "${GREEN}✓ Direct upgrade completed${NC}"
-    fi
-}
-
 # Upgrade a single contract
 upgrade_single_contract() {
     local name="$1"
-    local contract_path="$2"
-    
+
     echo -e "\n${BLUE}=== Upgrading $name ===${NC}"
-    
+
     # Get contract info
     local contract_info
     contract_info=$(get_contract_info "$name")
-    
+
     if [[ -z "$contract_info" ]]; then
         echo -e "${RED}✗ Contract $name not found in deployment metadata${NC}"
         return 1
     fi
-    
+
     local contract_id
     contract_id=$(echo "$contract_info" | jq -r '.contract_id')
-    
+
     local wasm_file="$TARGET_DIR/${name//-/_}.wasm"
-    
-    # Check if upgrade is needed
-    if ! needs_upgrade "$name" "$wasm_file"; then
-        if [[ $? -eq 1 ]]; then
-            echo -e "${GREEN}✓ Contract $name is already up to date${NC}"
-            return 0
-        else
-            return 1
-        fi
+
+    if [[ "$name" == "upgrade-manager" ]]; then
+        echo "Use the manager's self-upgrade workflow for its own WASM." >&2
+        return 1
     fi
-    
-    # Calculate new WASM hash
-    local new_wasm_hash
-    new_wasm_hash=$(calculate_wasm_hash "$wasm_file")
-    
-    # Determine version
-    local new_version="$VERSION"
-    if [[ -z "$new_version" ]]; then
-        local current_version
-        current_version=$(get_contract_version "$contract_id")
-        new_version="${current_version}.$(date +%s)" # Simple version bump
+    if [[ ! -f "$wasm_file" ]]; then
+        echo "WASM file not found: $wasm_file" >&2
+        return 1
     fi
-    
-    local description="Automated upgrade via upgrade script"
-    if [[ -n "$VERSION" ]]; then
-        description="Upgrade to version $VERSION"
+    local status=0
+    needs_upgrade "$name" "$wasm_file" || status=$?
+    case "$status" in
+        0) ;;
+        1) return 0 ;;
+        *) return "$status" ;;
+    esac
+
+    local new_wasm_hash new_version current_version
+    new_wasm_hash=$(calculate_wasm_hash "$wasm_file") || return 1
+    current_version=$(get_contract_version "$contract_id") || return 1
+    new_version="${VERSION:-${current_version}.$(date +%s)}"
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "Would prepare $name for version $new_version with WASM $new_wasm_hash"
+        return 0
     fi
-    
-    # Backup state if not skipped
-    backup_contract_state "$name" "$contract_id"
-    
+    perform_safety_checks "$name" "$contract_id" "$wasm_file" || return 1
+    backup_contract_state "$name" "$contract_id" || return 1
+    stellar contract install \
+        --network "$NETWORK" \
+        --source-account "$STELLAR_SECRET_KEY" \
+        --wasm "$wasm_file" || return 1
+
     if [[ "$USE_UPGRADE_MANAGER" == "true" ]]; then
         local upgrade_manager_id
-        upgrade_manager_id=$(get_upgrade_manager_id)
-        propose_target_upgrade "$contract_id" "$new_version" "$new_wasm_hash" "$upgrade_manager_id"
+        upgrade_manager_id=$(get_upgrade_manager_id) || return 1
+        propose_target_upgrade "$contract_id" "$new_version" "$new_wasm_hash" "$upgrade_manager_id" "$current_version"
         return $?
     fi
 
-    upgrade_contract_direct "$name" "$contract_id" "$new_wasm_hash" "$new_version" "$description"
-
-    # Update deployment metadata
+    stellar contract invoke \
+        --network "$NETWORK" \
+        --source-account "$STELLAR_SECRET_KEY" \
+        --id "$contract_id" \
+        -- upgrade --new_wasm_hash "$new_wasm_hash" --new_version "$new_version" || return 1
     update_deployment_metadata "$name" "$new_wasm_hash" "$new_version"
-    
     echo -e "${GREEN}✓ Successfully upgraded $name${NC}"
 }
 
@@ -393,15 +301,15 @@ update_deployment_metadata() {
     local name="$1"
     local new_hash="$2"
     local new_version="$3"
-    
+
     if [[ "$DRY_RUN" == "true" ]]; then
         return 0
     fi
-    
+
     # Update the deployment file
     local temp_file
     temp_file=$(mktemp)
-    
+
     jq --arg name "$name" \
        --arg hash "$new_hash" \
        --arg version "$new_version" \
@@ -410,110 +318,8 @@ update_deployment_metadata() {
         .contracts[$name].version = $version |
         .contracts[$name].upgraded_at = $timestamp' \
        "$DEPLOYMENT_FILE" > "$temp_file"
-    
+
     mv "$temp_file" "$DEPLOYMENT_FILE"
-}
-
-# Main execution
-main() {
-    set_network_defaults
-    check_deployment_file
-    build_contracts
-    
-    if [[ -n "$CONTRACT_NAME" ]]; then
-        # Upgrade specific contract
-        local found=false
-        for contract in "${CONTRACTS[@]}"; do
-            local name="${contract%%:*}"
-            local path="${contract##*:}"
-            
-            if [[ "$name" == "$CONTRACT_NAME" ]]; then
-                upgrade_single_contract "$name" "$path"
-                found=true
-                break
-            fi
-        done
-        
-        if [[ "$found" != "true" ]]; then
-            echo -e "${RED}Error: Contract '$CONTRACT_NAME' not found${NC}" >&2
-            echo -e "${YELLOW}Available contracts:${NC}"
-            for contract in "${CONTRACTS[@]}"; do
-                echo "  ${contract%%:*}"
-            done
-            exit 1
-        fi
-    else
-        # Upgrade all contracts
-        local upgraded=0
-        local total=0
-        
-        for contract in "${CONTRACTS[@]}"; do
-            local name="${contract%%:*}"
-            local path="${contract##*:}"
-            
-            # Skip upgrade-manager if using upgrade manager (it should be upgraded first manually)
-            if [[ "$USE_UPGRADE_MANAGER" == "true" && "$name" == "upgrade-manager" ]]; then
-                echo -e "${YELLOW}Skipping upgrade-manager (should be upgraded manually when using upgrade manager mode)${NC}"
-                continue
-            fi
-            
-            total=$((total + 1))
-            
-            if upgrade_single_contract "$name" "$path"; then
-                upgraded=$((upgraded + 1))
-            fi
-        done
-        
-        echo -e "\n${BLUE}=== Upgrade Summary ===${NC}"
-        if [[ "$USE_UPGRADE_MANAGER" == "true" ]]; then
-            echo -e "${GREEN}Submitted managed proposals: $upgraded/$total contracts${NC}"
-        else
-            echo -e "${GREEN}Successfully upgraded: $upgraded/$total contracts${NC}"
-        fi
-        
-        if [[ $upgraded -lt $total ]]; then
-            exit 1
-        fi
-    fi
-    
-    if [[ "$DRY_RUN" != "true" ]]; then
-        echo -e "\n${GREEN}🎉 Upgrade completed successfully!${NC}"
-        
-        if [[ "$USE_UPGRADE_MANAGER" == "true" && "$ENABLE_ROLLBACK" == "true" ]]; then
-            echo -e "${YELLOW}💡 Rollback is available for 48 hours via the upgrade manager${NC}"
-        fi
-    fi
-}
-
-# Run main function
-main "$@"
-        echo -e "${YELLOW}[DRY RUN] Would upgrade $name directly${NC}"
-        echo -e "  Contract ID: $contract_id"
-        echo -e "  New WASM Hash: $new_wasm_hash"
-        return 0
-    fi
-    
-    # Check if contract supports upgrade_contract method
-    if supports_upgrade_manager "$name" "$contract_id"; then
-        # Use the contract's own upgrade method
-        stellar contract invoke \
-            --network "$NETWORK" \
-            --source-account "$STELLAR_SECRET_KEY" \
-            --id "$contract_id" \
-            -- upgrade_contract \
-            --new_wasm_hash "$new_wasm_hash" \
-            --new_version "$new_version" \
-            --description "$description"
-    else
-        # Use Soroban CLI direct upgrade
-        stellar contract install \
-            --network "$NETWORK" \
-            --source-account "$STELLAR_SECRET_KEY" \
-            --wasm "$TARGET_DIR/${name//-/_}.wasm"
-        
-        # Update deployment metadata
-        echo -e "${GREEN}✓ Direct upgrade completed${NC}"
-    fi
 }
 
 # Check if deployment file exists
@@ -566,10 +372,10 @@ build_contracts() {
 
     echo -e "${BLUE}Building contracts...${NC}"
     cd "$PROJECT_ROOT"
-    
+
     # Build all contracts in workspace
     cargo build --target wasm32-unknown-unknown --release
-    
+
     echo -e "${GREEN}✓ Build completed${NC}"
     echo ""
 }
@@ -578,21 +384,21 @@ build_contracts() {
 needs_upgrade() {
     local name="$1"
     local wasm_file="$2"
-    
+
     local contract_info
     contract_info=$(get_contract_info "$name")
-    
+
     if [[ -z "$contract_info" ]]; then
         echo -e "${RED}✗ Contract $name not found in deployment metadata${NC}" >&2
         return 2
     fi
-    
+
     local deployed_hash
     deployed_hash=$(echo "$contract_info" | jq -r '.wasm_hash')
-    
+
     local current_hash
     current_hash=$(calculate_wasm_hash "$wasm_file")
-    
+
     if [[ "$deployed_hash" != "$current_hash" ]]; then
         echo -e "${YELLOW}Contract $name needs upgrade${NC}"
         echo -e "${BLUE}  Deployed hash:${NC} $deployed_hash"
@@ -608,18 +414,18 @@ needs_upgrade() {
 backup_contract_state() {
     local name="$1"
     local contract_id="$2"
-    
+
     if [[ "$SKIP_BACKUP" == "true" ]]; then
         echo -e "${YELLOW}Skipping backup for $name${NC}"
         return 0
     fi
-    
+
     echo -e "${BLUE}Creating state backup for $name...${NC}"
-    
+
     # Create backup directory
     mkdir -p "$BACKUPS_DIR/$NETWORK"
     local backup_file="$BACKUPS_DIR/$NETWORK/${name}-${TIMESTAMP}.json"
-    
+
     # Export contract state (this is a conceptual approach - Soroban doesn't have direct state export)
     # In practice, you'd need to call specific contract methods to get critical state
     local backup_data="{
@@ -628,10 +434,10 @@ backup_contract_state() {
         \"network\": \"$NETWORK\",
         \"note\": \"State backup before upgrade - manual verification required\"
     }"
-    
+
     echo "$backup_data" > "$backup_file"
     echo -e "${GREEN}✓ Backup created: $backup_file${NC}"
-    
+
     # Store backup info in deployment metadata
     local metadata
     metadata=$(cat "$DEPLOYMENT_FILE")
@@ -649,14 +455,14 @@ perform_safety_checks() {
     local name="$1"
     local contract_id="$2"
     local wasm_file="$3"
-    
+
     if [[ "$FORCE" == "true" ]]; then
         echo -e "${YELLOW}Skipping safety checks (--force specified)${NC}"
         return 0
     fi
-    
+
     echo -e "${BLUE}Performing safety checks for $name...${NC}"
-    
+
     # Check 1: Verify contract exists on network
     echo -e "${BLUE}  Checking contract existence...${NC}"
     if ! soroban contract invoke \
@@ -669,155 +475,26 @@ perform_safety_checks() {
         return 1
     fi
     echo -e "${GREEN}  ✓ Contract exists on network${NC}"
-    
+
     # Check 2: Verify Wasm file exists and is valid
     echo -e "${BLUE}  Checking Wasm file...${NC}"
     if [[ ! -f "$wasm_file" ]]; then
         echo -e "${RED}  ✗ Wasm file not found: $wasm_file${NC}" >&2
         return 1
     fi
-    
+
     # Basic Wasm validation (check magic number)
     if ! xxd -l 4 "$wasm_file" | grep -q "0061736d"; then
         echo -e "${RED}  ✗ Invalid Wasm file (missing magic number)${NC}" >&2
         return 1
     fi
     echo -e "${GREEN}  ✓ Wasm file is valid${NC}"
-    
+
     # Check 3: Storage layout compatibility (placeholder - requires contract-specific logic)
     echo -e "${BLUE}  Checking storage layout compatibility...${NC}"
     echo -e "${YELLOW}  ⚠ Manual storage layout verification required${NC}"
-    
-    return 0
-}
 
-# Upgrade a single contract
-upgrade_contract() {
-    local name="$1"
-    local wasm_file="$2"
-    
-    echo -e "${BLUE}Processing upgrade for $name...${NC}"
-    
-    # Get contract info from deployment metadata
-    local contract_info
-    contract_info=$(get_contract_info "$name")
-    
-    if [[ -z "$contract_info" ]]; then
-        echo -e "${RED}✗ Contract $name not found in deployment metadata${NC}" >&2
-        return 1
-    fi
-    
-    local contract_id
-    contract_id=$(echo "$contract_info" | jq -r '.contract_id')
-    
-    # Check if upgrade is needed
-    if ! needs_upgrade "$name" "$wasm_file"; then
-        local exit_code=$?
-        if [[ $exit_code -eq 1 ]]; then
-            echo ""
-            return 0  # No upgrade needed
-        else
-            return 1  # Error occurred
-        fi
-    fi
-    
-    if [[ "$DRY_RUN" == "true" ]]; then
-        echo -e "${YELLOW}Would upgrade $name (dry run)${NC}"
-        echo ""
-        return 0
-    fi
-    
-    # Perform safety checks
-    if ! perform_safety_checks "$name" "$contract_id" "$wasm_file"; then
-        echo -e "${RED}✗ Safety checks failed for $name${NC}" >&2
-        return 1
-    fi
-    
-    # Backup state
-    backup_contract_state "$name" "$contract_id"
-    
-    # Perform the upgrade
-    echo -e "${BLUE}Upgrading $name...${NC}"
-    
-    local new_wasm_hash
-    new_wasm_hash=$(calculate_wasm_hash "$wasm_file")
-    
-    if soroban contract install \
-        --wasm "$wasm_file" \
-        --source "$STELLAR_SECRET_KEY" \
-        --rpc-url "$STELLAR_RPC_URL" \
-        --network-passphrase "$(get_network_passphrase)" >/dev/null 2>&1; then
-        
-        # Get the new Wasm hash from Soroban
-        local install_hash
-        install_hash=$(soroban contract install \
-            --wasm "$wasm_file" \
-            --source "$STELLAR_SECRET_KEY" \
-            --rpc-url "$STELLAR_RPC_URL" \
-            --network-passphrase "$(get_network_passphrase)" 2>/dev/null | grep -o '[a-f0-9]\{64\}' | head -1)
-        
-        # Update the contract
-        if soroban contract upgrade \
-            --contract-id "$contract_id" \
-            --wasm-hash "$install_hash" \
-            --source "$STELLAR_SECRET_KEY" \
-            --rpc-url "$STELLAR_RPC_URL" \
-            --network-passphrase "$(get_network_passphrase)" >/dev/null 2>&1; then
-            
-            echo -e "${GREEN}✓ Successfully upgraded $name${NC}"
-            echo -e "${BLUE}  Contract ID:${NC} $contract_id"
-            echo -e "${BLUE}  New Wasm Hash:${NC} $new_wasm_hash"
-            
-            # Update deployment metadata
-            local metadata
-            metadata=$(cat "$DEPLOYMENT_FILE")
-            metadata=$(echo "$metadata" | jq --arg name "$name" --arg wasm_hash "$new_wasm_hash" --arg timestamp "$TIMESTAMP" '
-                .contracts[$name].wasm_hash = $wasm_hash |
-                .contracts[$name].upgraded_at = $timestamp
-            ')
-            echo "$metadata" > "$DEPLOYMENT_FILE"
-            
-        else
-            echo -e "${RED}✗ Failed to upgrade contract $name${NC}" >&2
-            return 1
-        fi
-    else
-        echo -e "${RED}✗ Failed to install new Wasm for $name${NC}" >&2
-        return 1
-    fi
-    
-    echo ""
     return 0
-}
-
-# Get contracts to upgrade
-get_contracts_to_upgrade() {
-    if [[ -n "$CONTRACT_NAME" ]]; then
-        # Validate specified contract exists
-        local found=false
-        for contract_info in "${CONTRACTS[@]}"; do
-            IFS=':' read -r name path <<< "$contract_info"
-            if [[ "$name" == "$CONTRACT_NAME" ]]; then
-                found=true
-                break
-            fi
-        done
-        
-        if [[ "$found" == "false" ]]; then
-            echo -e "${RED}Error: Contract '$CONTRACT_NAME' not found${NC}" >&2
-            echo -e "${YELLOW}Available contracts:${NC}"
-            for contract_info in "${CONTRACTS[@]}"; do
-                IFS=':' read -r name path <<< "$contract_info"
-                echo -e "  - $name"
-            done
-            exit 1
-        fi
-        
-        echo "$CONTRACT_NAME"
-    else
-        # Get all deployed contracts
-        get_deployed_contracts
-    fi
 }
 
 # Main execution
@@ -825,76 +502,64 @@ main() {
     set_network_defaults
     check_deployment_file
     build_contracts
-    
-    local contracts_to_upgrade
-    contracts_to_upgrade=$(get_contracts_to_upgrade)
-    
-    if [[ -z "$contracts_to_upgrade" ]]; then
-        echo -e "${YELLOW}No contracts to upgrade${NC}"
-        exit 0
-    fi
-    
-    echo -e "${BLUE}Upgrading contracts on $NETWORK...${NC}"
-    echo ""
-    
-    local upgrade_success=true
-    while IFS= read -r contract_name; do
-        # Find the corresponding contract path
-        local wasm_file=""
-        for contract_info in "${CONTRACTS[@]}"; do
-            IFS=':' read -r name path <<< "$contract_info"
-            if [[ "$name" == "$contract_name" ]]; then
-                wasm_file="$TARGET_DIR/${name//-/_}.wasm"
+
+    if [[ -n "$CONTRACT_NAME" ]]; then
+        # Upgrade specific contract
+        local found=false
+        for contract in "${CONTRACTS[@]}"; do
+            local name="${contract%%:*}"
+
+            if [[ "$name" == "$CONTRACT_NAME" ]]; then
+                upgrade_single_contract "$name"
+                found=true
                 break
             fi
         done
-        
-        if [[ -z "$wasm_file" ]]; then
-            echo -e "${RED}✗ Wasm file not found for contract $contract_name${NC}" >&2
-            upgrade_success=false
-            continue
-        fi
-        
-        if ! upgrade_contract "$contract_name" "$wasm_file"; then
-            upgrade_success=false
-        fi
-    done <<< "$contracts_to_upgrade"
-    
-    if [[ "$upgrade_success" == "true" ]]; then
-        if [[ "$DRY_RUN" != "true" ]]; then
-            echo -e "${GREEN}=== Upgrade completed successfully ===${NC}"
-            
-            # Add to deployment history
-            local metadata
-            metadata=$(cat "$DEPLOYMENT_FILE")
-            metadata=$(echo "$metadata" | jq --arg timestamp "$TIMESTAMP" --arg action "upgrade" '
-                .deployment_history += [{
-                    action: $action,
-                    timestamp: $timestamp,
-                    network: .network
-                }]
-            ')
-            echo "$metadata" > "$DEPLOYMENT_FILE"
-        else
-            echo -e "${GREEN}=== Dry run completed ===${NC}"
+
+        if [[ "$found" != "true" ]]; then
+            echo -e "${RED}Error: Contract '$CONTRACT_NAME' not found${NC}" >&2
+            echo -e "${YELLOW}Available contracts:${NC}"
+            for contract in "${CONTRACTS[@]}"; do
+                echo "  ${contract%%:*}"
+            done
+            exit 1
         fi
     else
-        echo -e "${RED}=== Upgrade failed ===${NC}" >&2
-        exit 1
+        # Upgrade all contracts
+        local upgraded=0
+        local total=0
+
+        for contract in "${CONTRACTS[@]}"; do
+            local name="${contract%%:*}"
+
+            # The upgrade manager uses its own self-upgrade entry points.
+            if [[ "$name" == "upgrade-manager" ]]; then
+                echo -e "${YELLOW}Skipping upgrade-manager (use the self-upgrade workflow)${NC}"
+                continue
+            fi
+
+            total=$((total + 1))
+
+            if upgrade_single_contract "$name"; then
+                upgraded=$((upgraded + 1))
+            fi
+        done
+
+        echo -e "\n${BLUE}=== Upgrade Summary ===${NC}"
+        if [[ "$USE_UPGRADE_MANAGER" == "true" ]]; then
+            echo -e "${GREEN}Submitted managed proposals: $upgraded/$total contracts${NC}"
+        else
+            echo -e "${GREEN}Successfully upgraded: $upgraded/$total contracts${NC}"
+        fi
+
+        if [[ $upgraded -lt $total ]]; then
+            exit 1
+        fi
+    fi
+
+    if [[ "$DRY_RUN" != "true" && "$USE_UPGRADE_MANAGER" != "true" ]]; then
+        echo -e "\n${GREEN}Upgrade completed successfully.${NC}"
     fi
 }
 
-# Check dependencies
-check_dependencies() {
-    local deps=("soroban" "jq" "cargo" "sha256sum" "xxd")
-    for dep in "${deps[@]}"; do
-        if ! command -v "$dep" >/dev/null 2>&1; then
-            echo -e "${RED}Error: Required dependency '$dep' not found${NC}" >&2
-            exit 1
-        fi
-    done
-}
-
-# Entry point
-check_dependencies
 main "$@"
