@@ -158,6 +158,8 @@ cargo test                          # Contract unit tests
 cargo build --target wasm32v1-none --release # Optimized Wasm build
 ```
 
+> 📖 For the full Soroban development lifecycle (setup, testing patterns, deployment, pitfalls), see the [Soroban Contributor Guide](docs/SOROBAN_CONTRIBUTOR_GUIDE.md).
+
 ---
 
 ## 6. Review Checklist
