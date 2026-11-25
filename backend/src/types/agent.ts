@@ -1,5 +1,6 @@
 export interface AgentRegistration {
   id: string;
+  name?: string;
   type: string;
   endpoint: string;
   cost: number;
