@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
 import { useParams } from 'react-router-dom';
 
@@ -6,7 +6,9 @@ import { useTaskMonitor } from '../hooks/useTaskMonitor';
 import { TaskDetailTimeline } from '../components/dashboard/TaskDetailTimeline';
 import { PaymentTimeline } from '../components/dashboard/PaymentTimeline';
 import { Skeleton, SkeletonText } from '../components/common/Skeleton';
-import { AlertCircle, CheckCircle2, Play, RefreshCw } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Play, RefreshCw, XCircle } from 'lucide-react';
+import { CancelTaskModal } from '../components/tasks/CancelTaskModal';
+import { useCancelTask } from '../hooks/useCancelTask';
 
 const CustomNode: React.FC<{ id: string; data: { label: string; status: string } }> = ({ id, data }) => {
   const { t } = useTranslation();
@@ -86,6 +88,22 @@ const TaskDetailPage: React.FC = () => {
   const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const { task, loading, error, wsStatus, nodes, payments, outputs, refetch } = useTaskMonitor(id);
+
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+  const [taskStatus, setTaskStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (task?.status) setTaskStatus(task.status);
+  }, [task?.status]);
+
+  const { cancelTask, isCancelling } = useCancelTask({
+    taskId: id || '',
+    currentStatus: taskStatus || task?.status || 'queued',
+    onStatusChange: setTaskStatus,
+  });
+
+  const effectiveStatus = taskStatus ?? task?.status;
+  const canCancel = effectiveStatus === 'pending' || effectiveStatus === 'queued';
 
   // Check if any node is failed
   const failedNode = useMemo(() => {
@@ -305,6 +323,16 @@ const TaskDetailPage: React.FC = () => {
               {task?.status || 'queued'}
             </div>
           </div>
+          <button
+            onClick={() => setIsCancelModalOpen(true)}
+            disabled={!canCancel}
+            title={!canCancel ? `Cannot cancel a task with status: ${effectiveStatus}` : 'Cancel this task'}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-rose-950/60 hover:bg-rose-900/60 border border-rose-500/40 text-rose-300 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            data-testid="cancel-task-btn"
+          >
+            <XCircle size={12} />
+            <span>Cancel</span>
+          </button>
           <button onClick={refetch} className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[var(--surface-elevated)] hover:bg-[var(--surface-muted)] border border-[var(--border-strong)] transition">
             <RefreshCw size={12} />
             <span>{t('page.task.sync')}</span>
@@ -362,6 +390,17 @@ const TaskDetailPage: React.FC = () => {
           <PaymentTimeline payments={payments} />
         </div>
       </div>
+
+      <CancelTaskModal
+        isOpen={isCancelModalOpen}
+        taskPrompt={task?.prompt || ''}
+        onConfirm={async (reason) => {
+          await cancelTask(reason);
+          setIsCancelModalOpen(false);
+        }}
+        onClose={() => setIsCancelModalOpen(false)}
+        isCancelling={isCancelling}
+      />
     </div>
   );
 };
