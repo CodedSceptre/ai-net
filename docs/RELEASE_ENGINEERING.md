@@ -243,11 +243,11 @@ npm ci
 npx semantic-release --dry-run
 ```
 
-For a local Conventional Changelog preview, use the existing `.versionrc.json`
-type mappings:
+For a local Conventional Changelog preview, Standard Version reads the existing
+`.versionrc.json` type mappings in the repository root.
 
 ```bash
-npx --yes --package=conventional-changelog-cli --package=conventional-changelog-conventionalcommits conventional-changelog -p conventionalcommits -c .versionrc.json -o /tmp/ai-net-changelog.md
+npx --yes standard-version@9.5.0 --dry-run
 ```
 
 The root package currently has no `npm run release` or `npm run changelog`
