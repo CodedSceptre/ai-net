@@ -7,10 +7,16 @@ export type StatusFilter = 'all' | 'active' | 'inactive'
 export interface AgentFilters {
   /** Selected capabilities. An agent matches if it has at least one of these (OR). */
   capabilities: string[]
-  /** Inclusive lower bound on price, or null for no lower bound. */
+  /** Inclusive lower bound on price (XLM), or null for no lower bound. */
   priceMin: number | null
-  /** Inclusive upper bound on price, or null for no upper bound. */
+  /** Inclusive upper bound on price (XLM), or null for no upper bound. */
   priceMax: number | null
+  /** Inclusive lower bound on reputation (0–5), or null for no lower bound. */
+  repMin: number | null
+  /** Inclusive upper bound on reputation (0–5), or null for no upper bound. */
+  repMax: number | null
+  /** When true, only show agents with status === 'active'. */
+  availableOnly: boolean
   status: StatusFilter
   sortKey: SortKey | null
   sortDir: SortDir
@@ -20,9 +26,23 @@ export const DEFAULT_FILTERS: AgentFilters = {
   capabilities: [],
   priceMin: null,
   priceMax: null,
+  repMin: null,
+  repMax: null,
+  availableOnly: false,
   status: 'all',
   sortKey: null,
   sortDir: 'desc',
+}
+
+/** Returns the number of non-default filters currently applied. */
+export function countActiveFilters(filters: AgentFilters): number {
+  let count = 0
+  if (filters.capabilities.length > 0) count++
+  if (filters.priceMin != null || filters.priceMax != null) count++
+  if (filters.repMin != null || filters.repMax != null) count++
+  if (filters.availableOnly) count++
+  if (filters.status !== 'all') count++
+  return count
 }
 
 /**
@@ -100,6 +120,11 @@ export function filterAndSortAgents(
     if (filters.priceMin != null && agent.price < filters.priceMin) return false
     if (filters.priceMax != null && agent.price > filters.priceMax) return false
 
+    if (filters.repMin != null && agent.reputation < filters.repMin) return false
+    if (filters.repMax != null && agent.reputation > filters.repMax) return false
+
+    if (filters.availableOnly && agent.status !== 'active') return false
+
     if (filters.status !== 'all' && agent.status !== filters.status) return false
 
     return true
@@ -124,6 +149,9 @@ export function filtersToSearchParams(filters: AgentFilters): Record<string, str
   }
   if (filters.priceMin != null) params.pmin = String(filters.priceMin)
   if (filters.priceMax != null) params.pmax = String(filters.priceMax)
+  if (filters.repMin != null) params.rmin = String(filters.repMin)
+  if (filters.repMax != null) params.rmax = String(filters.repMax)
+  if (filters.availableOnly) params.available = '1'
   if (filters.status !== 'all') params.status = filters.status
   if (filters.sortKey) {
     params.sort = filters.sortKey
@@ -149,6 +177,9 @@ export function filtersFromSearchParams(params: URLSearchParams): AgentFilters {
     capabilities: caps ? caps.split(',').map((c) => c.trim()).filter(Boolean) : [],
     priceMin: parseNumber(params.get('pmin')),
     priceMax: parseNumber(params.get('pmax')),
+    repMin: parseNumber(params.get('rmin')),
+    repMax: parseNumber(params.get('rmax')),
+    availableOnly: params.get('available') === '1',
     status: status === 'active' || status === 'inactive' ? status : 'all',
     sortKey: sort === 'price' || sort === 'reputation' ? sort : null,
     sortDir: dir === 'asc' ? 'asc' : 'desc',

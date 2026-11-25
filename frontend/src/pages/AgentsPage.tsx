@@ -19,24 +19,20 @@
 
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useSearchParams, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { LayoutGrid, List, Users, Plus } from 'lucide-react'
 
 import { useAgentRegistry } from '../hooks/useAgentRegistry'
+import { useAgentFilters } from '../hooks/useAgentFilters'
 import { AgentTable } from '../components/agents/AgentTable'
-import { AgentFilterBar } from '../components/agents/AgentFilterBar'
+import { AgentFilterPanel } from '../components/agents/AgentFilterPanel'
 import { AgentDetailModal } from '../components/agents/AgentDetailModal'
 import { AgentRegistryCard } from '../components/agents/AgentRegistryCard'
 import { EmptyState } from '../components/common/EmptyState'
 import { Skeleton, SkeletonCard } from '../components/common/Skeleton'
 import type { AgentRecord } from '../types/api'
 import {
-  allCapabilities,
   filterAndSortAgents,
-  filtersFromSearchParams,
-  filtersToSearchParams,
-  priceDomain,
-  type AgentFilters,
   type SortKey,
 } from '../utils/agentRegistry'
 import styles from './AgentsPage.module.css'
@@ -148,27 +144,16 @@ function AgentsPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { agents, loading, error, refetch } = useAgentRegistry()
-  const [searchParams, setSearchParams] = useSearchParams()
   const [selected, setSelected] = useState<AgentRecord | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('card')
 
-  // Filter/sort state derived from URL
-  const filters = useMemo(
-    () => filtersFromSearchParams(searchParams),
-    [searchParams]
-  )
-
-  const updateFilters = useCallback(
-    (next: Partial<AgentFilters>) => {
-      const merged = { ...filters, ...next }
-      setSearchParams(filtersToSearchParams(merged), { replace: true })
-    },
-    [filters, setSearchParams]
-  )
-
-  const resetFilters = useCallback(() => {
-    setSearchParams({}, { replace: true })
-  }, [setSearchParams])
+  // Filter state lives in the URL via useAgentFilters
+  const {
+    filters,
+    activeFilterCount,
+    updateFilters,
+    clearFilters,
+  } = useAgentFilters()
 
   const handleSort = useCallback(
     (key: SortKey) => {
@@ -181,15 +166,11 @@ function AgentsPage() {
     [filters, updateFilters]
   )
 
-  const capabilities = useMemo(() => allCapabilities(agents), [agents])
-  const domain = useMemo(() => priceDomain(agents), [agents])
-  const visibleAgents = useMemo(
-    () => filterAndSortAgents(agents, filters),
+  const visibleAgents = useMemo(    () => filterAndSortAgents(agents, filters),
     [agents, filters]
   )
 
   const handleHire = useCallback((agent: AgentRecord) => {
-    // Navigate to task creation pre-filled with this agent
     navigate(`/tasks/new?agent=${encodeURIComponent(agent.id)}`)
   }, [navigate])
 
@@ -245,76 +226,78 @@ function AgentsPage() {
         <AgentsPageSkeleton />
       ) : (
         <div className="fade-in">
-          {/* Filter bar */}
-          <AgentFilterBar
-            filters={filters}
-            availableCapabilities={capabilities}
-            priceDomain={domain}
-            onChange={updateFilters}
-            onReset={resetFilters}
-            onRefresh={refetch}
-          />
-
-          {/* ── Card view ─────────────────────────────────────────────── */}
-          {viewMode === 'card' && (
-            <>
-              {visibleAgents.length === 0 ? (
-                <EmptyState
-                  icon={<Users size={40} />}
-                  title={t('agent.table.emptyTitle', { defaultValue: 'No agents found' })}
-                  description={
-                    agents.length === 0
-                      ? t('agent.table.emptySubtext', { defaultValue: 'No agents are registered yet. Be the first to register your agent.' })
-                      : t('page.agents.noMatchingAgents', { defaultValue: 'No agents match the current filters. Try adjusting or resetting them.' })
-                  }
-                  primaryAction={
-                    agents.length === 0
-                      ? {
-                          label: t('landing.hero.startTask', { defaultValue: 'Submit a Task' }),
-                          to: '/tasks/new',
-                          icon: <Plus size={16} />,
-                        }
-                      : {
-                          label: t('page.agents.resetFilters', { defaultValue: 'Reset Filters' }),
-                          onClick: resetFilters,
-                        }
-                  }
-                  data-testid="agents-empty"
-                />
-              ) : (
-                <div
-                  className={cardStyles.cardGrid}
-                  role="list"
-                  aria-label={t('nav.agentRegistry', { defaultValue: 'Agent Registry' })}
-                >
-                  {visibleAgents.map((agent) => (
-                    <div
-                      key={agent.id}
-                      role="listitem"
-                      data-testid={`agent-row-${agent.id}`}
-                    >
-                      <AgentRegistryCard
-                        agent={agent}
-                        onHire={handleHire}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-
-          {/* ── Table view ────────────────────────────────────────────── */}
-          {viewMode === 'table' && (
-            <AgentTable
-              agents={visibleAgents}
-              loading={loading}
-              sortKey={filters.sortKey}
-              sortDir={filters.sortDir}
-              onSort={handleSort}
-              onRowClick={setSelected}
+          {/* Filter panel + results layout */}
+          <div className={styles.contentLayout}>
+            <AgentFilterPanel
+              filters={filters}
+              activeFilterCount={activeFilterCount}
+              onUpdateFilters={updateFilters}
+              onClearFilters={clearFilters}
             />
-          )}
+
+            <div className={styles.resultsColumn}>
+              {/* ── Card view ─────────────────────────────────────────── */}
+              {viewMode === 'card' && (
+                <>
+                  {visibleAgents.length === 0 ? (
+                    <EmptyState
+                      icon={<Users size={40} />}
+                      title={t('agent.table.emptyTitle', { defaultValue: 'No agents found' })}
+                      description={
+                        agents.length === 0
+                          ? t('agent.table.emptySubtext', { defaultValue: 'No agents are registered yet. Be the first to register your agent.' })
+                          : t('page.agents.noMatchingAgents', { defaultValue: 'No agents match your filters. Try adjusting or resetting them.' })
+                      }
+                      primaryAction={
+                        agents.length === 0
+                          ? {
+                              label: t('landing.hero.startTask', { defaultValue: 'Submit a Task' }),
+                              to: '/tasks/new',
+                              icon: <Plus size={16} />,
+                            }
+                          : {
+                              label: t('page.agents.resetFilters', { defaultValue: 'Reset Filters' }),
+                              onClick: clearFilters,
+                            }
+                      }
+                      data-testid="agents-empty"
+                    />
+                  ) : (
+                    <div
+                      className={cardStyles.cardGrid}
+                      role="list"
+                      aria-label={t('nav.agentRegistry', { defaultValue: 'Agent Registry' })}
+                    >
+                      {visibleAgents.map((agent) => (
+                        <div
+                          key={agent.id}
+                          role="listitem"
+                          data-testid={`agent-row-${agent.id}`}
+                        >
+                          <AgentRegistryCard
+                            agent={agent}
+                            onHire={handleHire}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* ── Table view ────────────────────────────────────────── */}
+              {viewMode === 'table' && (
+                <AgentTable
+                  agents={visibleAgents}
+                  loading={loading}
+                  sortKey={filters.sortKey}
+                  sortDir={filters.sortDir}
+                  onSort={handleSort}
+                  onRowClick={setSelected}
+                />
+              )}
+            </div>
+          </div>
         </div>
       )}
 
