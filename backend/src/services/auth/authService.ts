@@ -175,6 +175,7 @@ export class AuthService {
     walletPublicKey: string;
     nonce: string;
     signature: string;
+    signatureScheme?: "raw" | "sep53";
     deviceId: string;
     ipAddress: string;
     userAgent: string;
@@ -186,10 +187,10 @@ export class AuthService {
       if (signature.length !== 64 || signature.toString("base64") !== params.signature) {
         throw new Error("Invalid signature encoding");
       }
-      valid = Keypair.fromPublicKey(params.walletPublicKey).verify(
-        Buffer.from(params.nonce, "utf8"),
-        signature,
-      );
+      const message = params.signatureScheme === "sep53"
+        ? crypto.createHash("sha256").update(`Stellar Signed Message:\n${params.nonce}`, "utf8").digest()
+        : Buffer.from(params.nonce, "utf8");
+      valid = Keypair.fromPublicKey(params.walletPublicKey).verify(message, signature);
     } catch {
       throw new AuthenticationError("Invalid wallet signature");
     }

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ai-net Freighter task quickstart</title>
+<h1>Submit an ai-net task</h1>
+<form>
+  <label>API origin <input id="api" type="url" value="http://localhost:3001" required></label>
+  <label>Prompt <textarea id="prompt" required>Summarize how Stellar accounts work.</textarea></label>
+  <button type="submit">Connect Freighter and submit</button>
+</form>
+<p id="install" hidden><a href="https://www.freighter.app/">Install Freighter</a>, then reload this page.</p>
+<pre id="output" aria-live="polite"></pre>
+<script type="module">
+  import { getNetwork, isConnected, requestAccess, signMessage } from
+    "https://esm.sh/@stellar/freighter-api@6.0.1";
+
+  const form = document.querySelector("form");
+  const output = document.querySelector("#output");
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const log = (line) => { output.textContent += line + "\n"; };
+  let stream;
+
+  async function request(base, path, options = {}) {
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(new URL(path, base), options);
+      if (response.status !== 429 || attempt === 4) return response;
+      const retry = Number(response.headers.get("Retry-After"));
+      await sleep(1000 * Math.max(2 ** attempt, Number.isFinite(retry) ? retry : 0));
+    }
+  }
+
+  async function json(response) {
+    const body = await response.json().catch(() => ({}));
+    if (response.ok) return body;
+    const code = body.error?.code ?? body.code;
+    const message = response.status >= 500 ? "Service unavailable" :
+      ({ 400: "Check the request fields", 401: "Reconnect your wallet",
+        403: "Wallet access denied", 429: "Request quota exhausted" }[response.status] ??
+        "Request failed");
+    throw new Error(`${message} (HTTP ${response.status}${code ? `, ${code}` : ""})`);
+  }
+
+  async function authenticate(base, address, networkPassphrase) {
+    const { nonce } = await json(await request(base, "/api/auth/challenge"));
+    const signed = await signMessage(nonce, { address, networkPassphrase });
+    if (signed.error || !signed.signedMessage || signed.signerAddress !== address) {
+      throw new Error(signed.error?.message ?? "Freighter signature was unavailable");
+    }
+    const signature = typeof signed.signedMessage === "string" ? signed.signedMessage :
+      btoa(String.fromCharCode(...signed.signedMessage));
+    const tokens = await json(await request(base, "/api/auth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        publicKey: address, nonce, signature, signatureScheme: "sep53", deviceId: "freighter-quickstart",
+      }),
+    }));
+    return tokens.accessToken;
+  }
+
+  function openStream(base, taskId, walletPublicKey) {
+    const url = new URL(`/tasks/${encodeURIComponent(taskId)}/stream`, base);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(url);
+    socket.onopen = () => socket.send(JSON.stringify({ walletPublicKey }));
+    socket.onmessage = ({ data }) => {
+      const event = JSON.parse(data);
+      switch (event.type) {
+        case "ping":
+          socket.send(JSON.stringify({ type: "pong" }));
+          break;
+        case "node_started":
+        case "node_completed":
+        case "node_failed":
+        case "payment_locked":
+        case "payment_released":
+        case "agent_failed_over":
+        case "agent_recovered":
+        case "agent_marked_offline":
+          log(JSON.stringify(event));
+          break;
+        case "task_completed":
+        case "task_failed":
+        case "task_cancelled":
+          log(JSON.stringify(event));
+          socket.close(1000);
+          break;
+        default:
+          log(`Unhandled event: ${event.type}`);
+      }
+    };
+    socket.onerror = () => log("Task stream connection failed");
+    socket.onclose = ({ code, reason }) => log(`Stream closed (${code}) ${reason}`);
+    return socket;
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button");
+    button.disabled = true;
+    stream?.close();
+    output.textContent = "";
+    try {
+      const base = document.querySelector("#api").value;
+      const connected = await isConnected();
+      document.querySelector("#install").hidden = connected.isConnected;
+      if (!connected.isConnected) return;
+
+      const access = await requestAccess();
+      if (access.error || !access.address) {
+        throw new Error(access.error?.message ?? "Freighter access was declined");
+      }
+      const { address } = access;
+      const network = await getNetwork();
+      if (network.error || !network.networkPassphrase) {
+        throw new Error(network.error?.message ?? "Select a Stellar network in Freighter");
+      }
+      let token = await authenticate(base, address, network.networkPassphrase);
+      const key = crypto.randomUUID();
+      const submit = () => request(base, "/api/tasks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json", Authorization: `Bearer ${token}`,
+          "API-Version": "1.0", "Idempotency-Key": key,
+        },
+        body: JSON.stringify({
+          prompt: document.querySelector("#prompt").value, walletPublicKey: address,
+          priority: "normal", maxBudgetXLM: 1, agentPreferences: [],
+        }),
+      });
+      let response = await submit();
+      if (response.status === 401) {
+        token = await authenticate(base, address, network.networkPassphrase);
+        response = await submit();
+      }
+      const { taskId } = await json(response);
+      log(`Accepted task ${taskId}`);
+      stream = openStream(base, taskId, address);
+    } catch (error) {
+      log(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
+</script>
+</html>
