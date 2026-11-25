@@ -24,4 +24,9 @@ pub enum Error {
     TimelockNotElapsed = 9,
     /// No pending fee change exists.
     NoPendingFeeChange = 10,
+    FeeTooHigh = 11,
+    FeeCollectionNotConfigured = 12,
+    InvalidAmount = 13,
+    InsufficientTreasuryBalance = 14,
+    TreasuryHasFunds = 15,
 }

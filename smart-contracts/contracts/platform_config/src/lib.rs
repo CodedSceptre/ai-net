@@ -29,7 +29,7 @@ mod errors;
 pub use errors::Error;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, Vec,
+    contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, Symbol, Vec,
 };
 
 // ─── Default parameter values ─────────────────────────────────────────────────
@@ -50,6 +50,9 @@ pub const DEFAULT_VOTING_PERIOD_LEDGERS: u32 = 10_080;
 pub const DEFAULT_QUORUM_THRESHOLD_BPS: u32 = 1_000;
 
 /// TTL extension threshold (ledgers remaining) — extend when below this.
+const DEFAULT_TREASURY_FEE_BPS: u32 = 100;
+const MAX_TREASURY_FEE_BPS: u32 = 500;
+const BPS_SCALE: i128 = 10_000;
 const TTL_THRESHOLD: u32 = 50_000;
 /// Target TTL after extension (14 days at 5 s/ledger: 241_920 ledgers).
 const TTL_EXTEND_TO: u32 = 241_920;
@@ -127,6 +130,18 @@ pub enum DataKey {
     QuorumThresholdBps,
     /// Threshold for specific multisig governance actions.
     ActionThreshold(soroban_sdk::Symbol),
+    FeeCollection,
+    FeeBasisPoints,
+    TreasuryBalance,
+}
+
+/// Trusted payment source, asset and governance account for the XLM fee path.
+#[contracttype]
+#[derive(Clone)]
+pub struct FeeCollectionConfig {
+    pub escrow: Address,
+    pub token: Address,
+    pub governance: Address,
 }
 
 // ─── Contract ────────────────────────────────────────────────────────────────
@@ -150,6 +165,35 @@ fn require_admin(env: &Env) -> Result<(), Error> {
     }
     // No single admin configured — contract is uninitialised.
     Err(Error::NotInitialized)
+}
+
+fn record_fee_total(env: &Env, fee: i128) {
+    if fee > 0 {
+        let current: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalFeesCollected)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalFeesCollected, &current.saturating_add(fee));
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+}
+
+fn fee_collection(env: &Env) -> Result<FeeCollectionConfig, Error> {
+    env.storage()
+        .instance()
+        .get(&DataKey::FeeCollection)
+        .ok_or(Error::FeeCollectionNotConfigured)
+}
+
+fn require_fee_governance(env: &Env) -> Result<(), Error> {
+    let config = fee_collection(env).map_err(|_| Error::Unauthorized)?;
+    config.governance.require_auth();
+    Ok(())
 }
 
 fn is_multisig_admin(env: &Env, addr: &Address) -> bool {
@@ -209,6 +253,9 @@ impl PlatformConfigContract {
             .instance()
             .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
 
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeBasisPoints, &DEFAULT_TREASURY_FEE_BPS);
         Ok(())
     }
 
@@ -232,11 +279,7 @@ impl PlatformConfigContract {
     /// is left to the calling governance contract.
     ///
     /// The current single admin must authorise this call.
-    pub fn set_multisig_admin(
-        env: Env,
-        admins: Vec<Address>,
-        threshold: u32,
-    ) -> Result<(), Error> {
+    pub fn set_multisig_admin(env: Env, admins: Vec<Address>, threshold: u32) -> Result<(), Error> {
         require_admin(&env)?;
 
         if admins.is_empty() {
@@ -261,9 +304,7 @@ impl PlatformConfigContract {
 
     /// Return the current multi-sig admin list, if configured.
     pub fn get_multisig_admins(env: Env) -> Option<Vec<Address>> {
-        env.storage()
-            .instance()
-            .get(&DataKey::MultisigAdmins)
+        env.storage().instance().get(&DataKey::MultisigAdmins)
     }
 
     // ── Configuration management ──────────────────────────────────────────────
@@ -274,7 +315,11 @@ impl PlatformConfigContract {
     /// call this function.
     ///
     /// Emits `(platform_cfg, cfg_upd)` with a [`ConfigUpdatedEvent`] payload.
-    pub fn update_config(env: Env, caller: Address, new_config: PlatformConfig) -> Result<(), Error> {
+    pub fn update_config(
+        env: Env,
+        caller: Address,
+        new_config: PlatformConfig,
+    ) -> Result<(), Error> {
         // Check initialisation.
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::NotInitialized);
@@ -346,8 +391,20 @@ impl PlatformConfigContract {
     pub fn set_treasury(env: Env, caller: Address, treasury: Address) -> Result<(), Error> {
         require_admin(&env)?;
         caller.require_auth();
+        if Self::get_treasury_balance(env.clone()) > 0 {
+            return Err(Error::TreasuryHasFunds);
+        }
+        if env.storage().instance().has(&DataKey::FeeCollection) {
+            let governance = fee_collection(&env)?.governance;
+            governance.require_auth();
+            if treasury != env.current_contract_address() && treasury != governance {
+                return Err(Error::Unauthorized);
+            }
+        }
         env.storage().instance().set(&DataKey::Treasury, &treasury);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -373,8 +430,12 @@ impl PlatformConfigContract {
             eta,
         };
 
-        env.storage().instance().set(&DataKey::PendingFeeChange, &pending);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingFeeChange, &pending);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
 
         env.events().publish(
             (symbol_short!("plt_cfg"), symbol_short!("fee_prop")),
@@ -404,7 +465,9 @@ impl PlatformConfigContract {
         config.platform_fee_bps = pending.new_fee_bps;
         env.storage().instance().set(&DataKey::Config, &config);
         env.storage().instance().remove(&DataKey::PendingFeeChange);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
 
         env.events().publish(
             (symbol_short!("plt_cfg"), symbol_short!("fee_app")),
@@ -424,7 +487,9 @@ impl PlatformConfigContract {
         }
 
         env.storage().instance().remove(&DataKey::PendingFeeChange);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -435,19 +500,152 @@ impl PlatformConfigContract {
 
     /// Record fees collected across protocol executions.
     pub fn record_fee_collected(env: Env, fee_amount: i128) -> Result<(), Error> {
-        if fee_amount <= 0 {
-            return Ok(());
+        if env.storage().instance().has(&DataKey::FeeCollection) {
+            return Err(Error::Unauthorized);
         }
-        let current: i128 = env.storage().instance().get(&DataKey::TotalFeesCollected).unwrap_or(0);
-        let updated = current.saturating_add(fee_amount);
-        env.storage().instance().set(&DataKey::TotalFeesCollected, &updated);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        record_fee_total(&env, fee_amount);
+        Ok(())
+    }
+    /// Query cumulative platform fees collected in stroops.
+    pub fn get_total_fees_collected(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalFeesCollected)
+            .unwrap_or(0)
+    }
+
+    /// Bind the funded escrow and native XLM SAC. Use a Stellar multisig or a
+    /// threshold-authenticated contract account as the governance address.
+    pub fn configure_fee_collection(
+        env: Env,
+        escrow: Address,
+        token: Address,
+        governance: Address,
+    ) -> Result<(), Error> {
+        require_admin(&env)?;
+        if env.storage().instance().has(&DataKey::FeeCollection) {
+            return Err(Error::AlreadyInitialized);
+        }
+        let treasury =
+            Self::get_treasury(env.clone()).unwrap_or_else(|| env.current_contract_address());
+        if treasury != env.current_contract_address() && treasury != governance {
+            return Err(Error::Unauthorized);
+        }
+        env.storage().instance().set(&DataKey::Treasury, &treasury);
+        governance.require_auth();
+        env.storage().instance().set(
+            &DataKey::FeeCollection,
+            &FeeCollectionConfig {
+                escrow,
+                token,
+                governance,
+            },
+        );
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
-    /// Query cumulative platform fees collected in stroops.
-    pub fn get_total_fees_collected(env: Env) -> i128 {
-        env.storage().instance().get(&DataKey::TotalFeesCollected).unwrap_or(0)
+    /// Return the token only when this platform is configured for the given escrow.
+    pub fn get_escrow_fee_token(env: Env, escrow: Address) -> Option<Address> {
+        let config = fee_collection(&env).ok()?;
+        (config.escrow == escrow).then_some(config.token)
+    }
+
+    /// Collect a fee from the configured escrow and return the amount charged.
+    pub fn collect_fee(env: Env, task_id: Bytes, release_amount: i128) -> Result<i128, Error> {
+        let config = fee_collection(&env).map_err(|_| Error::Unauthorized)?;
+        config.escrow.require_auth();
+        if release_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let bps = i128::from(Self::get_fee_bps(env.clone()));
+        let fee = release_amount / BPS_SCALE * bps + (release_amount % BPS_SCALE) * bps / BPS_SCALE;
+        let balance = Self::get_treasury_balance(env.clone())
+            .checked_add(fee)
+            .ok_or(Error::InvalidAmount)?;
+        if fee > 0 {
+            let treasury =
+                Self::get_treasury(env.clone()).ok_or(Error::FeeCollectionNotConfigured)?;
+            env.storage()
+                .instance()
+                .set(&DataKey::TreasuryBalance, &balance);
+            record_fee_total(&env, fee);
+            token::Client::new(&env, &config.token).transfer(&config.escrow, &treasury, &fee);
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.events()
+            .publish((Symbol::new(&env, "FeeCollected"), task_id), (fee, balance));
+        Ok(fee)
+    }
+
+    /// Set the fee for funded escrow releases with governance authorization.
+    pub fn update_fee_bps(env: Env, new_bps: u32) -> Result<(), Error> {
+        require_fee_governance(&env)?;
+        if new_bps > MAX_TREASURY_FEE_BPS {
+            return Err(Error::FeeTooHigh);
+        }
+        let old_bps = Self::get_fee_bps(env.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeBasisPoints, &new_bps);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.events()
+            .publish((Symbol::new(&env, "FeeRateUpdated"),), (old_bps, new_bps));
+        Ok(())
+    }
+
+    /// Withdraw collected fees with governance and treasury authorization.
+    pub fn withdraw_treasury(env: Env, to: Address, amount: i128) -> Result<(), Error> {
+        require_fee_governance(&env)?;
+        let balance = Self::get_treasury_balance(env.clone());
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if amount > balance {
+            return Err(Error::InsufficientTreasuryBalance);
+        }
+        let config = fee_collection(&env)?;
+        let treasury = Self::get_treasury(env.clone()).ok_or(Error::FeeCollectionNotConfigured)?;
+        if treasury == to {
+            return Err(Error::InvalidAmount);
+        }
+        if treasury != env.current_contract_address() {
+            treasury.require_auth();
+        }
+        let remaining = balance - amount;
+        env.storage()
+            .instance()
+            .set(&DataKey::TreasuryBalance, &remaining);
+        token::Client::new(&env, &config.token).transfer(&treasury, &to, &amount);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "TreasuryWithdrawal"), to),
+            (amount, remaining),
+        );
+        Ok(())
+    }
+
+    pub fn get_treasury_balance(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TreasuryBalance)
+            .unwrap_or(0)
+    }
+
+    pub fn get_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeBasisPoints)
+            .unwrap_or(DEFAULT_TREASURY_FEE_BPS)
     }
 
     // ── Governance Configuration (Issue #408) ────────────────────────────────
@@ -456,8 +654,12 @@ impl PlatformConfigContract {
     pub fn set_voting_period_ledgers(env: Env, caller: Address, period: u32) -> Result<(), Error> {
         require_admin(&env)?;
         caller.require_auth();
-        env.storage().instance().set(&DataKey::VotingPeriodLedgers, &period);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .set(&DataKey::VotingPeriodLedgers, &period);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -476,8 +678,12 @@ impl PlatformConfigContract {
         if bps > 10_000 {
             return Err(Error::InvalidPlatformFee); // reuse 10,000 max bound
         }
-        env.storage().instance().set(&DataKey::QuorumThresholdBps, &bps);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .set(&DataKey::QuorumThresholdBps, &bps);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -506,7 +712,9 @@ impl PlatformConfigContract {
         env.storage()
             .instance()
             .set(&DataKey::ActionThreshold(action_type), &threshold);
-        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
         Ok(())
     }
 
@@ -551,9 +759,15 @@ mod test {
     fn initialize_sets_defaults() {
         let f = fixture();
         let config = f.client.get_config();
-        assert_eq!(config.min_stake_per_capability, DEFAULT_MIN_STAKE_PER_CAPABILITY);
+        assert_eq!(
+            config.min_stake_per_capability,
+            DEFAULT_MIN_STAKE_PER_CAPABILITY
+        );
         assert_eq!(config.escrow_timeout_days, DEFAULT_ESCROW_TIMEOUT_DAYS);
-        assert_eq!(config.max_capabilities_per_agent, DEFAULT_MAX_CAPABILITIES_PER_AGENT);
+        assert_eq!(
+            config.max_capabilities_per_agent,
+            DEFAULT_MAX_CAPABILITIES_PER_AGENT
+        );
         assert_eq!(config.platform_fee_bps, DEFAULT_PLATFORM_FEE_BPS);
     }
 
@@ -574,9 +788,18 @@ mod test {
         let f = fixture();
         let config = f.client.get_config();
         assert_eq!(config.platform_fee_bps, DEFAULT_PLATFORM_FEE_BPS);
-        assert_eq!(f.client.get_min_stake_per_capability(), config.min_stake_per_capability);
-        assert_eq!(f.client.get_escrow_timeout_days(), config.escrow_timeout_days);
-        assert_eq!(f.client.get_max_capabilities_per_agent(), config.max_capabilities_per_agent);
+        assert_eq!(
+            f.client.get_min_stake_per_capability(),
+            config.min_stake_per_capability
+        );
+        assert_eq!(
+            f.client.get_escrow_timeout_days(),
+            config.escrow_timeout_days
+        );
+        assert_eq!(
+            f.client.get_max_capabilities_per_agent(),
+            config.max_capabilities_per_agent
+        );
         assert_eq!(f.client.get_platform_fee_bps(), config.platform_fee_bps);
     }
 
@@ -746,7 +969,9 @@ mod test {
         );
 
         // Advance past timelock (48 hours + 1 second)
-        f.env.ledger().with_mut(|l| l.timestamp = 1_000_000 + TIMELOCK_SECS + 1);
+        f.env
+            .ledger()
+            .with_mut(|l| l.timestamp = 1_000_000 + TIMELOCK_SECS + 1);
         f.client.apply_fee_change(&f.admin);
 
         assert_eq!(f.client.get_platform_fee_bps(), 100);
@@ -758,7 +983,9 @@ mod test {
         let f = fixture();
         f.env.ledger().with_mut(|l| l.timestamp = 1_000_000);
         f.client.propose_fee_change(&f.admin, &0);
-        f.env.ledger().with_mut(|l| l.timestamp = 1_000_000 + TIMELOCK_SECS + 1);
+        f.env
+            .ledger()
+            .with_mut(|l| l.timestamp = 1_000_000 + TIMELOCK_SECS + 1);
         f.client.apply_fee_change(&f.admin);
         assert_eq!(f.client.get_platform_fee_bps(), 0);
     }
@@ -777,12 +1004,18 @@ mod test {
     fn governance_and_multisig_config_extensions() {
         let f = fixture();
         // Voting period (Issue #408)
-        assert_eq!(f.client.get_voting_period_ledgers(), DEFAULT_VOTING_PERIOD_LEDGERS);
+        assert_eq!(
+            f.client.get_voting_period_ledgers(),
+            DEFAULT_VOTING_PERIOD_LEDGERS
+        );
         f.client.set_voting_period_ledgers(&f.admin, &20_000);
         assert_eq!(f.client.get_voting_period_ledgers(), 20_000);
 
         // Quorum (Issue #408)
-        assert_eq!(f.client.get_quorum_threshold_bps(), DEFAULT_QUORUM_THRESHOLD_BPS);
+        assert_eq!(
+            f.client.get_quorum_threshold_bps(),
+            DEFAULT_QUORUM_THRESHOLD_BPS
+        );
         f.client.set_quorum_threshold_bps(&f.admin, &1_500);
         assert_eq!(f.client.get_quorum_threshold_bps(), 1_500);
 
@@ -790,5 +1023,77 @@ mod test {
         let upgrade_sym = soroban_sdk::Symbol::new(&f.env, "upgrade");
         f.client.set_action_threshold(&f.admin, &upgrade_sym, &3);
         assert_eq!(f.client.get_action_threshold(&upgrade_sym), 3);
+    }
+}
+
+#[cfg(test)]
+mod treasury_tests {
+    use super::*;
+    use soroban_sdk::{
+        testutils::{Address as _, Events as _},
+        IntoVal,
+    };
+
+    #[test]
+    fn charges_fees_in_stroops_and_accounts_for_withdrawals() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let escrow = Address::generate(&env);
+        let receiver = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let id = env.register(PlatformConfigContract, ());
+        let client = PlatformConfigContractClient::new(&env, &id);
+        client.initialize(&admin);
+        assert_eq!(client.get_fee_bps(), 100);
+        assert_eq!(
+            client.try_update_fee_bps(&500),
+            Err(Ok(Error::Unauthorized))
+        );
+        assert_eq!(
+            client.try_withdraw_treasury(&receiver, &1),
+            Err(Ok(Error::Unauthorized))
+        );
+        client.set_treasury(&admin, &treasury);
+        client.configure_fee_collection(&escrow, &token_id, &treasury);
+        assert_eq!(client.try_update_fee_bps(&501), Err(Ok(Error::FeeTooHigh)));
+        env.set_auths(&[]);
+        assert!(client.try_update_fee_bps(&500).is_err());
+        assert!(client.try_withdraw_treasury(&receiver, &1).is_err());
+        env.mock_all_auths();
+        token::StellarAssetClient::new(&env, &token_id).mint(&escrow, &10_000_000_000);
+
+        let task_id = Bytes::from_slice(&env, b"task");
+        let mut total = 0_i128;
+        for (bps, amount, fee) in [
+            (100, 10_000_000_000_i128, 100_000_000_i128),
+            (500, 10_000_000, 500_000),
+            (1, 10_000_000, 1_000),
+            (1, 1, 0),
+        ] {
+            client.update_fee_bps(&bps);
+            assert_eq!(client.collect_fee(&task_id, &amount), fee);
+            total += fee;
+            assert_eq!(client.get_treasury_balance(), total);
+            assert!(env.events().all().iter().any(|(contract, topics, data)| {
+                contract == id
+                    && topics
+                        == soroban_sdk::vec![
+                            &env,
+                            Symbol::new(&env, "FeeCollected").into_val(&env),
+                            task_id.clone().into_val(&env)
+                        ]
+                    && <_ as soroban_sdk::TryFromVal<Env, _>>::try_from_val(&env, &data)
+                        == Ok((fee, total))
+            }));
+        }
+        client.withdraw_treasury(&receiver, &total);
+        assert_eq!(client.get_treasury_balance(), 0);
+        let token = token::Client::new(&env, &token_id);
+        assert_eq!(token.balance(&receiver), total);
+        assert_eq!(token.balance(&treasury), 0);
     }
 }
