@@ -477,6 +477,8 @@ docker compose stop --timeout 30 ainet-node
 
 ## 11. Backup & Disaster Recovery
 
+> 📖 **Incident Response:** For structured recovery procedures during active production incidents — including database corruption, agent fleet failures, Horizon/Venice AI outages, stuck escrow, and full-cluster recovery — see the **[Disaster Recovery Runbook](./DISASTER_RECOVERY_RUNBOOK.md)**. It provides Symptoms → Diagnosis → Recovery → Verification steps, RTO targets, an escalation matrix, and a post-incident review checklist.
+
 ### 11.1 PostgreSQL Database Backups
 
 Schedule regular automated database backups using `pg_dump`:
