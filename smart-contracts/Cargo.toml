@@ -11,6 +11,7 @@ members = [
     "contracts/multisig_governance",
     "contracts/platform_config",
     "contracts/agent_marketplace",
+    "contracts/reputation",
 ]
 resolver = "2"
 

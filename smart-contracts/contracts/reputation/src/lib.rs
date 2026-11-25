@@ -36,7 +36,8 @@ mod errors;
 pub use errors::Error;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, Map, Symbol,
+    TryFromVal, Val, Vec,
 };
 
 // ─── Scoring constants ────────────────────────────────────────────────────────
@@ -51,6 +52,8 @@ pub const FIVE_STAR_MULTIPLIER_BPS: i64 = 150;
 pub const DECAY_RATE_BPS: i64 = 500;
 /// Seconds per week (7 × 86_400).
 pub const SECONDS_PER_WEEK: u64 = 604_800;
+/// The 1.00 point decay floor in the stored ×100 representation.
+pub const DECAY_FLOOR: i64 = 100;
 /// Initial score for a first-time agent (scaled ×100).
 pub const INITIAL_SCORE: i64 = 5_000; // 50.00 points
 
@@ -76,6 +79,23 @@ pub struct ReputationScore {
     pub last_activity: u64,
     /// UNIX timestamp (seconds) of the most recent decay application.
     pub last_decay_at: u64,
+    pub last_task_completed_at: u64,
+    pub next_decay_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecaySchedule {
+    pub next_decay_at: u64,
+    pub score: i64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecayApplied {
+    pub agent_id: Address,
+    pub old_score: i64,
+    pub new_score: i64,
 }
 
 /// Event emitted when an outcome is recorded for an agent.
@@ -108,6 +128,7 @@ pub enum DataKey {
     AuthorizedCallers,
     /// Reputation record for an agent.
     Reputation(Symbol),
+    AgentAddress(Address),
 }
 
 // ─── Contract ────────────────────────────────────────────────────────────────
@@ -134,31 +155,54 @@ fn is_authorized_caller(env: &Env, addr: &Address) -> bool {
     callers.contains(addr)
 }
 
-fn load_or_create_score(env: &Env, agent_id: &Symbol) -> ReputationScore {
-    env.storage()
+fn read_score(env: &Env, agent_id: &Symbol) -> Option<ReputationScore> {
+    let mut fields: Map<Symbol, Val> = env
+        .storage()
         .persistent()
-        .get(&DataKey::Reputation(agent_id.clone()))
-        .unwrap_or_else(|| ReputationScore {
-            agent_id: agent_id.clone(),
-            score: INITIAL_SCORE,
-            successful_tasks: 0,
-            failed_tasks: 0,
-            last_activity: env.ledger().timestamp(),
-            last_decay_at: env.ledger().timestamp(),
-        })
+        .get(&DataKey::Reputation(agent_id.clone()))?;
+    let completed = Symbol::new(env, "last_task_completed_at");
+    if !fields.contains_key(completed.clone()) {
+        // Legacy records did not distinguish the last success from the last outcome.
+        let activity = fields.get(Symbol::new(env, "last_activity"))?;
+        let activity = u64::try_from_val(env, &activity).ok()?;
+        let last_decay = fields.get(Symbol::new(env, "last_decay_at"))?;
+        let last_decay = u64::try_from_val(env, &last_decay).ok()?;
+        fields.set(completed, activity.into_val(env));
+        fields.set(
+            Symbol::new(env, "next_decay_at"),
+            activity
+                .max(last_decay)
+                .saturating_add(SECONDS_PER_WEEK)
+                .into_val(env),
+        );
+    }
+    let value: Val = fields.into_val(env);
+    ReputationScore::try_from_val(env, &value).ok()
+}
+
+fn load_or_create_score(env: &Env, agent_id: &Symbol) -> ReputationScore {
+    let now = env.ledger().timestamp();
+    read_score(env, agent_id).unwrap_or_else(|| ReputationScore {
+        agent_id: agent_id.clone(),
+        score: INITIAL_SCORE,
+        successful_tasks: 0,
+        failed_tasks: 0,
+        last_activity: now,
+        last_decay_at: now,
+        last_task_completed_at: now,
+        next_decay_at: now.saturating_add(SECONDS_PER_WEEK),
+    })
 }
 
 fn save_score(env: &Env, score: &ReputationScore) {
     env.storage()
         .persistent()
         .set(&DataKey::Reputation(score.agent_id.clone()), score);
-    env.storage()
-        .persistent()
-        .extend_ttl(
-            &DataKey::Reputation(score.agent_id.clone()),
-            TTL_THRESHOLD,
-            TTL_EXTEND_TO,
-        );
+    env.storage().persistent().extend_ttl(
+        &DataKey::Reputation(score.agent_id.clone()),
+        TTL_THRESHOLD,
+        TTL_EXTEND_TO,
+    );
 }
 
 /// Apply compound time-decay for `weeks_elapsed` weeks:
@@ -171,10 +215,12 @@ fn apply_decay(score: i64, weeks_elapsed: u64) -> i64 {
     }
     let mut s = score;
     for _ in 0..weeks_elapsed {
-        // s *= (10_000 - DECAY_RATE_BPS) / 10_000
-        s = s * (10_000 - DECAY_RATE_BPS) / 10_000;
+        if s <= DECAY_FLOOR {
+            break;
+        }
+        s = (i128::from(s) * i128::from(10_000 - DECAY_RATE_BPS) / 10_000) as i64;
     }
-    s.max(0)
+    s.max(DECAY_FLOOR)
 }
 
 // ─── Implementation ───────────────────────────────────────────────────────────
@@ -326,6 +372,8 @@ impl ReputationContract {
 
         if success {
             rep.successful_tasks += 1;
+            rep.last_task_completed_at = env.ledger().timestamp();
+            rep.next_decay_at = rep.last_task_completed_at.saturating_add(SECONDS_PER_WEEK);
         } else {
             rep.failed_tasks += 1;
         }
@@ -347,45 +395,93 @@ impl ReputationContract {
         Ok(())
     }
 
-    /// Apply time-decay to an agent's reputation score.
-    ///
-    /// Calculates the number of complete weeks since the last decay and
-    /// applies 5 % compound decay per week.
-    ///
-    /// This function is **permissionless** — any caller may invoke it (e.g.,
-    /// a cron operator or the agent themselves).
-    ///
-    /// Emits `(reputation, decayed)` if any decay was applied.
+    /// Associate the heartbeat system's address with an existing reputation ID.
+    pub fn set_agent_address(env: Env, agent: Address, agent_id: Symbol) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        let key = DataKey::AgentAddress(agent);
+        let storage = env.storage().persistent();
+        storage.set(&key, &agent_id);
+        storage.extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Ok(())
+    }
+
+    /// Apply deterministic inactivity decay for the heartbeat system.
+    pub fn apply_decay(env: Env, agent_id: Address) -> Result<(), Error> {
+        let key = DataKey::AgentAddress(agent_id.clone());
+        let stored_id = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::AgentNotFound)?;
+        if let Some(event) = Self::decay(&env, stored_id)? {
+            env.events().publish(
+                (symbol_short!("reputat"), Symbol::new(&env, "decay_applied")),
+                DecayApplied {
+                    agent_id,
+                    old_score: event.old_score,
+                    new_score: event.new_score,
+                },
+            );
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        }
+        Ok(())
+    }
+
+    pub fn get_decay_schedule(env: Env, agent_id: Address) -> Result<DecaySchedule, Error> {
+        let stored_id = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AgentAddress(agent_id))
+            .ok_or(Error::AgentNotFound)?;
+        let record = Self::get_reputation(env, stored_id)?;
+        Ok(DecaySchedule {
+            next_decay_at: record.next_decay_at,
+            score: record.score,
+        })
+    }
+
+    /// Apply the same inactivity schedule through the existing Symbol API.
     pub fn decay_reputation(env: Env, agent_id: Symbol) -> Result<(), Error> {
         require_initialized(&env)?;
+        if let Some(event) = Self::decay(&env, agent_id)? {
+            env.events()
+                .publish((symbol_short!("reputat"), symbol_short!("decayed")), event);
+        }
+        Ok(())
+    }
 
-        let mut rep = load_or_create_score(&env, &agent_id);
-
+    fn decay(env: &Env, agent_id: Symbol) -> Result<Option<ReputationDecayedEvent>, Error> {
+        let mut rep = read_score(env, &agent_id).ok_or(Error::AgentNotFound)?;
         let now = env.ledger().timestamp();
-        let elapsed_secs = now.saturating_sub(rep.last_decay_at);
-        let weeks_elapsed = elapsed_secs / SECONDS_PER_WEEK;
+        if now < rep.next_decay_at {
+            return Ok(None);
+        }
 
+        let elapsed_from = rep.last_decay_at.max(rep.last_task_completed_at);
+        let weeks_elapsed = now.saturating_sub(elapsed_from) / SECONDS_PER_WEEK;
         if weeks_elapsed == 0 {
-            return Ok(());
+            return Ok(None);
         }
 
         let old_score = rep.score;
         rep.score = apply_decay(old_score, weeks_elapsed);
-        rep.last_decay_at = rep.last_decay_at + weeks_elapsed * SECONDS_PER_WEEK;
+        rep.last_decay_at = now;
+        rep.next_decay_at = now.saturating_add(SECONDS_PER_WEEK);
+        save_score(env, &rep);
 
-        save_score(&env, &rep);
-
-        env.events().publish(
-            (symbol_short!("reputat"), symbol_short!("decayed")),
-            ReputationDecayedEvent {
-                agent_id,
-                old_score,
-                new_score: rep.score,
-                weeks_elapsed,
-            },
-        );
-
-        Ok(())
+        Ok(Some(ReputationDecayedEvent {
+            agent_id,
+            old_score,
+            new_score: rep.score,
+            weeks_elapsed,
+        }))
     }
 
     // ── Query functions ───────────────────────────────────────────────────────
@@ -393,17 +489,12 @@ impl ReputationContract {
     /// Return the full reputation record for an agent.
     pub fn get_reputation(env: Env, agent_id: Symbol) -> Result<ReputationScore, Error> {
         require_initialized(&env)?;
-        env.storage()
-            .persistent()
-            .get(&DataKey::Reputation(agent_id))
-            .ok_or(Error::AgentNotFound)
+        read_score(&env, &agent_id).ok_or(Error::AgentNotFound)
     }
 
     /// Return the current score for an agent (scaled ×100).
     pub fn get_score(env: Env, agent_id: Symbol) -> i64 {
-        env.storage()
-            .persistent()
-            .get::<DataKey, ReputationScore>(&DataKey::Reputation(agent_id))
+        read_score(&env, &agent_id)
             .map(|r| r.score)
             .unwrap_or(INITIAL_SCORE)
     }
@@ -588,6 +679,53 @@ mod test {
         let after = client.get_reputation(&a).score;
         let expected = apply_decay(before, 3);
         assert_eq!(after, expected);
+    }
+
+    #[test]
+    fn heartbeat_applies_exact_periods_and_floor() {
+        for (periods, expected) in [(1, 5_700), (2, 5_415), (3, 5_144), (500, DECAY_FLOOR)] {
+            let (env, client, _, caller) = make_fixture();
+            let id = agent(&env);
+            let address = Address::generate(&env);
+            client.set_agent_address(&address, &id);
+            client.record_outcome(&caller, &id, &task(&env), &true, &0);
+            env.ledger()
+                .with_mut(|ledger| ledger.timestamp += periods * SECONDS_PER_WEEK);
+            client.apply_decay(&address);
+            let last_event = env.events().all().last().unwrap();
+            assert_eq!(
+                DecayApplied::try_from_val(&env, &last_event.2).unwrap(),
+                DecayApplied {
+                    agent_id: address.clone(),
+                    old_score: 6_000,
+                    new_score: expected,
+                }
+            );
+            let schedule = client.get_decay_schedule(&address);
+            assert_eq!(schedule.score, expected);
+            assert_eq!(
+                schedule.next_decay_at,
+                env.ledger().timestamp() + SECONDS_PER_WEEK
+            );
+            client.apply_decay(&address);
+            assert_eq!(client.get_decay_schedule(&address), schedule);
+        }
+    }
+
+    #[test]
+    fn successful_completion_restarts_the_clock() {
+        let (env, client, _, caller) = make_fixture();
+        let id = agent(&env);
+        let address = Address::generate(&env);
+        client.set_agent_address(&address, &id);
+        client.record_outcome(&caller, &id, &task(&env), &true, &0);
+        env.ledger()
+            .with_mut(|ledger| ledger.timestamp += SECONDS_PER_WEEK);
+        client.record_outcome(&caller, &id, &task(&env), &true, &0);
+        env.ledger()
+            .with_mut(|ledger| ledger.timestamp += 3 * 86_400);
+        client.apply_decay(&address);
+        assert_eq!(client.get_decay_schedule(&address).score, 7_000);
     }
 
     // ── get_reputation ────────────────────────────────────────────────────────
