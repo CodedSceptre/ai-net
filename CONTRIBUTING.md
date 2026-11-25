@@ -24,6 +24,8 @@ This handbook establishes our **Software Development Life Cycle (SDLC)**, branch
 - **Safety on Stellar**: Smart contracts manage value. We adhere to defensive programming, minimal state footprint, and strict authorization patterns.
 - **Deterministic & Modular**: AI Agent coordination workflows should be reproducible, idempotent, and resilient to LLM timeouts.
 
+For consistent terminology across the codebase and documentation, consult the **[Glossary](docs/GLOSSARY.md)** before introducing new terms.
+
 ---
 
 ## 1.1 Local Git Hooks
@@ -52,14 +54,14 @@ npx husky install
 
 All branches must follow standardized prefixes with an optional issue number:
 
-| Type | Prefix Format | Example | Purpose |
-|---|---|---|---|
-| **Features** | `feat/<short-name>-<issue>` | `feat/paginated-registry-339` | New smart contract or backend feature |
-| **Bug Fixes** | `fix/<short-name>-<issue>` | `fix/cursor-nonce-recovery-241` | Bug or edge-case resolution |
-| **Documentation** | `docs/<topic>-<issue>` | `docs/node-operators-guide-342` | New or updated documentation |
-| **Performance** | `perf/<optimization>-<issue>` | `perf/storage-compaction-335` | Gas optimization or caching improvements |
-| **Refactoring** | `refactor/<name>` | `refactor/venice-client-pool` | Code restructuring without behavior changes |
-| **Testing** | `test/<suite>-<issue>` | `test/e2e-escrow-flow-180` | Adding or fixing test suites |
+| Type              | Prefix Format                 | Example                         | Purpose                                     |
+| ----------------- | ----------------------------- | ------------------------------- | ------------------------------------------- |
+| **Features**      | `feat/<short-name>-<issue>`   | `feat/paginated-registry-339`   | New smart contract or backend feature       |
+| **Bug Fixes**     | `fix/<short-name>-<issue>`    | `fix/cursor-nonce-recovery-241` | Bug or edge-case resolution                 |
+| **Documentation** | `docs/<topic>-<issue>`        | `docs/node-operators-guide-342` | New or updated documentation                |
+| **Performance**   | `perf/<optimization>-<issue>` | `perf/storage-compaction-335`   | Gas optimization or caching improvements    |
+| **Refactoring**   | `refactor/<name>`             | `refactor/venice-client-pool`   | Code restructuring without behavior changes |
+| **Testing**       | `test/<suite>-<issue>`        | `test/e2e-escrow-flow-180`      | Adding or fixing test suites                |
 
 ```bash
 # Example branch creation:
@@ -92,12 +94,14 @@ Every commit message and PR title must adhere to [Conventional Commits 1.0.0](ht
 - `ci`: Changes to CI/CD workflows and automation scripts.
 
 ### Common Scopes
+
 - `contracts`: Soroban smart contracts (`agent-registry`, `payment-escrow`, `error-resolver`, etc.).
 - `backend`: Node.js/TypeScript coordinator, API routes, and database models.
 - `frontend`: Next.js web application and dashboard.
 - `sdk`: Client libraries.
 
 ### Commit Examples
+
 - `feat(contracts): add paginated agent listing with cursor (#339)`
 - `fix(backend): resolve nonce desynchronization on concurrent escrow releases (#214)`
 - `docs: publish comprehensive user-facing node operators guide (#342)`
@@ -118,6 +122,7 @@ Every commit message and PR title must adhere to [Conventional Commits 1.0.0](ht
 5. **CI Automation**: All GitHub Actions workflows (`backend`, `contracts`, `contracts-lint`) must be green.
 
 ### Review Expectations & SLOs
+
 - Maintainers aim to review active PRs within **24–48 hours**.
 - Authors are expected to address review feedback within **3 business days**.
 
@@ -136,12 +141,14 @@ npm run check:quality
 ```
 
 This single command automatically executes:
+
 1. **Formatting check** (`prettier --check`)
 2. **Linting** (`eslint` across backend and frontend)
 3. **Type-checking** (`tsc --noEmit` across root, backend, and frontend)
 4. **Test coverage thresholds** (Jest ≥75% coverage on backend, Vitest ≥70% coverage on frontend)
 
 #### Individual Quality Sub-Commands
+
 ```bash
 npm run format:check   # Prettier format check across all files
 npm run format:fix     # Automatically fix formatting issues
@@ -151,6 +158,7 @@ npm run test:coverage  # Run test suites with coverage thresholds
 ```
 
 ### 5.2 Backend (Node.js & TypeScript)
+
 ```bash
 cd backend
 npm ci
@@ -161,6 +169,7 @@ npm run test:coverage  # Jest coverage with thresholds
 ```
 
 ### 5.3 Frontend (React & Vite)
+
 ```bash
 cd frontend
 npm ci
@@ -172,6 +181,7 @@ npm run build          # Production bundle compilation
 ```
 
 ### 5.4 Smart Contracts (Rust & Soroban)
+
 ```bash
 cd smart-contracts
 cargo fmt --all -- --check          # Formatting check
@@ -187,6 +197,7 @@ cargo build --target wasm32v1-none --release # Optimized Wasm build
 Before marking a PR as ready for review:
 
 ### For Authors
+
 - [ ] PR title follows Conventional Commits format.
 - [ ] Code builds without warnings (`cargo check`, `npm run build`).
 - [ ] Unit test coverage covers happy paths, edge cases, and error boundaries.
@@ -194,6 +205,7 @@ Before marking a PR as ready for review:
 - [ ] Documentation updated if API or contract interfaces changed.
 
 ### For Reviewers
+
 - [ ] Architecture aligns with system design and existing layers.
 - [ ] Storage and gas costs on Soroban are bounded and minimized.
 - [ ] Database queries are parameterized and indexed.
