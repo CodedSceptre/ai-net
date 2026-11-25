@@ -239,14 +239,15 @@ Release reads `.releaserc.json`. Use the release workflow's preview command
 from a full checkout of the release branch with the required GitHub access:
 
 ```bash
-npx --yes --package=semantic-release --package=conventional-changelog-conventionalcommits   semantic-release --dry-run
+npm ci
+npx semantic-release --dry-run
 ```
 
 For a local Conventional Changelog preview, use the existing `.versionrc.json`
 type mappings:
 
 ```bash
-npx --yes --package=conventional-changelog-cli --package=conventional-changelog-conventionalcommits   conventional-changelog -p conventionalcommits -c .versionrc.json -o /tmp/ai-net-changelog.md
+npx --yes --package=conventional-changelog-cli --package=conventional-changelog-conventionalcommits conventional-changelog -p conventionalcommits -c .versionrc.json -o /tmp/ai-net-changelog.md
 ```
 
 The root package currently has no `npm run release` or `npm run changelog`
