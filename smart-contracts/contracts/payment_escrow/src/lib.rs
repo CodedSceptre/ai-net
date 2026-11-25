@@ -21,7 +21,8 @@
 //! automatically — the coordinator auth check is bypassed for expired escrows.
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, Map,
+    Symbol, TryFromVal, Val,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -70,6 +71,7 @@ pub enum Error {
     TreasuryNotConfigured = 7,
     /// Invalid fee basis points (must be <= 10_000).
     InvalidFeeBps = 8,
+    MinimumLockPeriodNotMet = 9,
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -93,10 +95,20 @@ pub struct EscrowRecord {
     pub agent: Address,
     /// Ledger timestamp at which this escrow was locked.
     pub locked_at: u64,
+    /// Ledger sequence at which the escrow was locked.
+    pub lock_ledger: u32,
     /// Ledger timestamp after which this escrow auto-refunds.
     pub expires_at: u64,
     /// Current lifecycle status.
     pub status: EscrowStatus,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FlashLoanAttemptDetected {
+    pub escrow_id: (Symbol, Symbol),
+    pub lock_ledger: u32,
+    pub attempted_release_ledger: u32,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -172,25 +184,35 @@ impl PaymentEscrowContract {
         if fee_bps > 10_000 {
             return Err(Error::InvalidFeeBps);
         }
-        env.storage().instance().set(&DataKey::PlatformFeeBps, &fee_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::PlatformFeeBps, &fee_bps);
         Ok(())
     }
 
     /// Get configured platform fee in basis points.
     pub fn get_platform_fee_bps(env: Env) -> u32 {
-        env.storage().instance().get(&DataKey::PlatformFeeBps).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DataKey::PlatformFeeBps)
+            .unwrap_or(0)
     }
 
     /// Get total platform fees collected in stroops.
     pub fn get_total_fees_collected(env: Env) -> i128 {
-        env.storage().instance().get(&DataKey::TotalFeesCollected).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalFeesCollected)
+            .unwrap_or(0)
     }
 
     /// Set platform config contract address (coordinator only).
     pub fn set_platform_config(env: Env, platform_config: Address) -> Result<(), Error> {
         let coordinator = Self::read_coordinator(&env)?;
         coordinator.require_auth();
-        env.storage().instance().set(&DataKey::PlatformConfig, &platform_config);
+        env.storage()
+            .instance()
+            .set(&DataKey::PlatformConfig, &platform_config);
         Ok(())
     }
 
@@ -224,6 +246,7 @@ impl PaymentEscrowContract {
             submitter,
             agent,
             locked_at: now,
+            lock_ledger: env.ledger().sequence(),
             expires_at: now + ESCROW_TIMEOUT_SECS,
             status: EscrowStatus::Locked,
         };
@@ -245,8 +268,9 @@ impl PaymentEscrowContract {
         coordinator.require_auth();
 
         let key = DataKey::Escrow(task_id.clone(), node_id.clone());
-        let mut record: EscrowRecord =
-            env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        let mut record = Self::read_escrow(&env, &key)?;
+
+        Self::require_lock_period(&env, &task_id, &node_id, record.lock_ledger)?;
 
         // Releasing after timeout is not allowed — caller should call
         // refund_funds instead once the escrow has expired.
@@ -298,16 +322,11 @@ impl PaymentEscrowContract {
 
     /// Refund the locked funds back to the submitter.
     ///
-    /// The coordinator may call this at any time. After the timeout,
+    /// The coordinator may call this once two ledgers have passed. After the timeout,
     /// *anyone* may call this (auto-refund path).
-    pub fn refund_funds(
-        env: Env,
-        task_id: Symbol,
-        node_id: Symbol,
-    ) -> Result<EscrowRecord, Error> {
+    pub fn refund_funds(env: Env, task_id: Symbol, node_id: Symbol) -> Result<EscrowRecord, Error> {
         let key = DataKey::Escrow(task_id.clone(), node_id.clone());
-        let mut record: EscrowRecord =
-            env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        let mut record = Self::read_escrow(&env, &key)?;
 
         let now = env.ledger().timestamp();
         let is_expired = now >= record.expires_at;
@@ -319,6 +338,8 @@ impl PaymentEscrowContract {
         }
         // After timeout: no auth required — anyone can trigger auto-refund.
 
+        Self::require_lock_period(&env, &task_id, &node_id, record.lock_ledger)?;
+
         record.status = EscrowStatus::Refunded;
         env.storage().persistent().set(&key, &record);
         emit_refunded(&env, &task_id, &node_id, record.amount);
@@ -326,16 +347,50 @@ impl PaymentEscrowContract {
     }
 
     /// Read the current escrow record without mutating it.
-    pub fn get_escrow(
-        env: Env,
-        task_id: Symbol,
-        node_id: Symbol,
-    ) -> Result<EscrowRecord, Error> {
+    pub fn get_escrow(env: Env, task_id: Symbol, node_id: Symbol) -> Result<EscrowRecord, Error> {
         let key = DataKey::Escrow(task_id, node_id);
-        env.storage().persistent().get(&key).ok_or(Error::NotFound)
+        Self::read_escrow(&env, &key)
     }
 
     // ── Internals ─────────────────────────────────────────────────────────────
+
+    fn read_escrow(env: &Env, key: &DataKey) -> Result<EscrowRecord, Error> {
+        // Existing records predate this field. Their original sequence is
+        // unavailable, so treat them as historical escrows.
+        let mut fields: Map<Symbol, Val> =
+            env.storage().persistent().get(key).ok_or(Error::NotFound)?;
+        let lock_ledger = Symbol::new(env, "lock_ledger");
+        if !fields.contains_key(lock_ledger.clone()) {
+            fields.set(lock_ledger, 0_u32.into_val(env));
+        }
+        let value: Val = fields.into_val(env);
+        EscrowRecord::try_from_val(env, &value).map_err(|_| Error::NotFound)
+    }
+
+    fn require_lock_period(
+        env: &Env,
+        task_id: &Symbol,
+        node_id: &Symbol,
+        lock_ledger: u32,
+    ) -> Result<(), Error> {
+        let attempted_release_ledger = env.ledger().sequence();
+        if attempted_release_ledger.saturating_sub(lock_ledger) < 2 {
+            // Failed invocations only expose this event in diagnostic traces.
+            env.events().publish(
+                (
+                    symbol_short!("escrow"),
+                    Symbol::new(env, "flash_loan_attempt_detected"),
+                ),
+                FlashLoanAttemptDetected {
+                    escrow_id: (task_id.clone(), node_id.clone()),
+                    lock_ledger,
+                    attempted_release_ledger,
+                },
+            );
+            return Err(Error::MinimumLockPeriodNotMet);
+        }
+        Ok(())
+    }
 
     fn read_coordinator(env: &Env) -> Result<Address, Error> {
         env.storage()
