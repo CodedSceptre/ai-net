@@ -144,7 +144,7 @@ fn apply_allowlist_op(env: &Env, op: &PendingOp) -> Result<(), ContractError> {
             allowlist.push_back(op.target.clone());
         }
     } else {
-        let mut updated = Vec::new(&env);
+        let mut updated = Vec::new(env);
         for c in allowlist.iter() {
             if c != op.target {
                 updated.push_back(c);
@@ -234,12 +234,7 @@ impl ErrorResolverContract {
             .instance()
             .get(&DataKey::PendingOps)
             .unwrap_or_else(|| Vec::new(&env));
-        for op in ops.iter() {
-            if op.op_id == op_id {
-                return Some(op);
-            }
-        }
-        None
+        ops.iter().find(|op| op.op_id == op_id)
     }
 
     /// Sets the quorum threshold. Only the admin can call this.
