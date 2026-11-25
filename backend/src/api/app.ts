@@ -66,6 +66,7 @@ import { createV2TasksRouter } from "./routes/v2/tasks";
 import { createAuthRouter } from "./routes/auth";
 import { createFlagsRouter } from "./routes/flags";
 import { createVersionsRouter } from "./routes/versions";
+import { queueRouter } from "./routes/queue";
 import { optionalAuthMiddleware } from "./middleware/auth";
 import { createAdminRouter } from "./routes/admin";
 import { type AuthService } from "../services/auth";
@@ -246,6 +247,9 @@ export function createApp(opts: AppOptions = {}): {
 
   // ── Versioning lifecycle endpoint (#426) ───────────────────────────────────
   app.use("/api/versions", createVersionsRouter());
+
+  // ── Queue status route (#649) ──────────────────────────────────────────────
+  app.use("/api/queue", publicLimiter.middleware, queueRouter);
 
   // ── Events and payment history ─────────────────────────────────────────────
   app.use("/api/payments", createPaymentsRouter());
