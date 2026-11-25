@@ -34,17 +34,17 @@
 mod types;
 
 pub use types::{
-    ContractUpgradedEvent, CoordinatorSetEvent, DataKey, Error, OracleManagerSetEvent, ResultVerifiedEvent, TaskAssignedEvent,
-    TaskAssignmentRecord, TaskCreatedEvent, TaskFinalizedEvent, TaskMetadata, TaskStatus,
-    TaskUpdatedEvent, DEFAULT_TTL_DAYS, LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES, MAX_TTL_DAYS,
-    TASK_CONFIG_EVENT_VERSION, TASK_LIFECYCLE_EVENT_VERSION,
+    ContractUpgradedEvent, CoordinatorSetEvent, DataKey, Error, OracleManagerSetEvent,
+    ResultVerifiedEvent, TaskAssignedEvent, TaskAssignmentRecord, TaskCreatedEvent,
+    TaskFinalizedEvent, TaskMetadata, TaskStatus, TaskUpdatedEvent, DEFAULT_TTL_DAYS,
+    LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES, MAX_TTL_DAYS, TASK_CONFIG_EVENT_VERSION,
+    TASK_LIFECYCLE_EVENT_VERSION,
 };
 
 use types::TaskResult;
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
-    Val, Vec,
+    contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 
 const SECONDS_PER_DAY: u64 = 86_400;
@@ -77,8 +77,9 @@ fn load_metadata(env: &Env, task_id: &BytesN<32>) -> Result<TaskMetadata, Error>
 
 fn store_result(env: &Env, task_id: &BytesN<32>, metadata: &TaskMetadata, result: &TaskResult) {
     let key = DataKey::TaskResult(task_id.clone());
-    let ledgers = ttl_ledgers(((metadata.expires_at - metadata.created_at) / SECONDS_PER_DAY) as u32)
-        .min(env.storage().max_ttl());
+    let ledgers =
+        ttl_ledgers(((metadata.expires_at - metadata.created_at) / SECONDS_PER_DAY) as u32)
+            .min(env.storage().max_ttl());
     let storage = env.storage().persistent();
     storage.set(&key, result);
     storage.extend_ttl(&key, ledgers.saturating_sub(1), ledgers);
@@ -326,8 +327,14 @@ impl TaskStoreContract {
     pub fn set_reputation_contract(env: Env, contract: Option<Address>) -> Result<(), Error> {
         require_admin(&env)?;
         match &contract {
-            Some(addr) => env.storage().instance().set(&DataKey::ReputationContract, addr),
-            None => env.storage().instance().remove(&DataKey::ReputationContract),
+            Some(addr) => env
+                .storage()
+                .instance()
+                .set(&DataKey::ReputationContract, addr),
+            None => env
+                .storage()
+                .instance()
+                .remove(&DataKey::ReputationContract),
         }
         Ok(())
     }
@@ -411,7 +418,10 @@ impl TaskStoreContract {
         env.storage().persistent().set(&key, &metadata);
 
         env.events().publish(
-            (symbol_short!("task_meta"), Symbol::new(&env, "task_assigned")),
+            (
+                symbol_short!("task_meta"),
+                Symbol::new(&env, "task_assigned"),
+            ),
             TaskAssignedEvent {
                 version: TASK_LIFECYCLE_EVENT_VERSION,
                 task_id: task_id.clone(),
@@ -445,7 +455,10 @@ impl TaskStoreContract {
     }
 
     /// Read the budget and reserve price for a task.
-    pub fn get_task_budget(env: Env, task_id: BytesN<32>) -> Result<(Option<i128>, Option<i128>), Error> {
+    pub fn get_task_budget(
+        env: Env,
+        task_id: BytesN<32>,
+    ) -> Result<(Option<i128>, Option<i128>), Error> {
         let metadata = read_metadata(&env, &task_id)?;
         Ok((metadata.max_budget, metadata.reserve_price))
     }
@@ -700,7 +713,10 @@ impl TaskStoreContract {
             .persistent()
             .set(&DataKey::Task(task_id.clone()), &metadata);
         env.events().publish(
-            (symbol_short!("task_meta"), Symbol::new(&env, "ResultVerified")),
+            (
+                symbol_short!("task_meta"),
+                Symbol::new(&env, "ResultVerified"),
+            ),
             ResultVerifiedEvent {
                 version: TASK_LIFECYCLE_EVENT_VERSION,
                 task_id,
@@ -789,7 +805,7 @@ mod test {
     use super::*;
     use soroban_sdk::{
         testutils::{Address as _, Events, Ledger},
-        Address, Bytes, Env, IntoVal, TryFromVal,
+        Address, Bytes, Env, IntoVal, TryFromVal, Val,
     };
 
     struct Fixture {
@@ -850,7 +866,8 @@ mod test {
         assert!(f.client.verify_result(&f.task_id, &plaintext));
         assert!(!f.client.verify_result(&f.task_id, &wrong));
         assert_eq!(
-            f.client.try_open_result(&f.task_id, &f.submitter, &plaintext),
+            f.client
+                .try_open_result(&f.task_id, &f.submitter, &plaintext),
             Err(Ok(Error::Unauthorized))
         );
         assert_eq!(
@@ -881,9 +898,12 @@ mod test {
         store(&f, 1);
         f.client.assign_task(&f.task_id, &f.agent);
         let deadline = f.client.get_task_metadata(&f.task_id).expires_at;
-        f.env.ledger().with_mut(|ledger| ledger.timestamp = deadline + 1);
+        f.env
+            .ledger()
+            .with_mut(|ledger| ledger.timestamp = deadline + 1);
         assert_eq!(
-            f.client.try_commit_result(&f.task_id, &f.agent, &f.prompt_hash),
+            f.client
+                .try_commit_result(&f.task_id, &f.agent, &f.prompt_hash),
             Err(Ok(Error::DeadlineExpired))
         );
     }
