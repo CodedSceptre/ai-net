@@ -336,7 +336,7 @@ const TaskDetailPage: React.FC = () => {
               nodesConnectable={false}
               nodesDraggable={false}
               zoomOnScroll={false}
-              zoomOnPinch={false}
+              zoomOnPinch={true}
               zoomOnDoubleClick={false}
               panOnDrag={true}
               preventScrolling={true}
