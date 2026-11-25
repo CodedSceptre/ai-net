@@ -140,13 +140,12 @@ fn search_services_filters_by_price() {
         &24_u32,
     );
 
-    let results = client.search_services(
-        &Symbol::new(&env, "research"),
-        &1_000_000_i128,
-        &0_u32,
-    );
+    let results = client.search_services(&Symbol::new(&env, "research"), &1_000_000_i128, &0_u32);
     assert_eq!(results.len(), 1);
-    assert_eq!(results.get(0).unwrap().listing_id, Symbol::new(&env, "svc_cheap"));
+    assert_eq!(
+        results.get(0).unwrap().listing_id,
+        Symbol::new(&env, "svc_cheap")
+    );
 }
 
 #[test]
@@ -362,16 +361,15 @@ fn listing_expiry_and_grace_period_purging() {
     let owner = Address::generate(&env);
     let listing_id = Symbol::new(&env, "expiring_svc");
 
-    client
-        .list_service(
-            &listing_id,
-            &Symbol::new(&env, "agent1"),
-            &owner,
-            &Symbol::new(&env, "compute"),
-            &500_000_i128,
-            &100_u32,
-            &12_u32,
-        );
+    client.list_service(
+        &listing_id,
+        &Symbol::new(&env, "agent1"),
+        &owner,
+        &Symbol::new(&env, "compute"),
+        &500_000_i128,
+        &100_u32,
+        &12_u32,
+    );
 
     let l = client.get_listing(&listing_id).unwrap();
     assert!(l.active);
@@ -401,16 +399,15 @@ fn renew_listing_extends_validity() {
     let owner = Address::generate(&env);
     let listing_id = Symbol::new(&env, "renewable_svc");
 
-    client
-        .list_service(
-            &listing_id,
-            &Symbol::new(&env, "agent1"),
-            &owner,
-            &Symbol::new(&env, "compute"),
-            &500_000_i128,
-            &100_u32,
-            &12_u32,
-        );
+    client.list_service(
+        &listing_id,
+        &Symbol::new(&env, "agent1"),
+        &owner,
+        &Symbol::new(&env, "compute"),
+        &500_000_i128,
+        &100_u32,
+        &12_u32,
+    );
 
     let initial = client.get_listing(&listing_id).unwrap();
 
@@ -433,16 +430,15 @@ fn update_listing_metadata_preserves_position() {
     let owner = Address::generate(&env);
     let listing_id = Symbol::new(&env, "meta_svc");
 
-    client
-        .list_service(
-            &listing_id,
-            &Symbol::new(&env, "agent1"),
-            &owner,
-            &Symbol::new(&env, "nlp"),
-            &1_000_000_i128,
-            &300_u32,
-            &24_u32,
-        );
+    client.list_service(
+        &listing_id,
+        &Symbol::new(&env, "agent1"),
+        &owner,
+        &Symbol::new(&env, "nlp"),
+        &1_000_000_i128,
+        &300_u32,
+        &24_u32,
+    );
 
     let new_desc = Symbol::new(&env, "advanced_nlp");
     client.update_listing_metadata(
@@ -459,4 +455,62 @@ fn update_listing_metadata_preserves_position() {
     assert_eq!(updated.max_response_time, 150_u32);
     assert_eq!(updated.availability_hours, 12_u32);
     assert!(updated.active);
+}
+
+#[test]
+fn auction_refunds_outbid_client_and_pays_agent_at_expiry() {
+    let (env, client, admin) = setup_with_admin();
+    let asset = env.register_stellar_asset_contract_v2(admin).address();
+    client.set_auction_token(&asset);
+    let mint = token::StellarAssetClient::new(&env, &asset);
+    let token = token::Client::new(&env, &asset);
+    let agent = Address::generate(&env);
+    let first = Address::generate(&env);
+    let second = Address::generate(&env);
+    mint.mint(&first, &200);
+    mint.mint(&second, &200);
+
+    let auction = client.create_auction(&agent, &String::from_str(&env, "audit"), &101, &2);
+    client.place_bid(&auction, &first, &101);
+    assert_eq!(token.balance(&first), 99);
+    assert_eq!(
+        client.try_place_bid(&auction, &second, &106),
+        Err(Ok(Error::BidTooLow))
+    );
+    client.place_bid(&auction, &second, &107);
+    assert_eq!(token.balance(&first), 200);
+    assert_eq!(token.balance(&second), 93);
+    assert_eq!(
+        client.try_finalize_auction(&auction),
+        Err(Ok(Error::AuctionNotExpired))
+    );
+
+    let expiry = client.get_auction(&auction).unwrap().expires_at_ledger;
+    env.ledger()
+        .with_mut(|ledger| ledger.sequence_number = expiry);
+    assert_eq!(
+        client.try_place_bid(&auction, &first, &200),
+        Err(Ok(Error::AuctionExpired))
+    );
+    client.finalize_auction(&auction);
+    assert_eq!(token.balance(&agent), 107);
+    assert_eq!(client.get_auction_slot_holder(&auction), Some(second));
+    assert_eq!(
+        client.try_finalize_auction(&auction),
+        Err(Ok(Error::AuctionAlreadyFinalized))
+    );
+}
+
+#[test]
+fn no_bid_auction_returns_slot_to_agent() {
+    let (env, client, admin) = setup_with_admin();
+    let asset = env.register_stellar_asset_contract_v2(admin).address();
+    client.set_auction_token(&asset);
+    let agent = Address::generate(&env);
+    let auction = client.create_auction(&agent, &String::from_str(&env, "audit"), &100, &1);
+    env.ledger().with_mut(|ledger| ledger.sequence_number += 1);
+
+    client.finalize_auction(&auction);
+    assert!(client.get_auction(&auction).unwrap().finalized);
+    assert_eq!(client.get_auction_slot_holder(&auction), Some(agent));
 }

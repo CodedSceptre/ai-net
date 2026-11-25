@@ -1,6 +1,6 @@
 //! # Data Types for Agent Marketplace
 
-use soroban_sdk::{contracttype, Address, Symbol};
+use soroban_sdk::{contracttype, Address, Bytes, String, Symbol, Vec};
 
 pub const DEFAULT_LISTING_DURATION_LEDGERS: u32 = 518_400; // ~30 days at 5s/ledger
 pub const GRACE_PERIOD_LEDGERS: u32 = 120_960; // ~7 days at 5s/ledger
@@ -120,4 +120,58 @@ pub struct ListingExpiredEvent {
 pub struct ListingRenewedEvent {
     pub agent_id: Symbol,
     pub new_expiry_ledger: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuctionListing {
+    pub agent_id: Address,
+    pub capability: String,
+    pub start_price: i128,
+    pub current_highest_bid: i128,
+    pub current_highest_bidder: Option<Address>,
+    pub expires_at_ledger: u32,
+    pub finalized: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuctionCreated {
+    pub auction_id: Bytes,
+    pub listing: AuctionListing,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BidPlaced {
+    pub auction_id: Bytes,
+    pub bidder: Address,
+    pub bid_amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuctionFinalized {
+    pub auction_id: Bytes,
+    pub slot_holder: Address,
+    pub winning_bid: i128,
+}
+
+/// An agent profile returned by a capability search.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentSearchResult {
+    pub agent_id: Symbol,
+    pub owner: Address,
+    pub capabilities: Vec<Bytes>,
+    pub reputation_score: u32,
+}
+
+/// A paginated result from the capability search API.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CapabilitySearchResult {
+    pub agents: Vec<AgentSearchResult>,
+    pub next_cursor: Option<Bytes>,
+    pub total_count_estimate: u32,
 }
