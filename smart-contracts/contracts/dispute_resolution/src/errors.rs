@@ -42,4 +42,10 @@ pub enum Error {
     DisputeAlreadyRaised = 18,
     /// Task funds have already been settled.
     EscrowAlreadySettled = 19,
+    EscalationNotConfigured = 20,
+    EscalationRequired = 21,
+    EscalationUnavailable = 22,
+    InvalidEscalationAsset = 23,
+    InsufficientEscalationFunds = 24,
+    ContestWindowActive = 25,
 }

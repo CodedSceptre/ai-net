@@ -9,6 +9,7 @@ members = [
     "contracts/task_store",
     "contracts/payment_escrow",
     "contracts/multisig_governance",
+    "contracts/dispute_resolution",
     "contracts/platform_config",
     "contracts/agent_marketplace",
 ]
