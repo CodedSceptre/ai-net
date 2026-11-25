@@ -1,6 +1,6 @@
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
-    Symbol, Vec,
+    String, Symbol, Vec,
 };
 
 const CONTRACT_VERSION: &str = "1.0.0";

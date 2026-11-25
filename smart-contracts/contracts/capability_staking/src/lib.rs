@@ -39,7 +39,10 @@
 //! | `slash_bond`      | `(staking, slashed)`           | `BondSlashedEvent` |
 //! | `claim_unbonded`  | `(staking, claimed)`           | `BondClaimedEvent` |
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, Symbol};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env,
+    IntoVal, Map, Symbol,
+};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -57,6 +60,8 @@ const TTL_THRESHOLD: u32 = 100_000;
 
 /// Target TTL after extension (~31 days at 5s per ledger).
 const TTL_EXTEND_TO: u32 = 535_680;
+const MAX_REWARD_BONDS: u32 = 32;
+const BPS_SCALE: i128 = 10_000;
 
 // ─── Storage Keys ────────────────────────────────────────────────────────────
 
@@ -82,6 +87,11 @@ pub enum DataKey {
     Blacklist(Address),
     /// Address+Bytes keyed stake record for the new slash() path.
     AddressStakeRecord(Address, Bytes),
+    RewardSources,
+    ActiveRewardBonds,
+    CustodialBond(Symbol, Symbol),
+    ClaimableRewards(Address),
+    RewardRemainder,
 }
 
 // ─── Data Types ──────────────────────────────────────────────────────────────
@@ -186,8 +196,8 @@ pub struct AddressStakeRecord {
 
 // ─── Error Codes ─────────────────────────────────────────────────────────────
 
-/// Contract error discriminants, returned via `panic_with_error!` / panic.
-#[contracttype]
+/// Contract error discriminants.
+#[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Error {
@@ -211,6 +221,10 @@ pub enum Error {
     InvalidSlashAmount = 9,
     /// Agent is currently blacklisted and may not stake.
     AgentBlacklisted = 10,
+    InvalidRewardPool = 11,
+    RewardSourcesMissing = 12,
+    InvalidUptimeFactor = 13,
+    RewardOverflow = 14,
 }
 
 // ─── Internal Helpers ────────────────────────────────────────────────────────
@@ -257,6 +271,50 @@ fn load_token(env: &Env) -> Address {
         .unwrap_or_else(|| panic!("token contract not configured"))
 }
 
+fn active_reward_bonds(env: &Env) -> Map<(Symbol, Symbol), i128> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ActiveRewardBonds)
+        .unwrap_or_else(|| Map::new(env))
+}
+
+fn detach_reward_bond(env: &Env, agent_id: &Symbol, capability: &Symbol) {
+    let mut bonds = active_reward_bonds(env);
+    if bonds
+        .remove((agent_id.clone(), capability.clone()))
+        .is_some()
+    {
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveRewardBonds, &bonds);
+        extend_persistent_ttl(env, &DataKey::ActiveRewardBonds);
+    }
+}
+
+fn reward_sources(env: &Env) -> Option<(Address, Address)> {
+    env.storage().instance().get(&DataKey::RewardSources)
+}
+
+fn registry_owner(env: &Env, registry: &Address, agent: &Symbol) -> Option<Address> {
+    env.invoke_contract(
+        registry,
+        &Symbol::new(env, "get_agent_owner"),
+        (agent.clone(),).into_val(env),
+    )
+}
+
+fn require_bond_owner(env: &Env, owner: &Address, agent: &Symbol, capability: &Symbol) {
+    let key = DataKey::CustodialBond(agent.clone(), capability.clone());
+    let expected: Option<Address> = env.storage().persistent().get(&key);
+    let expected = expected.or_else(|| {
+        reward_sources(env).and_then(|(_, registry)| registry_owner(env, &registry, agent))
+    });
+    if (expected.is_some() || reward_sources(env).is_some()) && expected.as_ref() != Some(owner) {
+        soroban_sdk::panic_with_error!(env, Error::Unauthorized);
+    }
+    owner.require_auth();
+}
+
 // ─── Contract ────────────────────────────────────────────────────────────────
 
 #[contract]
@@ -264,6 +322,137 @@ pub struct CapabilityStakingContract;
 
 #[contractimpl]
 impl CapabilityStakingContract {
+    /// Enable funded reward bonds. The sources are fixed after setup.
+    pub fn configure_rewards(env: Env, platform: Address, registry: Address) -> Result<(), Error> {
+        load_admin(&env).require_auth();
+        if reward_sources(&env).is_some() {
+            return Err(Error::AlreadyInitialized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::RewardSources, &(platform, registry));
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Allocate rewards to all funded active bonds. The platform administrator
+    /// funds any shortfall after applying the previous distribution's remainder.
+    pub fn distribute_rewards(env: Env, reward_pool: i128) -> Result<(), Error> {
+        let (platform, registry) = reward_sources(&env).ok_or(Error::RewardSourcesMissing)?;
+        let admin: Address = env
+            .invoke_contract::<Option<Address>>(
+                &platform,
+                &Symbol::new(&env, "get_admin"),
+                soroban_sdk::Vec::new(&env),
+            )
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        if !(1..=i128::from(i64::MAX)).contains(&reward_pool) {
+            return Err(Error::InvalidRewardPool);
+        }
+
+        let bonds = active_reward_bonds(&env);
+        extend_persistent_ttl(&env, &DataKey::ActiveRewardBonds);
+        let mut stakes = Map::<Symbol, i128>::new(&env);
+        let mut total_stake = 0;
+        for ((agent, capability), amount) in bonds.iter() {
+            total_stake += amount;
+            let key = DataKey::CustodialBond(agent.clone(), capability.clone());
+            extend_persistent_ttl(&env, &DataKey::StakeRecord(agent.clone(), capability));
+            extend_persistent_ttl(&env, &key);
+            let depositor: Option<Address> = env.storage().persistent().get(&key);
+            if depositor.is_some() && depositor == registry_owner(&env, &registry, &agent) {
+                stakes.set(agent.clone(), stakes.get(agent).unwrap_or(0) + amount);
+            }
+        }
+
+        let mut rewards = Map::<Address, i128>::new(&env);
+        let mut distributed = 0;
+        for (agent, amount) in stakes.iter() {
+            let factor: u32 = env.invoke_contract(
+                &registry,
+                &Symbol::new(&env, "get_uptime_factor"),
+                (agent.clone(),).into_val(&env),
+            );
+            if factor != 0 && !(5_000..=10_000).contains(&factor) {
+                return Err(Error::InvalidUptimeFactor);
+            }
+            if factor == 0 {
+                continue;
+            }
+            // Break up the multiplication so the largest valid XLM pool fits in i128.
+            let numerator = amount * reward_pool;
+            let factor = i128::from(factor);
+            let share = ((numerator / total_stake) * factor
+                + (numerator % total_stake) * factor / total_stake)
+                / BPS_SCALE;
+            if share > 0 {
+                let owner = registry_owner(&env, &registry, &agent).ok_or(Error::Unauthorized)?;
+                rewards.set(owner.clone(), rewards.get(owner).unwrap_or(0) + share);
+                distributed += share;
+            }
+        }
+        for (owner, share) in rewards.iter() {
+            let key = DataKey::ClaimableRewards(owner);
+            let existing: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+            let claimable = existing.checked_add(share).ok_or(Error::RewardOverflow)?;
+            env.storage().persistent().set(&key, &claimable);
+            extend_persistent_ttl(&env, &key);
+        }
+
+        let remainder: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RewardRemainder)
+            .unwrap_or(0);
+        let funding = reward_pool.saturating_sub(remainder).max(0);
+        env.storage().instance().set(
+            &DataKey::RewardRemainder,
+            &(remainder + funding - distributed),
+        );
+        if funding > 0 {
+            token::Client::new(&env, &load_token(&env)).transfer(
+                &admin,
+                &env.current_contract_address(),
+                &funding,
+            );
+        }
+        extend_instance_ttl(&env);
+        env.events().publish(
+            (Symbol::new(&env, "RewardsDistributed"),),
+            (distributed, rewards.len()),
+        );
+        Ok(())
+    }
+
+    /// Withdraw a wallet's pending rewards. Failed transfers roll back the removal.
+    pub fn claim_rewards(env: Env, agent_id: Address) -> i128 {
+        agent_id.require_auth();
+        let amount = Self::get_claimable_rewards(env.clone(), agent_id.clone());
+        if amount > 0 {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::ClaimableRewards(agent_id.clone()));
+            token::Client::new(&env, &load_token(&env)).transfer(
+                &env.current_contract_address(),
+                &agent_id,
+                &amount,
+            );
+            extend_instance_ttl(&env);
+            env.events()
+                .publish((Symbol::new(&env, "RewardsClaimed"), agent_id), amount);
+        }
+        amount
+    }
+
+    /// Read a wallet's pending reward balance.
+    pub fn get_claimable_rewards(env: Env, agent_id: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ClaimableRewards(agent_id))
+            .unwrap_or(0)
+    }
+
     // ── Initialisation ──────────────────────────────────────────────────────
 
     /// One-time initialisation. Sets the admin, treasury, and token addresses.
@@ -353,7 +542,33 @@ impl CapabilityStakingContract {
         capability: Symbol,
         amount_stroops: i128,
     ) {
-        owner.require_auth();
+        require_bond_owner(&env, &owner, &agent_id, &capability);
+        if reward_sources(&env).is_some() {
+            let custody_key = DataKey::CustodialBond(agent_id.clone(), capability.clone());
+            let mut bonds = active_reward_bonds(&env);
+            if env.storage().persistent().has(&custody_key)
+                || env.storage().persistent().has(&DataKey::UnbondingRecord(
+                    agent_id.clone(),
+                    capability.clone(),
+                ))
+                || bonds.len() >= MAX_REWARD_BONDS
+                || !(1..=i128::from(i64::MAX)).contains(&amount_stroops)
+            {
+                soroban_sdk::panic_with_error!(&env, Error::InvalidRewardPool);
+            }
+            env.storage().persistent().set(&custody_key, &owner);
+            extend_persistent_ttl(&env, &custody_key);
+            bonds.set((agent_id.clone(), capability.clone()), amount_stroops);
+            env.storage()
+                .persistent()
+                .set(&DataKey::ActiveRewardBonds, &bonds);
+            extend_persistent_ttl(&env, &DataKey::ActiveRewardBonds);
+            token::Client::new(&env, &load_token(&env)).transfer(
+                &owner,
+                &env.current_contract_address(),
+                &amount_stroops,
+            );
+        }
 
         // Validate amount meets minimum.
         let min_stake = env
@@ -401,13 +616,8 @@ impl CapabilityStakingContract {
     ///
     /// # Errors
     /// Panics with `Error::StakeNotFound` if no active stake exists.
-    pub fn unstake_bond(
-        env: Env,
-        owner: Address,
-        agent_id: Symbol,
-        capability: Symbol,
-    ) {
-        owner.require_auth();
+    pub fn unstake_bond(env: Env, owner: Address, agent_id: Symbol, capability: Symbol) {
+        require_bond_owner(&env, &owner, &agent_id, &capability);
 
         let stake_key = DataKey::StakeRecord(agent_id.clone(), capability.clone());
         let record: StakeRecord = env
@@ -418,6 +628,11 @@ impl CapabilityStakingContract {
 
         // Remove the active stake record.
         env.storage().persistent().remove(&stake_key);
+        detach_reward_bond(&env, &agent_id, &capability);
+        extend_persistent_ttl(
+            &env,
+            &DataKey::CustodialBond(agent_id.clone(), capability.clone()),
+        );
 
         let current_ledger = env.ledger().sequence() as u64;
         let claimable_at = current_ledger + (UNBONDING_PERIOD_LEDGERS as u64);
@@ -461,13 +676,8 @@ impl CapabilityStakingContract {
     /// - Panics with `Error::UnbondingNotFound` if no unbonding record exists.
     /// - Panics with `Error::UnbondingPeriodNotElapsed` if the waiting period
     ///   has not yet passed.
-    pub fn claim_unbonded(
-        env: Env,
-        owner: Address,
-        agent_id: Symbol,
-        capability: Symbol,
-    ) {
-        owner.require_auth();
+    pub fn claim_unbonded(env: Env, owner: Address, agent_id: Symbol, capability: Symbol) {
+        require_bond_owner(&env, &owner, &agent_id, &capability);
 
         let unbonding_key = DataKey::UnbondingRecord(agent_id.clone(), capability.clone());
         let record: UnbondingRecord = env
@@ -483,6 +693,15 @@ impl CapabilityStakingContract {
 
         // Remove the unbonding record — stake is considered claimed.
         env.storage().persistent().remove(&unbonding_key);
+        let custody_key = DataKey::CustodialBond(agent_id.clone(), capability.clone());
+        if env.storage().persistent().has(&custody_key) {
+            env.storage().persistent().remove(&custody_key);
+            token::Client::new(&env, &load_token(&env)).transfer(
+                &env.current_contract_address(),
+                &owner,
+                &record.amount_stroops,
+            );
+        }
         extend_instance_ttl(&env);
 
         // Emit event.
@@ -509,12 +728,7 @@ impl CapabilityStakingContract {
     /// # Errors
     /// Panics if neither an active stake nor an unbonding record is found for
     /// the given (agent_id, capability) pair.
-    pub fn slash_bond(
-        env: Env,
-        agent_id: Symbol,
-        capability: Symbol,
-        reason: Symbol,
-    ) {
+    pub fn slash_bond(env: Env, agent_id: Symbol, capability: Symbol, reason: Symbol) {
         let admin = load_admin(&env);
         admin.require_auth();
 
@@ -541,6 +755,17 @@ impl CapabilityStakingContract {
         } else {
             panic!("stake not found");
         };
+
+        detach_reward_bond(&env, &agent_id, &capability);
+        let custody_key = DataKey::CustodialBond(agent_id.clone(), capability.clone());
+        if env.storage().persistent().has(&custody_key) {
+            env.storage().persistent().remove(&custody_key);
+            token::Client::new(&env, &load_token(&env)).transfer(
+                &env.current_contract_address(),
+                &treasury,
+                &amount_stroops,
+            );
+        }
 
         extend_instance_ttl(&env);
 
@@ -626,10 +851,7 @@ impl CapabilityStakingContract {
         // For new stakers the agent owner is tracked via AddressStakeRecord.
 
         let addr_key = DataKey::AddressStakeRecord(agent_id.clone(), capability.clone());
-        let stake_opt: Option<AddressStakeRecord> = env
-            .storage()
-            .persistent()
-            .get(&addr_key);
+        let stake_opt: Option<AddressStakeRecord> = env.storage().persistent().get(&addr_key);
 
         let record = stake_opt.unwrap_or_else(|| panic!("stake not found"));
 
@@ -646,9 +868,7 @@ impl CapabilityStakingContract {
 
             let blacklist_expires = current_ledger + BLACKLIST_PERIOD_LEDGERS;
             let bl_key = DataKey::Blacklist(agent_id.clone());
-            env.storage()
-                .persistent()
-                .set(&bl_key, &blacklist_expires);
+            env.storage().persistent().set(&bl_key, &blacklist_expires);
             extend_persistent_ttl(&env, &bl_key);
         } else {
             // Partial slash: update the stake record.
@@ -689,11 +909,7 @@ impl CapabilityStakingContract {
 
     /// Returns the active `StakeRecord` for an (agent_id, capability) pair, or
     /// `None` if no stake exists.
-    pub fn get_stake(
-        env: Env,
-        agent_id: Symbol,
-        capability: Symbol,
-    ) -> Option<StakeRecord> {
+    pub fn get_stake(env: Env, agent_id: Symbol, capability: Symbol) -> Option<StakeRecord> {
         extend_instance_ttl(&env);
         env.storage()
             .persistent()
@@ -716,11 +932,7 @@ impl CapabilityStakingContract {
     /// Returns `true` if the agent has an active stake >= the capability's
     /// minimum stake, `false` otherwise (no stake, insufficient stake, or
     /// stake is in the unbonding period).
-    pub fn is_sufficiently_staked(
-        env: Env,
-        agent_id: Symbol,
-        capability: Symbol,
-    ) -> bool {
+    pub fn is_sufficiently_staked(env: Env, agent_id: Symbol, capability: Symbol) -> bool {
         extend_instance_ttl(&env);
         let min_stake: i128 = env
             .storage()
@@ -743,11 +955,7 @@ impl CapabilityStakingContract {
     pub fn is_blacklisted(env: Env, agent_id: Address) -> bool {
         extend_instance_ttl(&env);
         let key = DataKey::Blacklist(agent_id);
-        match env
-            .storage()
-            .persistent()
-            .get::<DataKey, u32>(&key)
-        {
+        match env.storage().persistent().get::<DataKey, u32>(&key) {
             Some(expires_at) => env.ledger().sequence() < expires_at,
             None => false,
         }
