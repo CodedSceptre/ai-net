@@ -23,6 +23,10 @@ The following filters can each be passed to `getEvents` as shown in the JavaScri
 
 Start at an available ledger from RPC `getHealth`. For high-volume streams, use a bounded `pagination.limit` and follow the returned `cursor` with the same filters. Omit `startLedger` and `endLedger` when supplying a cursor. Persist the cursor after processing the page, and deduplicate each record by network and event `id`. The service can return the same event again after a retry. Treat consumption as **at-least-once within retained history**, with client-owned checkpoints. Track lag against the RPC's earliest retained ledger and archive events before they expire if you need long-term replay.
 
+### Contract catalog
+
+[`agent_bidding`](#agent_bidding), [`agent_governance`](#agent_governance), [`agent_marketplace`](#agent_marketplace), [`agent_registry`](#agent_registry), [`capability_staking`](#capability_staking), [`dispute_resolution`](#dispute_resolution), [`error-registry`](#error-registry), [`error-resolver`](#error-resolver), [`multisig_governance`](#multisig_governance), [`oracle_manager`](#oracle_manager), [`payment_escrow`](#payment_escrow), [`platform_config`](#platform_config), [`price_oracle`](#price_oracle), [`reputation`](#reputation), [`task_store`](#task_store), [`upgrade-manager`](#upgrade-manager).
+
 ### Reading the catalog
 
 The JSON examples show a client-side normalization of the decoded RPC `value`. RPC returns base64 `ScVal` XDR by default. Decode the value according to the Rust type. The examples render addresses as StrKeys, bytes as hex, and 64-bit and wider integers as decimal strings to preserve precision. Small integers and numbered enums are JSON numbers. Structs become objects, tuples and vectors become arrays, and unit and empty options render as `null`. Property order carries no meaning. RPC's optional unpacked XDR JSON uses its own representation.
@@ -33,7 +37,7 @@ The catalog follows the repository's 16 contract directories. A deployed version
 
 #### `bidding, upgraded`
 
-Emitted by `upgrade`.
+Emitted by `upgrade`. An authorized admin replaces the deployed Wasm and stores its new version.
 
 Rust value type
 
@@ -55,7 +59,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_bidding/src/lib.rs).
 
 #### `bidding, created`
 
-Emitted by `create_auction`.
+Emitted by `create_auction`. A new auction and its bidding configuration are stored.
 
 ```rust
 pub struct AuctionCreatedEvent {
@@ -89,7 +93,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_bidding/src/lib.rs).
 
 #### `bidding, bid_sbmtd`
 
-Emitted by `submit_bid`.
+Emitted by `submit_bid`. A valid sealed bid commitment is recorded during submission.
 
 ```rust
 pub struct BidSubmittedEvent {
@@ -169,7 +173,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_bidding/src/lib.rs).
 
 #### `bidding, bid_rvld`
 
-Emitted by `reveal_bid`.
+Emitted by `reveal_bid`. The revealed bid matches its sealed commitment and satisfies the auction price bounds.
 
 ```rust
 pub struct BidRevealedEvent {
@@ -191,7 +195,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_bidding/src/lib.rs).
 
 #### `bidding, bids_rvld`
 
-Emitted by `reveal_bids`.
+Emitted by `reveal_bids`. The batch reveal path accepts the supplied bids.
 
 ```rust
 pub struct BidsRevealedEvent {
@@ -217,7 +221,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_bidding/src/lib.rs).
 
 #### `bidding, ref_claim`
 
-Emitted by `claim_bid_refund`.
+Emitted by `claim_bid_refund`. A bidder claims an available bond refund.
 
 ```rust
 pub struct BondRefundClaimedEvent {
@@ -239,7 +243,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_bidding/src/lib.rs).
 
 #### `bidding, cntrct_aw`
 
-Emitted by `award_contract`.
+Emitted by `award_contract`. The auction is awarded to the selected bidder.
 
 ```rust
 pub struct ContractAwardedEvent {
@@ -265,7 +269,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_bidding/src/lib.rs).
 
 #### `bidding, aborted`
 
-Emitted by `abort_auction`.
+Emitted by `abort_auction`. The auction is successfully aborted.
 
 ```rust
 pub struct AuctionAbortedEvent {
@@ -287,7 +291,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_bidding/src/lib.rs).
 
 #### `bidding, refnd_clm`
 
-Emitted by `claim_refund`.
+Emitted by `claim_refund`. A refundable bid bond is claimed through the auction refund path.
 
 ```rust
 pub struct RefundClaimedEvent {
@@ -311,7 +315,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_bidding/src/lib.rs).
 
 #### `gov, agent_reg`
 
-Emitted by `register_agent`.
+Emitted by `register_agent`. An agent registers and its initial voting power is computed.
 
 Rust value type
 
@@ -330,7 +334,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_governance/src/lib.rs).
 
 #### `gov, agent_upd`
 
-Emitted by `update_agent`.
+Emitted by `update_agent`. The registered agent's stake or reputation is updated and voting power is recalculated.
 
 Rust value type
 
@@ -349,7 +353,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_governance/src/lib.rs).
 
 #### `gov, created`
 
-Emitted by `create_proposal`.
+Emitted by `create_proposal`. A valid governance proposal is stored.
 
 ```rust
 pub struct ProposalCreatedEvent {
@@ -375,7 +379,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_governance/src/lib.rs).
 
 #### `voting_started`
 
-Emitted by `create_proposal`.
+Emitted by `create_proposal`. A new proposal's voting window opens.
 
 ```rust
 pub struct VotingStartedEvent {
@@ -399,7 +403,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_governance/src/lib.rs).
 
 #### `gov, vote_cast`
 
-Emitted by `vote_on_proposal`.
+Emitted by `vote_on_proposal`. An eligible agent's vote is recorded within the voting window.
 
 ```rust
 pub struct VoteCastEvent {
@@ -493,7 +497,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_governance/src/lib.rs).
 
 #### `gov, executed`
 
-Emitted by `execute_proposal`.
+Emitted by `execute_proposal`. A proposal passes the turnout and approval rules and is executed.
 
 ```rust
 pub struct ProposalExecutedEvent {
@@ -517,7 +521,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_governance/src/lib.rs).
 
 #### `gov, chg_prop`
 
-Emitted by `propose_change`.
+Emitted by `propose_change`. A governance configuration change is queued.
 
 ```rust
 pub struct ChangeProposedEvent {
@@ -541,7 +545,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_governance/src/lib.rs).
 
 #### `gov, chg_exec`
 
-Emitted by `execute_change`.
+Emitted by `execute_change`. An eligible queued change is applied.
 
 ```rust
 pub struct ChangeExecutedEvent {
@@ -565,7 +569,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_governance/src/lib.rs).
 
 #### `gov, chg_canc`
 
-Emitted by `cancel_change`.
+Emitted by `cancel_change`. A pending change is cancelled.
 
 ```rust
 pub struct ChangeCancelledEvent {
@@ -587,7 +591,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_governance/src/lib.rs).
 
 #### `gov, grd_appr`
 
-Emitted by `guardian_approve`.
+Emitted by `guardian_approve`. The guardian authorizes a change that requires guardian approval.
 
 ```rust
 pub struct GuardianApprovalEvent {
@@ -611,7 +615,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_governance/src/lib.rs).
 
 #### `market, ora_set`
 
-Emitted by `set_oracle`.
+Emitted by `set_oracle`. The configured pricing oracle is replaced.
 
 Rust value type `Address`.
 
@@ -623,7 +627,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_marketplace/src/lib.rs).
 
 #### `market, svc_list`
 
-Emitted by `list_service`.
+Emitted by `list_service`. An agent publishes a new service listing.
 
 ```rust
 pub struct ServiceListedEvent {
@@ -647,7 +651,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_marketplace/src/lib.rs).
 
 #### `listing_renewed`
 
-Emitted by `renew_listing`.
+Emitted by `renew_listing`. An eligible listing is extended and reactivated.
 
 ```rust
 pub struct ListingRenewedEvent {
@@ -667,7 +671,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_marketplace/src/lib.rs).
 
 #### `market, svc_book`
 
-Emitted by `book_agent`.
+Emitted by `book_agent`. A service booking is accepted and recorded.
 
 ```rust
 pub struct ServiceBookedEvent {
@@ -691,7 +695,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_marketplace/src/lib.rs).
 
 #### `market, svc_comp`
 
-Emitted by `complete_booking`.
+Emitted by `complete_booking`. A booking is marked complete.
 
 ```rust
 pub struct ServiceCompletedEvent {
@@ -711,7 +715,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_marketplace/src/lib.rs).
 
 #### `market, svc_canc`
 
-Emitted by `cancel_booking`.
+Emitted by `cancel_booking`. An eligible booking is cancelled.
 
 ```rust
 pub struct ServiceCancelledEvent {
@@ -755,7 +759,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_marketplace/src/lib.rs).
 
 #### `registry, audit`
 
-Emitted by `record`.
+Emitted by `record`. An auditable registry operation appends a log entry.
 
 ```rust
 pub struct AuditLogEntryEvent {
@@ -781,7 +785,7 @@ Sources [audit.rs](../smart-contracts/contracts/agent_registry/src/audit.rs).
 
 #### `registry, anomaly`
 
-Emitted by `emit_anomaly`.
+Emitted by `emit_anomaly`. The audit subsystem detects anomalous activity.
 
 ```rust
 pub struct AnomalyDetectedEvent {
@@ -807,7 +811,7 @@ Sources [audit.rs](../smart-contracts/contracts/agent_registry/src/audit.rs).
 
 #### `registry, bridged`
 
-Emitted by `issue`.
+Emitted by `issue`. The bridge issues an identity proof for the target chain.
 
 ```rust
 pub struct IdentityBridgedEvent {
@@ -833,7 +837,7 @@ Sources [bridge.rs](../smart-contracts/contracts/agent_registry/src/bridge.rs).
 
 #### `registry, brdg_vrfy`
 
-Emitted by `verify`.
+Emitted by `verify`. The bridge verifies an identity proof.
 
 ```rust
 pub struct BridgeProofVerifiedEvent {
@@ -857,7 +861,7 @@ Sources [bridge.rs](../smart-contracts/contracts/agent_registry/src/bridge.rs).
 
 #### `registry, brdg_revk`
 
-Emitted by `revoke`.
+Emitted by `revoke`. A previously issued bridge proof is revoked.
 
 ```rust
 pub struct BridgeProofRevokedEvent {
@@ -881,7 +885,7 @@ Sources [bridge.rs](../smart-contracts/contracts/agent_registry/src/bridge.rs).
 
 #### `registry, bond_slsh`
 
-Emitted by `internal_slash_bond`, `slash_bond`.
+Emitted by `internal_slash_bond`, `slash_bond`. A registry bond is reduced by slashing.
 
 ```rust
 pub struct BondSlashed {
@@ -903,7 +907,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, init`
 
-Emitted by `initialize`.
+Emitted by `initialize`. Successful initialization stores the first admin.
 
 ```rust
 pub struct RegistryInitializedEvent {
@@ -921,7 +925,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, adm_chngd`
 
-Emitted by `set_admin`, `execute_operation`.
+Emitted by `set_admin`, `execute_operation`. The registry admin changes directly or through a queued admin operation.
 
 ```rust
 pub struct AdminChangedEvent {
@@ -941,7 +945,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, op_prop`
 
-Emitted by `propose_operation`.
+Emitted by `propose_operation`. An authorized admin action is queued.
 
 ```rust
 pub struct OperationProposed {
@@ -967,7 +971,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, op_appr`
 
-Emitted by `approve_operation`.
+Emitted by `approve_operation`. A distinct admin approval is recorded for a queued operation.
 
 ```rust
 pub struct OperationApproved {
@@ -987,7 +991,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, paused`
 
-Emitted by `execute_operation`, `pause`.
+Emitted by `execute_operation`, `pause`. A direct or queued action pauses the registry.
 
 Rust value type `()`.
 
@@ -999,7 +1003,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, unpaused`
 
-Emitted by `execute_operation`, `unpause`.
+Emitted by `execute_operation`, `unpause`. A direct or queued action resumes the registry.
 
 Rust value type `()`.
 
@@ -1011,7 +1015,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, op_exec`
 
-Emitted by `execute_operation`.
+Emitted by `execute_operation`. An eligible queued operation is applied.
 
 ```rust
 pub struct OperationExecuted {
@@ -1031,7 +1035,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, op_canc`
 
-Emitted by `cancel_operation`.
+Emitted by `cancel_operation`. A pending operation is cancelled.
 
 ```rust
 pub struct OperationCancelled {
@@ -1051,7 +1055,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, freeze`
 
-Emitted by `freeze_agent`.
+Emitted by `freeze_agent`. An agent is frozen.
 
 Rust value type `Symbol`.
 
@@ -1063,7 +1067,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, unfreeze`
 
-Emitted by `unfreeze_agent`.
+Emitted by `unfreeze_agent`. A frozen agent is made available again.
 
 Rust value type `Symbol`.
 
@@ -1075,7 +1079,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, agent_reg`
 
-Emitted by `register_agent`, `register_agents`.
+Emitted by `register_agent`, `register_agents`. A successful single or batch registration inserts an agent. Batch registration emits one event per new agent.
 
 ```rust
 pub struct AgentRegisteredEvent {
@@ -1099,7 +1103,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, bond_lck`
 
-Emitted by `register_agent`, `register_agents`.
+Emitted by `register_agent`, `register_agents`. An agent's registration bond is locked, including inside batch registration.
 
 ```rust
 pub struct BondLocked {
@@ -1121,7 +1125,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, disc_qry`
 
-Emitted by `discover_agents`.
+Emitted by `discover_agents`. A cache miss executes discovery and records the result count. A cached response skips this publication.
 
 ```rust
 pub struct DiscoveryQueryEvent {
@@ -1147,7 +1151,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, bond_ret`
 
-Emitted by `deregister_agent`.
+Emitted by `deregister_agent`. Deregistration returns the agent's remaining bond.
 
 ```rust
 pub struct BondReturned {
@@ -1169,7 +1173,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, agent_drg`
 
-Emitted by `deregister_agent`.
+Emitted by `deregister_agent`. An agent is removed from the active registry.
 
 ```rust
 pub struct AgentDeregisteredEvent {
@@ -1191,7 +1195,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, price_upd`
 
-Emitted by `update_pricing`.
+Emitted by `update_pricing`. A registered agent's price is updated.
 
 Rust value type
 
@@ -1210,7 +1214,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, err_rptd`
 
-Emitted by `report_error`.
+Emitted by `report_error`. An agent error report is accepted.
 
 ```rust
 pub struct ErrorReportedEvent {
@@ -1230,7 +1234,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, err_rslvd`
 
-Emitted by `resolve_errors`.
+Emitted by `resolve_errors`. A pending error report is resolved.
 
 ```rust
 pub struct ErrorResolvedEvent {
@@ -1250,7 +1254,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, anl_rec`
 
-Emitted by `record_task_completion`.
+Emitted by `record_task_completion`. A completed task updates agent analytics and persists a snapshot.
 
 ```rust
 pub struct AnalyticsRecordedEvent {
@@ -1274,7 +1278,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, lb_upd`
 
-Emitted by `get_leaderboard`.
+Emitted by `get_leaderboard`. An on-chain call calculates the requested leaderboard and its result count.
 
 ```rust
 pub struct LeaderboardUpdatedEvent {
@@ -1294,7 +1298,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, sla_set`
 
-Emitted by `set_sla`.
+Emitted by `set_sla`. A service-level agreement is stored.
 
 ```rust
 pub struct SlaSetEvent {
@@ -1318,7 +1322,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, sla_viol`
 
-Emitted by `check_sla_compliance`.
+Emitted by `check_sla_compliance`. An SLA check detects a violation and applies a bond penalty.
 
 ```rust
 pub struct SlaViolationDetectedEvent {
@@ -1340,7 +1344,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `registry, sla_bonus`
 
-Emitted by `check_sla_compliance`.
+Emitted by `check_sla_compliance`. A compliant SLA check reaches at least ten total checks with zero violations.
 
 ```rust
 pub struct SlaBonusAwardedEvent {
@@ -1360,7 +1364,7 @@ Sources [lib.rs](../smart-contracts/contracts/agent_registry/src/lib.rs).
 
 #### `upgrade, mgr_set`
 
-Emitted by `set_upgrade_manager`.
+Emitted by `set_upgrade_manager`. The registry's upgrade manager is configured.
 
 ```rust
 pub struct UpgradeManagerSetEvent {
@@ -1382,7 +1386,7 @@ Sources [upgrade.rs](../smart-contracts/contracts/agent_registry/src/upgrade.rs)
 
 #### `upgrade, pre_hook`
 
-Emitted by `pre_upgrade_hook`.
+Emitted by `pre_upgrade_hook`. The pre-upgrade hook records its upgrade context.
 
 ```rust
 pub struct PreUpgradeHookEvent {
@@ -1408,7 +1412,7 @@ Sources [upgrade.rs](../smart-contracts/contracts/agent_registry/src/upgrade.rs)
 
 #### `upgrade, post_hook`
 
-Emitted by `post_upgrade_hook`.
+Emitted by `post_upgrade_hook`. The post-upgrade hook completes.
 
 ```rust
 pub struct PostUpgradeHookEvent {
@@ -1436,7 +1440,7 @@ Sources [upgrade.rs](../smart-contracts/contracts/agent_registry/src/upgrade.rs)
 
 #### `upgrade, initiated`
 
-Emitted by `initiate_upgrade`.
+Emitted by `initiate_upgrade`. The registry initiates its upgrade.
 
 ```rust
 pub struct UpgradeInitiatedEvent {
@@ -1462,7 +1466,7 @@ Sources [upgrade.rs](../smart-contracts/contracts/agent_registry/src/upgrade.rs)
 
 #### `registry, upgraded`
 
-Emitted by `upgrade`, `upgrade_contract`.
+Emitted by `upgrade`, `upgrade_contract`. A registry Wasm upgrade succeeds.
 
 ```rust
 pub struct ContractUpgradedEvent {
@@ -1488,7 +1492,7 @@ Sources [upgrade.rs](../smart-contracts/contracts/agent_registry/src/upgrade.rs)
 
 #### `registry, rollback`
 
-Emitted by `emergency_rollback`.
+Emitted by `emergency_rollback`. The emergency rollback restores a prior Wasm.
 
 ```rust
 pub struct ContractRolledBackEvent {
@@ -1514,7 +1518,7 @@ Sources [upgrade.rs](../smart-contracts/contracts/agent_registry/src/upgrade.rs)
 
 #### `staking, staked`
 
-Emitted by `stake_bond`.
+Emitted by `stake_bond`. The agent adds a capability bond.
 
 ```rust
 pub struct BondStakedEvent {
@@ -1536,7 +1540,7 @@ Sources [lib.rs](../smart-contracts/contracts/capability_staking/src/lib.rs).
 
 #### `staking, unstaked`
 
-Emitted by `unstake_bond`.
+Emitted by `unstake_bond`. A bond amount enters the unbonding period.
 
 ```rust
 pub struct BondUnstakedEvent {
@@ -1560,7 +1564,7 @@ Sources [lib.rs](../smart-contracts/contracts/capability_staking/src/lib.rs).
 
 #### `staking, claimed`
 
-Emitted by `claim_unbonded`.
+Emitted by `claim_unbonded`. An eligible unbonded amount is withdrawn.
 
 ```rust
 pub struct BondClaimedEvent {
@@ -1582,7 +1586,7 @@ Sources [lib.rs](../smart-contracts/contracts/capability_staking/src/lib.rs).
 
 #### `staking, slashed`
 
-Emitted by `slash_bond`.
+Emitted by `slash_bond`. A bond is penalized.
 
 ```rust
 pub struct BondSlashedEvent {
@@ -1606,7 +1610,7 @@ Sources [lib.rs](../smart-contracts/contracts/capability_staking/src/lib.rs).
 
 #### `staking, cap_slshd`
 
-Emitted by `slash`.
+Emitted by `slash`. A capability-specific slash is applied with its reason.
 
 ```rust
 pub struct CapabilitySlashedEvent {
@@ -1634,7 +1638,7 @@ Sources [lib.rs](../smart-contracts/contracts/capability_staking/src/lib.rs).
 
 #### `dispute, raised`
 
-Emitted by `raise_dispute`.
+Emitted by `raise_dispute`. The submitter opens a dispute on funded task escrow within the dispute window.
 
 ```rust
 pub struct DisputeRaisedEvent {
@@ -1658,7 +1662,7 @@ Sources [lib.rs](../smart-contracts/contracts/dispute_resolution/src/lib.rs).
 
 #### `dispute, voted`
 
-Emitted by `vote_on_dispute`.
+Emitted by `vote_on_dispute`. A configured arbiter casts their first vote before the voting deadline.
 
 ```rust
 pub struct DisputeVotedEvent {
@@ -1680,7 +1684,7 @@ Sources [lib.rs](../smart-contracts/contracts/dispute_resolution/src/lib.rs).
 
 #### `dispute, resolved`
 
-Emitted by `resolve_dispute`.
+Emitted by `resolve_dispute`. The voting period has closed and the escrow is settled according to the vote threshold.
 
 ```rust
 pub struct DisputeResolvedEvent {
@@ -1706,7 +1710,7 @@ Sources [lib.rs](../smart-contracts/contracts/dispute_resolution/src/lib.rs).
 
 #### `errreg, upgraded`
 
-Emitted by `upgrade`.
+Emitted by `upgrade`. The authorized admin upgrades the Wasm and records the new version.
 
 Rust value type
 
@@ -1728,7 +1732,7 @@ Sources [lib.rs](../smart-contracts/contracts/error-registry/src/lib.rs).
 
 #### `errreg, submitted`
 
-Emitted by `submit_error`.
+Emitted by `submit_error`. A new error with a valid TTL is stored.
 
 Rust value type
 
@@ -1748,7 +1752,7 @@ Sources [lib.rs](../smart-contracts/contracts/error-registry/src/lib.rs).
 
 #### `errreg, cleaned`
 
-Emitted by `cleanup_expired_errors`.
+Emitted by `cleanup_expired_errors`. An expiry cleanup processes a bounded batch and reports its counts.
 
 ```rust
 pub struct CleanupStats {
@@ -1772,7 +1776,7 @@ Sources [lib.rs](../smart-contracts/contracts/error-registry/src/lib.rs).
 
 #### `errres, audit`
 
-Emitted by `set_quorum`, `add_signer`, `remove_signer`, `propose_allowlist_op`, `execute_allowlist_op`, `add_authorized_caller`, `remove_authorized_caller`.
+Emitted by `set_quorum`, `add_signer`, `remove_signer`, `propose_allowlist_op`, `execute_allowlist_op`, `add_authorized_caller`, `remove_authorized_caller`. An allowlist or governance operation records its actor, target, operation and timestamp.
 
 Rust value type
 
@@ -1793,7 +1797,7 @@ Sources [agent_errors.rs](../smart-contracts/contracts/error-resolver/src/agent_
 
 #### `errres, recorded`
 
-Emitted by `record_error`.
+Emitted by `record_error`. An authorized caller increments the agent's error counter.
 
 Rust value type
 
@@ -1812,7 +1816,7 @@ Sources [agent_errors.rs](../smart-contracts/contracts/error-resolver/src/agent_
 
 #### `errres, cleared`
 
-Emitted by `clear_agent_errors`.
+Emitted by `clear_agent_errors`. An authorized caller clears the agent's error counter.
 
 Rust value type `Symbol`.
 
@@ -1826,7 +1830,7 @@ Sources [agent_errors.rs](../smart-contracts/contracts/error-resolver/src/agent_
 
 #### `GovernanceProposed`
 
-Emitted by `propose`.
+Emitted by `propose`. A signer creates a proposal with their approval already recorded.
 
 ```rust
 pub struct GovernanceProposedEvent {
@@ -1850,7 +1854,7 @@ Sources [lib.rs](../smart-contracts/contracts/multisig_governance/src/lib.rs).
 
 #### `signature_added`
 
-Emitted by `propose`, `approve`.
+Emitted by `propose`, `approve`. The proposer signs implicitly or a distinct signer explicitly approves.
 
 ```rust
 pub struct SignatureAddedEvent {
@@ -1914,7 +1918,7 @@ Sources [lib.rs](../smart-contracts/contracts/multisig_governance/src/lib.rs).
 
 #### `GovernanceApproved`
 
-Emitted by `approve`.
+Emitted by `approve`. A distinct eligible signer adds their approval.
 
 ```rust
 pub struct GovernanceApprovedEvent {
@@ -1936,7 +1940,7 @@ Sources [lib.rs](../smart-contracts/contracts/multisig_governance/src/lib.rs).
 
 #### `GovernanceRejected`
 
-Emitted by `reject`.
+Emitted by `reject`. A signer rejects the proposal and updates its rejection count.
 
 ```rust
 pub struct GovernanceRejectedEvent {
@@ -1960,7 +1964,7 @@ Sources [lib.rs](../smart-contracts/contracts/multisig_governance/src/lib.rs).
 
 #### `GovernanceExecuted`
 
-Emitted by `execute`.
+Emitted by `execute`. An approved, unexpired proposal executes after its timelock.
 
 ```rust
 pub struct GovernanceExecutedEvent {
@@ -1980,7 +1984,7 @@ Sources [lib.rs](../smart-contracts/contracts/multisig_governance/src/lib.rs).
 
 #### `gov_ms, cancelled`
 
-Emitted by `cancel`.
+Emitted by `cancel`. The proposer cancels an eligible proposal.
 
 ```rust
 pub struct GovernanceCancelledEvent {
@@ -2000,7 +2004,7 @@ Sources [lib.rs](../smart-contracts/contracts/multisig_governance/src/lib.rs).
 
 #### `signature_revoked`
 
-Emitted by `revoke`.
+Emitted by `revoke`. A signer removes an existing approval.
 
 ```rust
 pub struct SignatureRevokedEvent {
@@ -2024,7 +2028,7 @@ Sources [lib.rs](../smart-contracts/contracts/multisig_governance/src/lib.rs).
 
 #### `mgr, ora_set`
 
-Emitted by `set_oracle`.
+Emitted by `set_oracle`. The manager sets or clears the primary oracle as permitted by the entry point.
 
 ```rust
 pub struct OracleSetEvent {
@@ -2042,7 +2046,7 @@ Sources [lib.rs](../smart-contracts/contracts/oracle_manager/src/lib.rs).
 
 #### `mgr, fb_set`
 
-Emitted by `set_fallback_price`.
+Emitted by `set_fallback_price`. A fallback price is configured for a pair.
 
 ```rust
 pub struct FallbackPriceSetEvent {
@@ -2062,7 +2066,7 @@ Sources [lib.rs](../smart-contracts/contracts/oracle_manager/src/lib.rs).
 
 #### `mgr, fdr_add`
 
-Emitted by `add_feeder`.
+Emitted by `add_feeder`. An authorized administrator adds a feeder.
 
 ```rust
 pub struct FeederAddedEvent {
@@ -2080,7 +2084,7 @@ Sources [lib.rs](../smart-contracts/contracts/oracle_manager/src/lib.rs).
 
 #### `mgr, fdr_rem`
 
-Emitted by `remove_feeder`.
+Emitted by `remove_feeder`. An authorized administrator removes a feeder.
 
 ```rust
 pub struct FeederRemovedEvent {
@@ -2098,7 +2102,7 @@ Sources [lib.rs](../smart-contracts/contracts/oracle_manager/src/lib.rs).
 
 #### `mgr, fdr_sub`
 
-Emitted by `submit_price`.
+Emitted by `submit_price`. An authorized feeder submits a valid price.
 
 ```rust
 pub struct FeederPriceSubmittedEvent {
@@ -2232,7 +2236,7 @@ Sources [lib.rs](../smart-contracts/contracts/payment_escrow/src/lib.rs).
 
 #### `plt_cfg, cfg_upd`
 
-Emitted by `update_config`.
+Emitted by `update_config`. The admin applies a validated configuration value.
 
 ```rust
 pub struct ConfigUpdatedEvent {
@@ -2257,7 +2261,7 @@ Sources [lib.rs](../smart-contracts/contracts/platform_config/src/lib.rs).
 
 #### `plt_cfg, fee_prop`
 
-Emitted by `propose_fee_change`.
+Emitted by `propose_fee_change`. The admin queues an eligible fee rate with its execution time.
 
 Rust value type
 
@@ -2277,7 +2281,7 @@ Sources [lib.rs](../smart-contracts/contracts/platform_config/src/lib.rs).
 
 #### `plt_cfg, fee_app`
 
-Emitted by `apply_fee_change`.
+Emitted by `apply_fee_change`. A pending fee rate is applied after the timelock.
 
 Rust value type
 
@@ -2326,7 +2330,7 @@ Sources [lib.rs](../smart-contracts/contracts/price_oracle/src/lib.rs).
 
 #### `oracle, updated`
 
-Emitted by `submit_feeder_price`.
+Emitted by `submit_feeder_price`. An eligible feeder price passes validation and updates the stored price.
 
 ```rust
 pub struct PriceUpdatedEvent {
@@ -2354,7 +2358,7 @@ Sources [lib.rs](../smart-contracts/contracts/price_oracle/src/lib.rs).
 
 #### `oracle, age_set`
 
-Emitted by `set_max_price_age`.
+Emitted by `set_max_price_age`. An administrator changes the maximum age of a usable price.
 
 ```rust
 pub struct MaxAgeUpdatedEvent {
@@ -2380,7 +2384,7 @@ Sources [lib.rs](../smart-contracts/contracts/price_oracle/src/lib.rs).
 
 #### `reputat, outcome`
 
-Emitted by `record_outcome`.
+Emitted by `record_outcome`. An accepted task outcome updates the agent's reputation.
 
 ```rust
 pub struct OutcomeRecordedEvent {
@@ -2406,7 +2410,7 @@ Sources [lib.rs](../smart-contracts/contracts/reputation/src/lib.rs).
 
 #### `reputat, decayed`
 
-Emitted by `decay_reputation`.
+Emitted by `decay_reputation`. The reputation decay operation applies the elapsed-period adjustment.
 
 ```rust
 pub struct ReputationDecayedEvent {
@@ -2432,7 +2436,7 @@ Sources [lib.rs](../smart-contracts/contracts/reputation/src/lib.rs).
 
 #### `task_str, upgraded`
 
-Emitted by `upgrade`.
+Emitted by `upgrade`. The admin records a new Wasm and version.
 
 ```rust
 pub struct ContractUpgradedEvent {
@@ -2460,7 +2464,7 @@ Sources [lib.rs](../smart-contracts/contracts/task_store/src/lib.rs).
 
 #### `task_str, coord_set`
 
-Emitted by `set_coordinator`, `rotate_coordinator`.
+Emitted by `set_coordinator`, `rotate_coordinator`. The admin sets or rotates the coordinator address.
 
 ```rust
 pub struct CoordinatorSetEvent {
@@ -2508,7 +2512,7 @@ Sources [lib.rs](../smart-contracts/contracts/task_store/src/lib.rs).
 
 #### `task_meta, task_assigned`
 
-Emitted by `assign_task_weighted`.
+Emitted by `assign_task_weighted`. Weighted selection writes the winning agent, weight, and selection seed.
 
 ```rust
 pub struct TaskAssignedEvent {
@@ -2564,7 +2568,7 @@ Sources [lib.rs](../smart-contracts/contracts/task_store/src/lib.rs).
 
 #### `task_str, ora_set`
 
-Emitted by `set_oracle_manager`.
+Emitted by `set_oracle_manager`. The admin sets or clears the OracleManager address.
 
 ```rust
 pub struct OracleManagerSetEvent {
@@ -2584,7 +2588,7 @@ Sources [lib.rs](../smart-contracts/contracts/task_store/src/lib.rs).
 
 #### `task_meta, created`
 
-Emitted by `store_task_metadata`.
+Emitted by `store_task_metadata`. A submitter successfully stores validated metadata for a new task.
 
 ```rust
 pub struct TaskCreatedEvent {
@@ -2618,7 +2622,7 @@ Sources [lib.rs](../smart-contracts/contracts/task_store/src/lib.rs).
 
 #### `upgrade, init`
 
-Emitted by `initialize`.
+Emitted by `initialize`. Successful initialization stores administrator configuration.
 
 ```rust
 pub struct UpgradeInitializedEvent {
@@ -2640,7 +2644,7 @@ Sources [lib.rs](../smart-contracts/contracts/upgrade-manager/src/lib.rs).
 
 #### `upgrade, adm_chng`
 
-Emitted by `set_admin`.
+Emitted by `set_admin`. The administrator address changes.
 
 ```rust
 pub struct AdminChangedEvent {
@@ -2660,7 +2664,7 @@ Sources [lib.rs](../smart-contracts/contracts/upgrade-manager/src/lib.rs).
 
 #### `upgrade, proposed`
 
-Emitted by `propose_upgrade`.
+Emitted by `propose_upgrade`. An authorized proposer queues a contract upgrade.
 
 ```rust
 pub struct UpgradeProposedEvent {
@@ -2684,7 +2688,7 @@ Sources [lib.rs](../smart-contracts/contracts/upgrade-manager/src/lib.rs).
 
 #### `upgrade, validated`
 
-Emitted by `validate_proposal`.
+Emitted by `validate_proposal`. The proposal's validation state is recorded.
 
 ```rust
 pub struct UpgradeValidatedEvent {
@@ -2708,7 +2712,7 @@ Sources [lib.rs](../smart-contracts/contracts/upgrade-manager/src/lib.rs).
 
 #### `upgrade, applied`
 
-Emitted by `execute_upgrade`.
+Emitted by `execute_upgrade`. A validated upgrade executes.
 
 ```rust
 pub struct UpgradeAppliedEvent {
@@ -2732,7 +2736,7 @@ Sources [lib.rs](../smart-contracts/contracts/upgrade-manager/src/lib.rs).
 
 #### `upgrade, rollback`
 
-Emitted by `execute_rollback`.
+Emitted by `execute_rollback`. The authorized rollback restores an earlier version.
 
 ```rust
 pub struct UpgradeRolledBackEvent {
@@ -2754,7 +2758,7 @@ Sources [lib.rs](../smart-contracts/contracts/upgrade-manager/src/lib.rs).
 
 #### `rollback_executed`
 
-Emitted by `execute_rollback`.
+Emitted by `execute_rollback`. The rollback path records the restored deployment.
 
 ```rust
 pub struct RollbackExecutedEvent {
@@ -3011,7 +3015,7 @@ New optional fields are backward compatible. Read known properties and tolerate 
 
 Run this browser example in a bundled module with `@stellar/stellar-sdk`. Supply the task owner address, a recent ledger within RPC retention, the deployment's contract IDs, and the WebSocket origin. The RPC poller matches the Soroban release event. Horizon SSE supplies transaction observations for a known account, including claimable-balance releases used by the current backend payment service. The WebSocket reports application progress and the release transaction hash.
 
-Join matching transaction observations by network and hash. Where the deployment uses the Soroban escrow, correlate its task and node symbols with application IDs using the deployment's ID mapping. The coordinator's claimable-balance path can produce a WebSocket release and a Horizon transaction without a Soroban escrow event. Treat the channels as independent, with their own cursors and no global ordering.
+Join matching transaction observations by network and hash. The example keeps observations in memory for one browser session. A long-running consumer needs durable, bounded storage for pending matches. Where the deployment uses the Soroban escrow, correlate its task and node symbols with application IDs using the deployment's ID mapping. The coordinator's claimable-balance path can produce a WebSocket release and a Horizon transaction without a Soroban escrow event. Treat the channels as independent, with their own cursors and no global ordering.
 
 ```js
 import { nativeToScVal, scValToNative, xdr } from "@stellar/stellar-sdk";
@@ -3084,6 +3088,14 @@ async function pollEscrow() {
 // with a separate stored cursor for that filter set.
 void pollEscrow();
 
+const horizonHashes = new Set();
+const coordinatorReleases = new Set();
+function reportObservedRelease(hash) {
+  if (horizonHashes.has(hash) && coordinatorReleases.has(hash)) {
+    console.log("Coordinator release observed on Horizon", hash);
+  }
+}
+
 const horizonKey = `testnet:horizon:${paymentAccount}`;
 const horizonCursor = localStorage.getItem(horizonKey) ?? "now";
 const sse = new EventSource(
@@ -3091,7 +3103,10 @@ const sse = new EventSource(
 );
 sse.onmessage = ({ data }) => {
   const transaction = JSON.parse(data);
-  console.log("Horizon transaction", transaction.hash);
+  if (transaction.successful) {
+    horizonHashes.add(transaction.hash);
+    reportObservedRelease(transaction.hash);
+  }
   localStorage.setItem(horizonKey, transaction.paging_token);
 };
 
@@ -3111,7 +3126,8 @@ function connectTask() {
     }
     console.log("Task event", event);
     if (event.type === "payment_released") {
-      console.log("Coordinator release", event.payload.txHash);
+      coordinatorReleases.add(event.payload.txHash);
+      reportObservedRelease(event.payload.txHash);
     }
     localStorage.setItem(key, String(event.seq));
   };
