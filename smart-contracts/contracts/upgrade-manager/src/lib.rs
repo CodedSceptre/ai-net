@@ -16,9 +16,9 @@
 //!
 //! ## Usage Flow
 //!
-//! 1. `propose_upgrade` - Admin proposes new WASM hash with validation
+//! 1. `propose_self_upgrade` - Admin proposes new WASM hash with validation
 //! 2. Pre-upgrade hook validates compatibility and estimates gas
-//! 3. `execute_upgrade` - Admin executes the upgrade after validation
+//! 3. `execute_self_upgrade` - Admin executes the upgrade after validation
 //! 4. Post-upgrade hook migrates data to new format
 //! 5. `rollback_upgrade` - Optional rollback within 48h window
 //!
@@ -36,8 +36,10 @@ pub mod upgradeable;
 
 use events::*;
 use migration::*;
+#[cfg(feature = "contract")]
+use soroban_sdk::IntoVal;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env,
     String, Symbol, Vec,
 };
 pub use upgradeable::*;
@@ -46,6 +48,10 @@ pub use upgradeable::*;
 
 /// Rollback window in ledgers (48 hours at ~5s per ledger)
 pub const ROLLBACK_WINDOW_LEDGERS: u32 = 34_560;
+#[cfg(feature = "contract")]
+const PROPOSAL_WINDOW_SECS: u64 = 48 * 60 * 60;
+#[cfg(feature = "contract")]
+const MAX_COMPATIBILITY_ENTRIES: u32 = 128;
 
 /// Default TTL threshold for storage extension
 pub const TTL_THRESHOLD: u32 = 100_000;
@@ -104,6 +110,25 @@ pub struct RollbackRecord {
     pub can_rollback: bool,
 }
 
+/// A version-pair decision and its diagnostic note.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompatibilityEntry {
+    pub compatible: bool,
+    pub reason: String,
+}
+
+/// A multisig-approved upgrade for an independently deployed target.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TargetUpgradeProposal {
+    pub contract: Address,
+    pub new_wasm_hash: BytesN<32>,
+    pub from_version: String,
+    pub to_version: String,
+    pub proposed_at: u64,
+}
+
 /// Storage keys for upgrade manager data
 #[contracttype]
 #[derive(Clone)]
@@ -124,6 +149,12 @@ pub enum DataKey {
     MigrationState,
     /// Contract-specific upgrade hooks
     UpgradeHooks,
+    Compatibility(Address, String, String),
+    CompatibilityCount,
+    UpgradeGovernance,
+    TargetProposal(Bytes),
+    NextProposalId,
+    SelfProposedAt,
 }
 
 /// Upgrade operation errors
@@ -157,6 +188,12 @@ pub enum UpgradeError {
     DowngradeNotAllowed = 12,
     /// Down migration is irreversible and would cause data loss
     IrreversibleMigration = 13,
+    IncompatibleUpgrade = 14,
+    ProposalWindowActive = 15,
+    CompatibilityLimitReached = 16,
+    InvalidCompatibilityReason = 17,
+    GovernanceAlreadyConfigured = 18,
+    ProposalIdOverflow = 19,
 }
 
 /// Main upgrade manager contract
@@ -195,6 +232,52 @@ fn get_current_version(env: &Env) -> Option<ContractVersion> {
 /// always used.
 fn is_version_newer(current: &String, proposed: &String) -> bool {
     proposed > current
+}
+
+#[cfg(feature = "contract")]
+fn validate_version_pair(from: &String, to: &String) -> Result<(), UpgradeError> {
+    if from == to || from.is_empty() || to.is_empty() || from.len() > 64 || to.len() > 64 {
+        return Err(UpgradeError::InvalidVersion);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "contract")]
+fn check_target_version(
+    env: &Env,
+    contract: &Address,
+    expected: &String,
+) -> Result<(), UpgradeError> {
+    let version = env
+        .try_invoke_contract::<String, soroban_sdk::Error>(
+            contract,
+            &Symbol::new(env, "contract_version"),
+            Vec::new(env),
+        )
+        .ok()
+        .and_then(Result::ok)
+        .ok_or(UpgradeError::ContractNotUpgradeable)?;
+    if &version != expected {
+        return Err(UpgradeError::InvalidVersion);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "contract")]
+fn check_self_upgrade(env: &Env, from: String, to: String) -> Result<(), UpgradeError> {
+    let contract = env.current_contract_address();
+    if env.storage().instance().has(&DataKey::UpgradeGovernance)
+        || UpgradeManager::get_compatibility(
+            env.clone(),
+            contract.clone(),
+            from.clone(),
+            to.clone(),
+        )
+        .is_some()
+    {
+        UpgradeManager::authorize_upgrade(env.clone(), contract, from, to)?;
+    }
+    Ok(())
 }
 
 // ─── Contract Implementation ─────────────────────────────────────────────────
@@ -277,8 +360,226 @@ impl UpgradeManager {
         env.storage().persistent().get(&DataKey::Version(version))
     }
 
-    /// Propose a new upgrade with validation
+    /// Configure a Stellar multisig account or threshold-authenticated contract
+    /// account as the authority for managed upgrade proposals.
+    pub fn set_upgrade_governance(env: Env, governance: Address) -> Result<(), UpgradeError> {
+        require_admin(&env)?;
+        if env.storage().instance().has(&DataKey::UpgradeGovernance) {
+            return Err(UpgradeError::GovernanceAlreadyConfigured);
+        }
+        governance.require_auth();
+        env.storage().persistent().remove(&DataKey::Proposal);
+        env.storage().persistent().remove(&DataKey::SelfProposedAt);
+        env.storage()
+            .instance()
+            .set(&DataKey::UpgradeGovernance, &governance);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        Ok(())
+    }
+
+    pub fn register_compatibility(
+        env: Env,
+        contract: Address,
+        from_version: String,
+        to_version: String,
+        compatible: bool,
+    ) -> Result<(), UpgradeError> {
+        let reason = if compatible {
+            ""
+        } else {
+            "Marked incompatible by the administrator"
+        };
+        let reason = String::from_str(&env, reason);
+        Self::register_compat_reason(env, contract, from_version, to_version, compatible, reason)
+    }
+
+    /// Record a decision with a diagnostic reason for downstream maintainers.
+    pub fn register_compat_reason(
+        env: Env,
+        contract: Address,
+        from_version: String,
+        to_version: String,
+        compatible: bool,
+        reason: String,
+    ) -> Result<(), UpgradeError> {
+        require_admin(&env)?;
+        validate_version_pair(&from_version, &to_version)?;
+        if reason.len() > 256 || (!compatible && reason.is_empty()) {
+            return Err(UpgradeError::InvalidCompatibilityReason);
+        }
+        let key = DataKey::Compatibility(contract, from_version, to_version);
+        if !env.storage().instance().has(&key) {
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::CompatibilityCount)
+                .unwrap_or(0);
+            if count >= MAX_COMPATIBILITY_ENTRIES {
+                return Err(UpgradeError::CompatibilityLimitReached);
+            }
+            env.storage()
+                .instance()
+                .set(&DataKey::CompatibilityCount, &(count + 1));
+        }
+        env.storage()
+            .instance()
+            .set(&key, &CompatibilityEntry { compatible, reason });
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        Ok(())
+    }
+
+    pub fn get_compatibility(
+        env: Env,
+        contract: Address,
+        from_version: String,
+        to_version: String,
+    ) -> Option<bool> {
+        Self::get_compatibility_entry(env, contract, from_version, to_version)
+            .map(|entry| entry.compatible)
+    }
+
+    pub fn get_compatibility_entry(
+        env: Env,
+        contract: Address,
+        from_version: String,
+        to_version: String,
+    ) -> Option<CompatibilityEntry> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Compatibility(contract, from_version, to_version))
+    }
+
+    /// Check the matrix. Unknown transitions are allowed and emit a warning.
+    pub fn authorize_upgrade(
+        env: Env,
+        contract: Address,
+        current_version: String,
+        target_version: String,
+    ) -> Result<(), UpgradeError> {
+        validate_version_pair(&current_version, &target_version)?;
+        match Self::get_compatibility(
+            env.clone(),
+            contract.clone(),
+            current_version.clone(),
+            target_version.clone(),
+        ) {
+            Some(false) => return Err(UpgradeError::IncompatibleUpgrade),
+            Some(true) => {}
+            None => env.events().publish(
+                (Symbol::new(&env, "UpgradeCompatibilityUnknown"), contract),
+                (current_version, target_version),
+            ),
+        }
+        Ok(())
+    }
+
+    /// Propose an upgrade for a target that exposes `contract_version` and
+    /// `upgrade(hash, version)`. The target must authorize this manager.
     pub fn propose_upgrade(
+        env: Env,
+        contract: Address,
+        new_wasm_hash: BytesN<32>,
+        from_version: String,
+        to_version: String,
+    ) -> Result<Bytes, UpgradeError> {
+        let governance: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::UpgradeGovernance)
+            .ok_or(UpgradeError::Unauthorized)?;
+        governance.require_auth();
+        Self::authorize_upgrade(
+            env.clone(),
+            contract.clone(),
+            from_version.clone(),
+            to_version.clone(),
+        )?;
+        if contract == env.current_contract_address() {
+            return Err(UpgradeError::ContractNotUpgradeable);
+        }
+        check_target_version(&env, &contract, &from_version)?;
+        let id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextProposalId)
+            .unwrap_or(0);
+        let next = id.checked_add(1).ok_or(UpgradeError::ProposalIdOverflow)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::NextProposalId, &next);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+
+        let proposal_id = Bytes::from_array(&env, &id.to_be_bytes());
+        let key = DataKey::TargetProposal(proposal_id.clone());
+        let proposal = TargetUpgradeProposal {
+            contract,
+            new_wasm_hash,
+            from_version,
+            to_version,
+            proposed_at: env.ledger().timestamp(),
+        };
+        env.storage().persistent().set(&key, &proposal);
+        extend_ttl_for_key(&env, &key);
+        env.events().publish(
+            (Symbol::new(&env, "UpgradeProposed"), proposal_id.clone()),
+            proposal,
+        );
+        Ok(proposal_id)
+    }
+
+    pub fn get_target_proposal(env: Env, proposal_id: Bytes) -> Option<TargetUpgradeProposal> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TargetProposal(proposal_id))
+    }
+
+    /// Apply an approved target upgrade after 48 hours. Recheck the version
+    /// and compatibility so intervening upgrades or decisions invalidate it.
+    pub fn execute_upgrade(env: Env, proposal_id: Bytes) -> Result<(), UpgradeError> {
+        require_admin(&env)?;
+        let key = DataKey::TargetProposal(proposal_id.clone());
+        let proposal: TargetUpgradeProposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(UpgradeError::NoProposal)?;
+        if env
+            .ledger()
+            .timestamp()
+            .saturating_sub(proposal.proposed_at)
+            < PROPOSAL_WINDOW_SECS
+        {
+            return Err(UpgradeError::ProposalWindowActive);
+        }
+        Self::authorize_upgrade(
+            env.clone(),
+            proposal.contract.clone(),
+            proposal.from_version.clone(),
+            proposal.to_version.clone(),
+        )?;
+        check_target_version(&env, &proposal.contract, &proposal.from_version)?;
+        env.storage().persistent().remove(&key);
+        env.invoke_contract::<()>(
+            &proposal.contract,
+            &symbol_short!("upgrade"),
+            (proposal.new_wasm_hash.clone(), proposal.to_version.clone()).into_val(&env),
+        );
+        // Soroban applies the WASM replacement after this invocation finishes.
+        env.events().publish(
+            (Symbol::new(&env, "UpgradeAuthorized"), proposal_id),
+            proposal,
+        );
+        Ok(())
+    }
+
+    /// Propose a new upgrade with validation
+    pub fn propose_self_upgrade(
         env: Env,
         new_version: String,
         new_wasm_hash: BytesN<32>,
@@ -293,6 +594,18 @@ impl UpgradeManager {
                 return Err(UpgradeError::DowngradeNotAllowed);
             }
         }
+
+        let governance: Option<Address> = env.storage().instance().get(&DataKey::UpgradeGovernance);
+        if let Some(governance) = governance {
+            governance.require_auth();
+        }
+        if let Some(current) = get_current_version(&env) {
+            check_self_upgrade(&env, current.version, new_version.clone())?;
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::SelfProposedAt, &env.ledger().timestamp());
+        extend_ttl_for_key(&env, &DataKey::SelfProposedAt);
 
         // Create proposal
         let proposal = UpgradeProposal {
@@ -361,7 +674,7 @@ impl UpgradeManager {
     }
 
     /// Execute the validated upgrade proposal
-    pub fn execute_upgrade(env: Env) -> Result<(), UpgradeError> {
+    pub fn execute_self_upgrade(env: Env) -> Result<(), UpgradeError> {
         let admin = require_admin(&env)?;
 
         let proposal: UpgradeProposal = env
@@ -376,6 +689,19 @@ impl UpgradeManager {
 
         // Store current version for potential rollback
         let current_version = get_current_version(&env);
+        if env.storage().instance().has(&DataKey::UpgradeGovernance) {
+            let proposed_at: u64 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::SelfProposedAt)
+                .ok_or(UpgradeError::NoProposal)?;
+            if env.ledger().timestamp().saturating_sub(proposed_at) < PROPOSAL_WINDOW_SECS {
+                return Err(UpgradeError::ProposalWindowActive);
+            }
+        }
+        if let Some(current) = &current_version {
+            check_self_upgrade(&env, current.version.clone(), proposal.new_version.clone())?;
+        }
         let rollback_deadline = env.ledger().sequence() + ROLLBACK_WINDOW_LEDGERS;
 
         // Execute the upgrade
@@ -420,6 +746,8 @@ impl UpgradeManager {
 
         // Clean up proposal
         env.storage().persistent().remove(&DataKey::Proposal);
+
+        env.storage().persistent().remove(&DataKey::SelfProposedAt);
 
         // Execute post-upgrade migration
         execute_post_upgrade_migration(&env, &proposal.migration_plan)?;
@@ -567,7 +895,10 @@ fn estimate_migration_gas(_env: &Env, migration_plan: &MigrationPlan) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::{Address as _, Ledger as _}, BytesN, Env};
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger as _},
+        BytesN, Env,
+    };
 
     fn create_test_env() -> (Env, UpgradeManagerClient<'static>, Address) {
         let env = Env::default();
@@ -599,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    fn test_propose_and_execute_upgrade() {
+    fn test_propose_and_execute_self_upgrade() {
         let (env, client, admin) = create_test_env();
         let initial_hash = test_wasm_hash(&env, 1);
         let new_hash = test_wasm_hash(&env, 2);
@@ -614,7 +945,7 @@ mod tests {
         };
 
         // Propose upgrade
-        let result = client.try_propose_upgrade(
+        let result = client.try_propose_self_upgrade(
             &String::from_str(&env, "2.0.0"),
             &new_hash,
             &String::from_str(&env, "Major upgrade"),
@@ -627,7 +958,7 @@ mod tests {
         assert!(gas_estimate > 0);
 
         // Execute upgrade
-        let result = client.try_execute_upgrade();
+        let result = client.try_execute_self_upgrade();
         assert!(result.is_ok());
 
         let new_version = client.get_current_version().unwrap();
@@ -651,14 +982,14 @@ mod tests {
         };
 
         // Perform upgrade
-        client.propose_upgrade(
+        client.propose_self_upgrade(
             &String::from_str(&env, "2.0.0"),
             &new_hash,
             &String::from_str(&env, "Test upgrade"),
             &migration_plan,
         );
         client.validate_proposal();
-        client.execute_upgrade();
+        client.execute_self_upgrade();
 
         // Check rollback is available
         assert!(client.can_rollback());
@@ -692,14 +1023,14 @@ mod tests {
         };
 
         // Perform upgrade
-        client.propose_upgrade(
+        client.propose_self_upgrade(
             &String::from_str(&env, "2.0.0"),
             &new_hash,
             &String::from_str(&env, "Test upgrade"),
             &migration_plan,
         );
         client.validate_proposal();
-        client.execute_upgrade();
+        client.execute_self_upgrade();
 
         // Advance ledger past rollback deadline
         let current_seq = env.ledger().sequence();
@@ -755,7 +1086,7 @@ mod tests {
         let non_admin = Address::generate(&env);
         // Store the non-admin as admin temporarily to trigger the wrong-admin path.
         // Actually, the contract checks storage for DataKey::Admin via require_admin().
-        // propose_upgrade calls require_admin() which reads storage; since mock_all_auths
+        // propose_self_upgrade calls require_admin() which reads storage; since mock_all_auths
         // passes the auth call, we verify the downgrade check separately below.
         // We test unauthorized via double-init prevention instead:
         let result = client.try_initialize(
@@ -784,7 +1115,7 @@ mod tests {
         };
 
         // Proposing an older version string must fail.
-        let result = client.try_propose_upgrade(
+        let result = client.try_propose_self_upgrade(
             &String::from_str(&env, "1.0.0"),
             &test_wasm_hash(&env, 2),
             &String::from_str(&env, "Downgrade attempt"),
@@ -794,8 +1125,8 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_upgrade_without_validation_rejected() {
-        // Invariant: execute_upgrade must refuse an unvalidated proposal to
+    fn test_execute_self_upgrade_without_validation_rejected() {
+        // Invariant: execute_self_upgrade must refuse an unvalidated proposal to
         // prevent untested migrations from running on-chain.
         let (env, client, admin) = create_test_env();
         let initial_hash = test_wasm_hash(&env, 1);
@@ -808,7 +1139,7 @@ mod tests {
             estimated_items: 0,
         };
 
-        client.propose_upgrade(
+        client.propose_self_upgrade(
             &String::from_str(&env, "1.1.0"),
             &test_wasm_hash(&env, 2),
             &String::from_str(&env, "Needs validation"),
@@ -816,19 +1147,19 @@ mod tests {
         );
 
         // Attempt to execute without calling validate_proposal first.
-        let result = client.try_execute_upgrade();
+        let result = client.try_execute_self_upgrade();
         assert_eq!(result, Err(Ok(UpgradeError::ProposalNotValidated)));
     }
 
     #[test]
-    fn test_execute_upgrade_without_proposal_rejected() {
-        // Invariant: execute_upgrade with no active proposal must return
+    fn test_execute_self_upgrade_without_proposal_rejected() {
+        // Invariant: execute_self_upgrade with no active proposal must return
         // NoProposal so callers receive a clear error rather than a panic.
         let (env, client, admin) = create_test_env();
         let initial_hash = test_wasm_hash(&env, 1);
         client.initialize(&admin, &String::from_str(&env, "1.0.0"), &initial_hash);
 
-        let result = client.try_execute_upgrade();
+        let result = client.try_execute_self_upgrade();
         assert_eq!(result, Err(Ok(UpgradeError::NoProposal)));
     }
 
@@ -862,14 +1193,14 @@ mod tests {
             estimated_items: 0,
         };
 
-        client.propose_upgrade(
+        client.propose_self_upgrade(
             &String::from_str(&env, "1.1.0"),
             &new_hash,
             &String::from_str(&env, "Patch"),
             &migration_plan,
         );
         client.validate_proposal();
-        client.execute_upgrade();
+        client.execute_self_upgrade();
 
         // The initial version must still be queryable by its version string.
         let v1 = client.get_version(&String::from_str(&env, "1.0.0"));
@@ -900,23 +1231,32 @@ mod tests {
             estimated_items: 10,
         };
 
-        client.propose_upgrade(
+        client.propose_self_upgrade(
             &String::from_str(&env, "2.0.0"),
             &new_hash,
             &String::from_str(&env, "V2"),
             &migration_plan,
         );
         client.validate_proposal();
-        client.execute_upgrade();
+        client.execute_self_upgrade();
 
-        assert_eq!(client.get_current_version().unwrap().version, String::from_str(&env, "2.0.0"));
+        assert_eq!(
+            client.get_current_version().unwrap().version,
+            String::from_str(&env, "2.0.0")
+        );
 
         // Execute rollback within window
         client.execute_rollback(&false);
 
         // Verification: Current version atomically restored to 1.0.0
-        assert_eq!(client.get_current_version().unwrap().version, String::from_str(&env, "1.0.0"));
-        assert_eq!(client.get_current_version().unwrap().wasm_hash, initial_hash);
+        assert_eq!(
+            client.get_current_version().unwrap().version,
+            String::from_str(&env, "1.0.0")
+        );
+        assert_eq!(
+            client.get_current_version().unwrap().wasm_hash,
+            initial_hash
+        );
     }
 
     #[test]
@@ -936,14 +1276,14 @@ mod tests {
             estimated_items: 5,
         };
 
-        client.propose_upgrade(
+        client.propose_self_upgrade(
             &String::from_str(&env, "2.0.0"),
             &new_hash,
             &String::from_str(&env, "V2 Compressed"),
             &migration_plan,
         );
         client.validate_proposal();
-        client.execute_upgrade();
+        client.execute_self_upgrade();
 
         // Rollback without unsafe_rollback flag is blocked with IrreversibleMigration!
         let result = client.try_execute_rollback(&false);
@@ -951,7 +1291,10 @@ mod tests {
 
         // Rollback WITH unsafe_rollback = true succeeds
         client.execute_rollback(&true);
-        assert_eq!(client.get_current_version().unwrap().version, String::from_str(&env, "1.0.0"));
+        assert_eq!(
+            client.get_current_version().unwrap().version,
+            String::from_str(&env, "1.0.0")
+        );
     }
 
     #[test]
@@ -968,14 +1311,14 @@ mod tests {
             estimated_items: 0,
         };
 
-        client.propose_upgrade(
+        client.propose_self_upgrade(
             &String::from_str(&env, "1.1.0"),
             &new_hash,
             &String::from_str(&env, "Patch"),
             &migration_plan,
         );
         client.validate_proposal();
-        client.execute_upgrade();
+        client.execute_self_upgrade();
 
         // Advance ledger past 48h rollback deadline
         let deadline = client.get_rollback_info().unwrap().rollback_deadline;
@@ -990,3 +1333,88 @@ mod tests {
 
 #[cfg(test)]
 mod integration_tests;
+
+#[cfg(test)]
+mod target_upgrade_tests {
+    use super::*;
+    use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
+
+    #[contract]
+    struct Target;
+
+    #[contractimpl]
+    impl Target {
+        pub fn contract_version(env: Env) -> String {
+            env.storage()
+                .instance()
+                .get(&symbol_short!("version"))
+                .unwrap_or_else(|| String::from_str(&env, "1.0.0"))
+        }
+
+        pub fn upgrade(env: Env, hash: BytesN<32>, version: String) {
+            let manager: Address = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("manager"))
+                .unwrap();
+            manager.require_auth();
+            env.storage()
+                .instance()
+                .set(&symbol_short!("version"), &version);
+            env.storage().instance().set(&symbol_short!("hash"), &hash);
+        }
+    }
+
+    #[test]
+    fn enforces_matrix_governance_and_exact_execution_window() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let manager_id = env.register(UpgradeManager, ());
+        let target = env.register(Target, ());
+        let manager = UpgradeManagerClient::new(&env, &manager_id);
+        let hash = BytesN::from_array(&env, &[42; 32]);
+        let from = String::from_str(&env, "1.0.0");
+        let to = String::from_str(&env, "2.0.0");
+        env.as_contract(&manager_id, || {
+            env.storage().instance().set(&DataKey::Admin, &admin)
+        });
+        env.as_contract(&target, || {
+            env.storage()
+                .instance()
+                .set(&symbol_short!("manager"), &manager_id)
+        });
+        assert_eq!(
+            manager.try_propose_upgrade(&target, &hash, &from, &to),
+            Err(Ok(UpgradeError::Unauthorized))
+        );
+        manager.set_upgrade_governance(&Address::generate(&env));
+        manager.register_compatibility(&target, &from, &to, &false);
+        assert_eq!(manager.get_compatibility(&target, &from, &to), Some(false));
+        assert_eq!(
+            manager.try_propose_upgrade(&target, &hash, &from, &to),
+            Err(Ok(UpgradeError::IncompatibleUpgrade))
+        );
+        manager.register_compatibility(&target, &from, &to, &true);
+        let proposal = manager.propose_upgrade(&target, &hash, &from, &to);
+        env.ledger()
+            .with_mut(|ledger| ledger.timestamp += PROPOSAL_WINDOW_SECS - 1);
+        assert_eq!(
+            manager.try_execute_upgrade(&proposal),
+            Err(Ok(UpgradeError::ProposalWindowActive))
+        );
+        env.ledger().with_mut(|ledger| ledger.timestamp += 1);
+        manager.execute_upgrade(&proposal);
+        assert_eq!(TargetClient::new(&env, &target).contract_version(), to);
+        assert!(env.events().all().iter().any(|(contract, topics, _)| {
+            contract == manager_id
+                && topics
+                    == soroban_sdk::vec![
+                        &env,
+                        Symbol::new(&env, "UpgradeAuthorized").into_val(&env),
+                        proposal.clone().into_val(&env),
+                    ]
+        }));
+        assert!(manager.get_target_proposal(&proposal).is_none());
+    }
+}

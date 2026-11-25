@@ -554,8 +554,12 @@ mod upgrade_integration_tests {
         };
 
         // Test the full upgrade flow through upgrade manager
-        let result =
-            upgrade_mgr.propose_upgrade(&new_version, &new_hash, &description, &migration_plan);
+        let result = upgrade_mgr.propose_self_upgrade(
+            &new_version,
+            &new_hash,
+            &description,
+            &migration_plan,
+        );
         assert!(result.is_ok());
 
         // Validate proposal
@@ -564,7 +568,7 @@ mod upgrade_integration_tests {
         assert!(gas_estimate.unwrap() > 0);
 
         // Execute upgrade
-        let result = upgrade_mgr.try_execute_upgrade();
+        let result = upgrade_mgr.try_execute_self_upgrade();
         assert!(result.is_ok());
 
         // Verify upgrade was applied

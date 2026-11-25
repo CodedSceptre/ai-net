@@ -84,7 +84,7 @@ stellar contract invoke \
   --network $NETWORK \
   --source-account $STELLAR_SECRET_KEY \
   --id $UPGRADE_MANAGER_ID \
-  -- propose_upgrade \
+  -- propose_self_upgrade \
   --new_version "2.0.0" \
   --new_wasm_hash $WASM_ID \
   --description "Upgrade to v2.0.0 with enhanced composite indexing and metadata" \
@@ -115,7 +115,7 @@ stellar contract invoke \
   --network $NETWORK \
   --source-account $STELLAR_SECRET_KEY \
   --id $UPGRADE_MANAGER_ID \
-  -- execute_upgrade
+  -- execute_self_upgrade
 ```
 
 ---

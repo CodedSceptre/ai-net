@@ -256,7 +256,7 @@ check_upgrade_compatibility() {
 }
 
 # Propose upgrade via upgrade manager
-propose_upgrade() {
+propose_self_upgrade() {
     local contract_name="$1"
     local new_version="$2"
     local new_wasm_hash="$3"
@@ -287,7 +287,7 @@ propose_upgrade() {
         --network "$NETWORK" \
         --source-account "$STELLAR_SECRET_KEY" \
         --id "$upgrade_manager_id" \
-        -- propose_upgrade \
+        -- propose_self_upgrade \
         --new_version "$new_version" \
         --new_wasm_hash "$new_wasm_hash" \
         --description "$description" \
@@ -318,7 +318,7 @@ validate_upgrade_proposal() {
 }
 
 # Execute upgrade via upgrade manager
-execute_upgrade_via_manager() {
+execute_self_upgrade_via_manager() {
     local upgrade_manager_id="$1"
     
     echo -e "${BLUE}Executing upgrade via upgrade manager...${NC}"
@@ -332,7 +332,7 @@ execute_upgrade_via_manager() {
         --network "$NETWORK" \
         --source-account "$STELLAR_SECRET_KEY" \
         --id "$upgrade_manager_id" \
-        -- execute_upgrade
+        -- execute_self_upgrade
     
     echo -e "${GREEN}✓ Upgrade executed successfully${NC}"
 }
@@ -449,9 +449,9 @@ upgrade_single_contract() {
             fi
             
             # Upgrade via manager
-            propose_upgrade "$name" "$new_version" "$new_wasm_hash" "$description" "$upgrade_manager_id"
+            propose_self_upgrade "$name" "$new_version" "$new_wasm_hash" "$description" "$upgrade_manager_id"
             validate_upgrade_proposal "$upgrade_manager_id"
-            execute_upgrade_via_manager "$upgrade_manager_id"
+            execute_self_upgrade_via_manager "$upgrade_manager_id"
         fi
     else
         # Direct upgrade

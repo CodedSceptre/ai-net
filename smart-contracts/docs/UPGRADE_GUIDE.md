@@ -144,7 +144,7 @@ stellar contract invoke \
   --network testnet \
   --source-account $STELLAR_SECRET_KEY \
   --id $UPGRADE_MANAGER_ID \
-  -- propose_upgrade \
+  -- propose_self_upgrade \
   --new_version "1.1.0" \
   --new_wasm_hash $NEW_WASM_HASH \
   --description "Upgrade to version 1.1.0" \
@@ -160,7 +160,7 @@ stellar contract invoke \
   --network testnet \
   --source-account $STELLAR_SECRET_KEY \
   --id $UPGRADE_MANAGER_ID \
-  -- execute_upgrade
+  -- execute_self_upgrade
 ```
 
 #### Step 4: Verify Upgrade

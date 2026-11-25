@@ -8,7 +8,7 @@
 /// - Non-admin cannot propose an upgrade
 /// - Downgrade (older version string) is rejected
 #[cfg(test)]
-mod integration_tests {
+mod workflows {
     use crate::{MigrationPlan, UpgradeError, UpgradeManager, UpgradeManagerClient};
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
@@ -55,7 +55,10 @@ mod integration_tests {
         let (env, client, _admin) = setup();
 
         let version = client.get_current_version();
-        assert!(version.is_some(), "current version must be set after initialize");
+        assert!(
+            version.is_some(),
+            "current version must be set after initialize"
+        );
         assert_eq!(
             version.unwrap().version,
             String::from_str(&env, "1.0.0"),
@@ -77,7 +80,7 @@ mod integration_tests {
     }
 
     #[test]
-    fn test_propose_upgrade_stores_proposal() {
+    fn test_propose_self_upgrade_stores_proposal() {
         let (env, client, _admin) = setup();
 
         let new_version = String::from_str(&env, "2.0.0");
@@ -85,8 +88,11 @@ mod integration_tests {
         let description = String::from_str(&env, "Major upgrade");
         let plan = empty_migration_plan(&env);
 
-        let result = client.try_propose_upgrade(&new_version, &new_hash, &description, &plan);
-        assert!(result.is_ok(), "propose_upgrade should succeed: {result:?}");
+        let result = client.try_propose_self_upgrade(&new_version, &new_hash, &description, &plan);
+        assert!(
+            result.is_ok(),
+            "propose_self_upgrade should succeed: {result:?}"
+        );
     }
 
     #[test]
@@ -99,7 +105,7 @@ mod integration_tests {
         let description = String::from_str(&env, "Downgrade attempt");
         let plan = empty_migration_plan(&env);
 
-        let result = client.try_propose_upgrade(&old_version, &new_hash, &description, &plan);
+        let result = client.try_propose_self_upgrade(&old_version, &new_hash, &description, &plan);
         assert_eq!(
             result,
             Err(Ok(UpgradeError::DowngradeNotAllowed)),
@@ -112,12 +118,16 @@ mod integration_tests {
         let (_env, client, _admin) = setup();
 
         // No proposal proposed, execute must fail.
-        let result = client.try_execute_upgrade();
-        assert_eq!(result, Err(Ok(UpgradeError::NoProposal)), "execute without proposal must fail");
+        let result = client.try_execute_self_upgrade();
+        assert_eq!(
+            result,
+            Err(Ok(UpgradeError::NoProposal)),
+            "execute without proposal must fail"
+        );
     }
 
     #[test]
-    fn test_propose_validate_and_execute_upgrade() {
+    fn test_propose_validate_and_execute_self_upgrade() {
         let (env, client, _admin) = setup();
 
         let new_version = String::from_str(&env, "2.0.0");
@@ -126,15 +136,21 @@ mod integration_tests {
         let plan = empty_migration_plan(&env);
 
         // Propose.
-        client.propose_upgrade(&new_version, &new_hash, &description, &plan);
+        client.propose_self_upgrade(&new_version, &new_hash, &description, &plan);
 
         // Validate.
         let result = client.try_validate_proposal();
-        assert!(result.is_ok(), "validate_proposal should succeed: {result:?}");
+        assert!(
+            result.is_ok(),
+            "validate_proposal should succeed: {result:?}"
+        );
 
         // Execute.
-        let exec_result = client.try_execute_upgrade();
-        assert!(exec_result.is_ok(), "execute_upgrade should succeed: {exec_result:?}");
+        let exec_result = client.try_execute_self_upgrade();
+        assert!(
+            exec_result.is_ok(),
+            "execute_self_upgrade should succeed: {exec_result:?}"
+        );
 
         // Version must have advanced.
         let current = client.get_current_version().unwrap();
@@ -149,18 +165,32 @@ mod integration_tests {
         let new_version = String::from_str(&env, "2.0.0");
         let new_hash = BytesN::from_array(&env, &[2u8; 32]);
         let plan = empty_migration_plan(&env);
-        client.propose_upgrade(&new_version, &new_hash, &String::from_str(&env, "v2"), &plan);
+        client.propose_self_upgrade(
+            &new_version,
+            &new_hash,
+            &String::from_str(&env, "v2"),
+            &plan,
+        );
         client.validate_proposal();
-        client.execute_upgrade();
+        client.execute_self_upgrade();
 
         // Rollback info must be available.
         let rollback_info = client.get_rollback_info();
-        assert!(rollback_info.is_some(), "rollback info must be set after upgrade");
-        assert!(rollback_info.unwrap().can_rollback, "rollback must be available");
+        assert!(
+            rollback_info.is_some(),
+            "rollback info must be set after upgrade"
+        );
+        assert!(
+            rollback_info.unwrap().can_rollback,
+            "rollback must be available"
+        );
 
         // Rollback within the window.
         let result = client.try_rollback_upgrade();
-        assert!(result.is_ok(), "rollback_upgrade within window should succeed: {result:?}");
+        assert!(
+            result.is_ok(),
+            "rollback_upgrade within window should succeed: {result:?}"
+        );
 
         // Version must have reverted.
         let current = client.get_current_version().unwrap();
@@ -179,9 +209,14 @@ mod integration_tests {
         let new_version = String::from_str(&env, "2.0.0");
         let new_hash = BytesN::from_array(&env, &[2u8; 32]);
         let plan = empty_migration_plan(&env);
-        client.propose_upgrade(&new_version, &new_hash, &String::from_str(&env, "v2"), &plan);
+        client.propose_self_upgrade(
+            &new_version,
+            &new_hash,
+            &String::from_str(&env, "v2"),
+            &plan,
+        );
         client.validate_proposal();
-        client.execute_upgrade();
+        client.execute_self_upgrade();
 
         // Advance ledger past the rollback window.
         env.ledger().with_mut(|l| {

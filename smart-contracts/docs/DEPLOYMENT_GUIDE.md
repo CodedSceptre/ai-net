@@ -519,7 +519,7 @@ stellar contract invoke \
   --network testnet \
   --source $STELLAR_SECRET_KEY \
   --id $UPGRADE_MANAGER_ID \
-  -- propose_upgrade \
+  -- propose_self_upgrade \
   --new_version "1.1.0" \
   --new_wasm_hash $NEW_WASM_HASH \
   --description "Add paginated agent listing" \
@@ -538,7 +538,7 @@ stellar contract invoke \
   --network testnet \
   --source $STELLAR_SECRET_KEY \
   --id $UPGRADE_MANAGER_ID \
-  -- execute_upgrade
+  -- execute_self_upgrade
 # Output: { "success": true, "new_version": "1.1.0" }
 ```
 
