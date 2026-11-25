@@ -32,7 +32,9 @@
 //! | `unfreeze_agent`    | `unfreeze`         | `agent_id`                                               |
 //! | `update_pricing`    | `price_upd`        | `(agent_id, new_price)`                                  |
 
-use soroban_sdk::{contracttype, Address, BytesN, String, Symbol};
+use soroban_sdk::{contracttype, Address, BytesN, String, Symbol, Vec};
+
+use crate::types::{AnomalyKind, TargetChain};
 
 // ─── Legacy structs (kept for ABI compatibility) ──────────────────────────────
 
@@ -547,4 +549,24 @@ pub struct AnomalyDetectedEvent {
     /// Observed value: the operation count for a rate anomaly, the amount in
     /// stroops for a high-value one, and zero for a first-seen caller.
     pub observed: i128,
+}
+
+// ─── Batch registration event (issue batch_register) ─────────────────────────
+
+/// Data payload for `(registry, batch_reg)`.
+///
+/// Emitted once at the end of a successful `batch_register` call, summarising
+/// the overall outcome. Individual `agent_registered` events are still emitted
+/// per successfully committed agent so indexers can process them uniformly.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatchRegisteredEvent {
+    /// Total number of registrations in the input batch.
+    pub total: u32,
+    /// Number of agents successfully registered.
+    pub success_count: u32,
+    /// Number of registrations that failed validation.
+    pub failure_count: u32,
+    /// Zero-based indices of the entries that failed (up to 20 entries).
+    pub failed_indices: soroban_sdk::Vec<u32>,
 }

@@ -57,6 +57,20 @@ pub enum Error {
     RateLimitExceeded = 28,
     /// Configuration value is out of accepted bounds.
     InvalidConfig = 29,
+    /// Bridge proof has expired.
+    BridgeProofExpired = 30,
+    /// Bridge proof was not found.
+    BridgeProofNotFound = 31,
+    /// Bridge proof digest or signature does not match stored proof.
+    BridgeProofMismatch = 32,
+    /// Bridge proof expiry timestamp is invalid.
+    InvalidBridgeExpiry = 33,
+    /// Audit query range is invalid.
+    InvalidAuditRange = 34,
+    /// Price must be strictly positive.
+    InvalidPrice = 35,
+    /// Batch size exceeds the maximum allowed limit of 20 entries.
+    BatchSizeLimitExceeded = 36,
 }
 
 impl Error {
@@ -89,11 +103,16 @@ impl Error {
             24 => Some(Error::SlaNotFound),
             25 => Some(Error::SlaViolation),
             26 => Some(Error::InvalidSla),
-            27 => Some(Error::BridgeProofExpired),
-            28 => Some(Error::BridgeProofNotFound),
-            29 => Some(Error::BridgeProofMismatch),
-            30 => Some(Error::InvalidBridgeExpiry),
-            31 => Some(Error::InvalidAuditRange),
+            27 => Some(Error::InvalidRating),
+            28 => Some(Error::RateLimitExceeded),
+            29 => Some(Error::InvalidConfig),
+            30 => Some(Error::BridgeProofExpired),
+            31 => Some(Error::BridgeProofNotFound),
+            32 => Some(Error::BridgeProofMismatch),
+            33 => Some(Error::InvalidBridgeExpiry),
+            34 => Some(Error::InvalidAuditRange),
+            35 => Some(Error::InvalidPrice),
+            36 => Some(Error::BatchSizeLimitExceeded),
             _ => None,
         }
     }
