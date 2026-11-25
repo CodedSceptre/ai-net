@@ -265,7 +265,7 @@ merging. Copy that version's section into the GitHub release draft.
 4. Run the full CI suite for minor and major releases, including contract, API, and client integration checks. Run targeted regression and smoke checks for a hotfix.
 5. Deploy and initialize on testnet and run the registration, task, and settlement smoke flow.
 6. Verify the deployed contract IDs and update the deployment JSON and backend address configuration.
-7. Update the SDK's publishable `package.json` when the SDK changes. The example app under `docs/sdk-examples` is a consumer.
+7. Update the TypeScript SDK version in `smart-contracts/package.json` and sync its lockfile when the SDK changes.
 8. Update the API version defaults and supported versions as applicable. Check `API_DEFAULT_VERSION` and `API_SUPPORTED_VERSIONS` through `backend/src/api/middleware/versioning.ts`.
 9. Review the generated changelog, curate the entries, and confirm the migration and rollback notes.
 10. Prepare the GitHub release draft or release PR notes for the approved tag.
