@@ -359,7 +359,7 @@ See the [Venice API reference](https://docs.venice.ai/api-reference/api-spec), [
 
 1. Query `GET https://api.venice.ai/api/v1/models?type=text` and use the returned exact `id` of a model supporting the required features.
 2. Update the model option in the caller and send a small request to confirm it.
-3. Use the live catalog when replacing a deprecated ID.
+3. Use the live catalog when replacing a deprecated ID. For example, `venice-uncensored-1-2` and `gemini-3-6-flash` were listed as text models on November 25, 2026. Confirm availability and check `model_spec.capabilities.supportsResponseSchema` when you need schema output.
 
 ## Frontend
 
