@@ -34,16 +34,38 @@
 mod types;
 
 pub use types::{
-    CoordinatorSetEvent, DataKey, Error, OracleManagerSetEvent, TaskAssignedEvent,
-    TaskAssignmentRecord, TaskCreatedEvent, TaskFinalizedEvent, TaskMetadata, TaskStatus,
-    TaskUpdatedEvent, DEFAULT_TTL_DAYS, LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES, MAX_TTL_DAYS,
-    TASK_LIFECYCLE_EVENT_VERSION,
+    BatchRootSubmitted, ContractUpgradedEvent, CoordinatorSetEvent, DataKey, Error,
+    OracleManagerSetEvent, TaskAssignedEvent, TaskAssignmentRecord, TaskCreatedEvent,
+    TaskFinalizedEvent, TaskMetadata, TaskStatus, TaskUpdatedEvent, TaskVerifiedInBatch,
+    DEFAULT_TTL_DAYS, LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES, MAX_TTL_DAYS,
+    TASK_CONFIG_EVENT_VERSION, TASK_LIFECYCLE_EVENT_VERSION,
 };
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
-    Val, Vec,
+    contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
+
+const MAX_BATCH_TASKS: u32 = 1_000;
+
+// The leaf commits to the task ID and the result. A fixed-width task ID hash
+// makes the 65-byte leaf input distinct from the 64-byte branch input.
+fn batch_leaf(env: &Env, task_id: &Bytes, result_hash: &BytesN<32>) -> BytesN<32> {
+    let mut input = Bytes::from_slice(env, &[0]);
+    input.append(&env.crypto().sha256(task_id).to_bytes().into());
+    input.append(&result_hash.clone().into());
+    env.crypto().sha256(&input).to_bytes()
+}
+
+fn batch_parent(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
+    let (first, second) = if left < right {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let mut input: Bytes = first.clone().into();
+    input.append(&second.clone().into());
+    env.crypto().sha256(&input).to_bytes()
+}
 
 const SECONDS_PER_DAY: u64 = 86_400;
 const CONTRACT_VERSION: &str = "1.0.0";
@@ -175,6 +197,90 @@ impl TaskStoreContract {
         Ok(())
     }
 
+    /// Publish an immutable batch commitment. The admin authorizes submission.
+    pub fn submit_batch_root(
+        env: Env,
+        batch_id: Bytes,
+        merkle_root: BytesN<32>,
+        task_count: u32,
+    ) -> Result<(), Error> {
+        let admin = Self::admin(env.clone()).ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if task_count > MAX_BATCH_TASKS {
+            return Err(Error::BatchSizeExceeded);
+        }
+        if task_count == 0 {
+            return Err(Error::InvalidBatchSize);
+        }
+
+        let storage = env.storage().persistent();
+        let key = DataKey::BatchRoot(batch_id.clone());
+        if storage.has(&key) {
+            return Err(Error::AlreadyExists);
+        }
+        let batch = BatchRootSubmitted {
+            batch_id,
+            merkle_root,
+            task_count,
+        };
+        storage.set(&key, &batch);
+        env.events().publish(
+            (symbol_short!("task_str"), symbol_short!("batchroot")),
+            batch,
+        );
+        Ok(())
+    }
+
+    /// Verify a result using lexicographically ordered SHA-256 sibling pairs.
+    /// Build leaves as SHA-256(0x00 || SHA-256(task_id) || result_hash).
+    /// A valid inclusion proof authorizes this write and can be relayed by anyone.
+    pub fn verify_task_in_batch(
+        env: Env,
+        batch_id: Bytes,
+        task_id: Bytes,
+        result_hash: BytesN<32>,
+        merkle_proof: Vec<BytesN<32>>,
+    ) -> Result<(), Error> {
+        let storage = env.storage().persistent();
+        let batch: BatchRootSubmitted = storage
+            .get(&DataKey::BatchRoot(batch_id.clone()))
+            .ok_or(Error::NotFound)?;
+        let key = DataKey::VerifiedBatchTask(batch_id.clone(), task_id.clone());
+        if storage.has(&key) {
+            return Err(Error::AlreadyVerified);
+        }
+
+        let max_depth = u32::BITS - (batch.task_count - 1).leading_zeros();
+        if merkle_proof.len() > max_depth || (batch.task_count > 1 && merkle_proof.is_empty()) {
+            return Err(Error::InvalidMerkleProof);
+        }
+        let mut hash = batch_leaf(&env, &task_id, &result_hash);
+        for sibling in merkle_proof {
+            hash = batch_parent(&env, &hash, &sibling);
+        }
+        if hash != batch.merkle_root {
+            return Err(Error::InvalidMerkleProof);
+        }
+
+        storage.set(&key, &result_hash);
+        env.events().publish(
+            (symbol_short!("task_str"), symbol_short!("verified")),
+            TaskVerifiedInBatch {
+                batch_id,
+                task_id,
+                result_hash,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn is_task_verified(env: Env, batch_id: Bytes, task_id: Bytes) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::VerifiedBatchTask(batch_id, task_id))
+    }
+
     pub fn admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::Admin)
     }
@@ -293,8 +399,14 @@ impl TaskStoreContract {
     pub fn set_reputation_contract(env: Env, contract: Option<Address>) -> Result<(), Error> {
         require_admin(&env)?;
         match &contract {
-            Some(addr) => env.storage().instance().set(&DataKey::ReputationContract, addr),
-            None => env.storage().instance().remove(&DataKey::ReputationContract),
+            Some(addr) => env
+                .storage()
+                .instance()
+                .set(&DataKey::ReputationContract, addr),
+            None => env
+                .storage()
+                .instance()
+                .remove(&DataKey::ReputationContract),
         }
         Ok(())
     }
@@ -369,7 +481,10 @@ impl TaskStoreContract {
         env.storage().persistent().set(&key, &metadata);
 
         env.events().publish(
-            (symbol_short!("task_meta"), Symbol::new(&env, "task_assigned")),
+            (
+                symbol_short!("task_meta"),
+                Symbol::new(&env, "task_assigned"),
+            ),
             TaskAssignedEvent {
                 version: TASK_LIFECYCLE_EVENT_VERSION,
                 task_id: task_id.clone(),
@@ -403,7 +518,10 @@ impl TaskStoreContract {
     }
 
     /// Read the budget and reserve price for a task.
-    pub fn get_task_budget(env: Env, task_id: BytesN<32>) -> Result<(Option<i128>, Option<i128>), Error> {
+    pub fn get_task_budget(
+        env: Env,
+        task_id: BytesN<32>,
+    ) -> Result<(Option<i128>, Option<i128>), Error> {
         let metadata = read_metadata(&env, &task_id)?;
         Ok((metadata.max_budget, metadata.reserve_price))
     }
@@ -1309,3 +1427,58 @@ mod test {
 mod coordinator_tests;
 #[cfg(test)]
 mod integration_tests;
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, vec};
+
+    #[test]
+    fn four_leaf_batch_checks_proof_and_rejects_duplicates() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = TaskStoreContractClient::new(&env, &env.register(TaskStoreContract, ()));
+        client.initialize(&Address::generate(&env));
+
+        let batch = Bytes::from_slice(&env, b"batch");
+        let task = Bytes::from_slice(&env, &[1]);
+        let result = BytesN::from_array(&env, &[1; 32]);
+        let leaves: [BytesN<32>; 4] = core::array::from_fn(|index| {
+            let value = (index + 1) as u8;
+            batch_leaf(
+                &env,
+                &Bytes::from_slice(&env, &[value]),
+                &BytesN::from_array(&env, &[value; 32]),
+            )
+        });
+        let other_branch = batch_parent(&env, &leaves[2], &leaves[3]);
+        let root = BytesN::from_array(
+            &env,
+            &[
+                67, 44, 110, 172, 163, 205, 95, 1, 216, 93, 10, 41, 24, 25, 151, 244, 38, 7, 79,
+                162, 175, 33, 92, 72, 187, 69, 63, 18, 209, 29, 51, 207,
+            ],
+        );
+        client.submit_batch_root(&batch, &root, &4);
+
+        let tampered = vec![&env, leaves[2].clone(), other_branch.clone()];
+        assert_eq!(
+            client.try_verify_task_in_batch(&batch, &task, &result, &tampered),
+            Err(Ok(Error::InvalidMerkleProof))
+        );
+        assert!(!client.is_task_verified(&batch, &task));
+
+        let valid = vec![&env, leaves[1].clone(), other_branch];
+        let unrelated = Bytes::from_slice(&env, b"unrelated");
+        assert_eq!(
+            client.try_verify_task_in_batch(&batch, &unrelated, &result, &valid),
+            Err(Ok(Error::InvalidMerkleProof))
+        );
+        client.verify_task_in_batch(&batch, &task, &result, &valid);
+        assert!(client.is_task_verified(&batch, &task));
+        assert_eq!(
+            client.try_verify_task_in_batch(&batch, &task, &result, &valid),
+            Err(Ok(Error::AlreadyVerified))
+        );
+    }
+}
