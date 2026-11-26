@@ -59,19 +59,19 @@ Coordinator Agent
 
 ### Core Components
 
-| Component | Description |
-|---|---|
-| **Agent Registry** | On-chain registry of agents, capabilities, and pricing |
-| **Coordinator Agent** | Decomposes tasks, discovers agents, orchestrates work |
-| **Specialized Agents** | Research, Risk, Coding, Design, Report |
-| **Payment Layer** | Stellar-native payments between agents |
-| **Venice AI** | LLM inference for agent reasoning |
+| Component              | Description                                            |
+| ---------------------- | ------------------------------------------------------ |
+| **Agent Registry**     | On-chain registry of agents, capabilities, and pricing |
+| **Coordinator Agent**  | Decomposes tasks, discovers agents, orchestrates work  |
+| **Specialized Agents** | Research, Risk, Coding, Design, Report                 |
+| **Payment Layer**      | Stellar-native payments between agents                 |
+| **Venice AI**          | LLM inference for agent reasoning                      |
 
 ---
 
 ## Demo: Market Entry Report
 
-1. User submits: *"Generate a market-entry report for solar energy in Southeast Asia."*
+1. User submits: _"Generate a market-entry report for solar energy in Southeast Asia."_
 2. Coordinator decomposes the task into sub-tasks.
 3. **Research Agent** gathers market data.
 4. **Risk Agent** analyzes regulatory and financial risks.
@@ -116,6 +116,7 @@ ai-net/
 
 ## Documentation & Integration Guides
 
+- [Glossary](docs/GLOSSARY.md) — Canonical definitions for 60+ terms used across ai-net's docs, issues, and code.
 - [Changelog](CHANGELOG.md) — Release history.
 - [SDK Quickstart](docs/SDK_QUICKSTART.md) — TypeScript setup and API basics.
 - [SDK Examples](docs/sdk-examples/python/README.md) — Runnable Python, LangChain, and browser JavaScript examples.
@@ -205,8 +206,9 @@ cd smart-contracts
 ```
 
 The upgrade system provides:
+
 - ✅ **Safe upgrades** with pre/post migration hooks
-- ✅ **Version compatibility** checking 
+- ✅ **Version compatibility** checking
 - ✅ **48-hour rollback** window for emergency recovery
 - ✅ **Gas estimation** for migration operations
 - ✅ **Event tracking** for upgrade monitoring
