@@ -155,6 +155,8 @@ const AppShell: React.FC<AppShellProps> = ({ children }) => {
           collapsed={sidebarCollapsed}
           currentPath={location.pathname}
           onNavigate={handleNavigate}
+          onToggle={toggleSidebar}
+          walletAddress={publicKey}
         />
       )}
 
