@@ -76,47 +76,37 @@ echo "Installed WASM ID: $WASM_ID"
 
 ## 4. Step-by-Step Upgrade Execution
 
-### Step 4.1: Propose Upgrade with Migration Plan
+### Managed Upgrade Proposal
+
+Configure the manager's multisig governance address and authorize the manager
+as the target contract's upgrade administrator. Use the target's current
+version and the installed WASM hash. The target's upgrade hook owns migration.
 
 ```bash
-# Propose upgrade to target version (e.g. 2.0.0)
+# Submit with the configured multisig governance authorization.
 stellar contract invoke \
-  --network $NETWORK \
-  --source-account $STELLAR_SECRET_KEY \
-  --id $UPGRADE_MANAGER_ID \
+  --network "$NETWORK" \
+  --source-account "$GOVERNANCE_IDENTITY" \
+  --id "$UPGRADE_MANAGER_ID" \
   -- propose_upgrade \
-  --new_version "2.0.0" \
-  --new_wasm_hash $WASM_ID \
-  --description "Upgrade to v2.0.0 with enhanced composite indexing and metadata" \
-  --migration_plan '{
-    "pre_migration_checks": ["validate_storage_keys", "verify_balances"],
-    "data_transformations": ["migrate_agent_records_to_v2"],
-    "post_migration_validations": ["verify_record_counts"],
-    "estimated_items": 100
-  }'
-```
+  --contract "$AGENT_REGISTRY_ID" \
+  --new_wasm_hash "$NEW_WASM_HASH" \
+  --from_version "$CURRENT_VERSION" \
+  --to_version "$TARGET_VERSION"
 
-### Step 4.2: Validate Proposal & Estimate Gas
-
-```bash
-# Validate compatibility and estimate gas budget
+# Execute with manager admin authorization after the 48-hour window.
 stellar contract invoke \
-  --network $NETWORK \
-  --source-account $STELLAR_SECRET_KEY \
-  --id $UPGRADE_MANAGER_ID \
-  -- validate_proposal
+  --network "$NETWORK" \
+  --source-account "$ADMIN_IDENTITY" \
+  --id "$UPGRADE_MANAGER_ID" \
+  -- execute_upgrade --proposal_id "$PROPOSAL_ID"
 ```
 
-### Step 4.3: Execute Upgrade & Trigger Migration Hooks
+Record the proposal ID from the first invocation. Verify the target's version
+and update deployment metadata after execution. The manager's own WASM
+continues to use `propose_self_upgrade`, `validate_proposal`, and
+`execute_self_upgrade`.
 
-```bash
-# Execute upgrade
-stellar contract invoke \
-  --network $NETWORK \
-  --source-account $STELLAR_SECRET_KEY \
-  --id $UPGRADE_MANAGER_ID \
-  -- execute_upgrade
-```
 
 ---
 

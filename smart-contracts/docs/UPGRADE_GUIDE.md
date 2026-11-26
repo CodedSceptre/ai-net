@@ -133,35 +133,36 @@ stellar contract invoke \
   --target_version "1.1.0"
 ```
 
-#### Step 3: Perform Upgrade
+### Managed Upgrade Proposal
+
+Configure the manager's multisig governance address and authorize the manager
+as the target contract's upgrade administrator. Use the target's current
+version and the installed WASM hash. The target's upgrade hook owns migration.
 
 ```bash
-# Upgrade using script (recommended)
-./scripts/upgrade.sh -u -v "1.1.0" agent-registry
-
-# Or manually via upgrade manager
+# Submit with the configured multisig governance authorization.
 stellar contract invoke \
-  --network testnet \
-  --source-account $STELLAR_SECRET_KEY \
-  --id $UPGRADE_MANAGER_ID \
+  --network "$NETWORK" \
+  --source-account "$GOVERNANCE_IDENTITY" \
+  --id "$UPGRADE_MANAGER_ID" \
   -- propose_upgrade \
-  --new_version "1.1.0" \
-  --new_wasm_hash $NEW_WASM_HASH \
-  --description "Upgrade to version 1.1.0" \
-  --migration_plan $MIGRATION_PLAN
+  --contract "$CONTRACT_ID" \
+  --new_wasm_hash "$NEW_WASM_HASH" \
+  --from_version "$CURRENT_VERSION" \
+  --to_version "$TARGET_VERSION"
 
+# Execute with manager admin authorization after the 48-hour window.
 stellar contract invoke \
-  --network testnet \
-  --source-account $STELLAR_SECRET_KEY \
-  --id $UPGRADE_MANAGER_ID \
-  -- validate_proposal
-
-stellar contract invoke \
-  --network testnet \
-  --source-account $STELLAR_SECRET_KEY \
-  --id $UPGRADE_MANAGER_ID \
-  -- execute_upgrade
+  --network "$NETWORK" \
+  --source-account "$ADMIN_IDENTITY" \
+  --id "$UPGRADE_MANAGER_ID" \
+  -- execute_upgrade --proposal_id "$PROPOSAL_ID"
 ```
+
+Record the proposal ID from the first invocation. Verify the target's version
+and update deployment metadata after execution. The manager's own WASM
+continues to use `propose_self_upgrade`, `validate_proposal`, and
+`execute_self_upgrade`.
 
 #### Step 4: Verify Upgrade
 
