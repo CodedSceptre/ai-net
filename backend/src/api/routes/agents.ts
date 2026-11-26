@@ -267,6 +267,10 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
         return next(agentNotFound(req.params.id));
       }
 
+      if (agent.stellarPublicKey !== req.wallet) {
+        return next(new UnauthorizedError("Wallet JWT must match the agent owner"));
+      }
+
       const { outcome, qualityScore, latencyMs } = parse.data;
       const delta = computeReputationDelta({
         outcome,

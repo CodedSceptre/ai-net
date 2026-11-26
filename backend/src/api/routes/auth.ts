@@ -4,6 +4,7 @@ import { getAuthService, AuthService } from "../../services/auth";
 import { authMiddleware as sessionAuthMiddleware, optionalAuthMiddleware } from "../middleware/auth";
 import { ValidationError } from "../../errors/ValidationError";
 import { emptyBodySchema, stellarPublicKeySchema } from "../../schemas/common";
+import type { AuthService as WalletAuthService } from "../../services/authService";
 import { validate } from "../middleware/validate";
 
 const walletVerifySchema = z.object({
@@ -23,7 +24,7 @@ const revokeSessionSchema = z.object({
   reason: z.string().max(500).optional(),
 }).strict();
 
-export function createAuthRouter(authService?: AuthService): Router {
+export function createAuthRouter(authService?: AuthService, walletAuth?: WalletAuthService): Router {
   const router = Router();
   const service = authService ?? getAuthService();
 
@@ -52,6 +53,41 @@ export function createAuthRouter(authService?: AuthService): Router {
       next(err);
     }
   };
+  if (walletAuth) {
+    const challengeResponse = z.object({
+      walletPublicKey: z.string().max(128),
+      challenge: z.string().max(128),
+      signature: z.string().max(256),
+    }).strict();
+    router.get("/challenge", async (_req, res, next) => {
+      try {
+        res.setHeader("Cache-Control", "no-store");
+        res.json(await walletAuth.createChallenge());
+      } catch (error) {
+        next(error);
+      }
+    });
+    router.post("/verify", async (req, res, next) => {
+      if (req.body?.nonce !== undefined) return next();
+      const parsed = challengeResponse.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(401).json({ error: "INVALID_SIGNATURE" });
+        return;
+      }
+      try {
+        const { walletPublicKey, challenge, signature } = parsed.data;
+        const tokens = await walletAuth.verifySignature(walletPublicKey, challenge, signature);
+        if (!tokens) {
+          res.status(401).json({ error: "INVALID_SIGNATURE" });
+          return;
+        }
+        res.setHeader("Cache-Control", "no-store");
+        res.json(tokens);
+      } catch (error) {
+        next(error);
+      }
+    });
+  }
   router.post("/verify", validate(walletVerifySchema), verifyWallet);
   router.post("/token", validate(walletVerifySchema), verifyWallet);
 
@@ -86,11 +122,22 @@ export function createAuthRouter(authService?: AuthService): Router {
    *             schema:
    *               $ref: '#/components/schemas/UnauthorizedError'
    */
-  router.post("/refresh", validate(refreshTokenSchema), (req: Request, res: Response, next: NextFunction) => {
+  router.post("/refresh", validate(refreshTokenSchema), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { refreshToken } = req.body as z.infer<typeof refreshTokenSchema>;
       const ipAddress = req.ip || req.socket.remoteAddress || "unknown";
       const userAgent = req.headers["user-agent"] || "unknown";
+
+      if (walletAuth && refreshToken.startsWith("wallet_")) {
+        const tokens = await walletAuth.rotateRefreshToken(refreshToken);
+        res.setHeader("Cache-Control", "no-store");
+        if (!tokens) {
+          res.status(401).json({ error: "INVALID_REFRESH_TOKEN" });
+          return;
+        }
+        res.json(tokens);
+        return;
+      }
 
       const tokens = service.rotateRefreshToken({
         refreshToken,

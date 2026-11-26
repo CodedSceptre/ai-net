@@ -112,6 +112,8 @@ export function createIdempotencyMiddleware(store?: IdempotencyStore) {
     const walletPublicKey = (
       (req.headers['x-wallet-public-key'] as string | undefined) ??
       (req.headers['walletpublickey'] as string | undefined) ??
+    const walletAddress =
+      req.wallet ||
       (typeof req.body?.walletAddress === 'string' && req.body.walletAddress) ||
       (typeof req.body?.walletPublicKey === 'string' && req.body.walletPublicKey) ||
       req.get('X-Wallet-Address') ||

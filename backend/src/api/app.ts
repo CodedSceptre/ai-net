@@ -9,6 +9,8 @@ import { shutdownMiddleware, isShuttingDown } from "./middleware/shutdownMiddlew
  * dispatch/queue, etc.) and by the server entry-point (`src/index.ts`).
  */
 
+import Redis from "ioredis";
+import { AuthService as WalletAuthService } from "../services/authService";
 import express, { Request, Response } from "express";
 import { createServer, Server as HttpServer } from "http";
 import swaggerUi from "swagger-ui-express";
@@ -75,6 +77,7 @@ import { createFlagsRouter } from "./routes/flags";
 import { createVersionsRouter } from "./routes/versions";
 import { queueRouter } from "./routes/queue";
 import { optionalAuthMiddleware } from "./middleware/auth";
+import { walletAuthMiddleware } from "./middleware/auth";
 import { createAdminRouter } from "./routes/admin";
 import { type AuthService } from "../services/auth";
 import { createLogger } from "../utils/logger";
@@ -107,6 +110,7 @@ export interface AppOptions {
   jobWorker?: JobWorker;
   /** Custom auth service instance */
   authService?: AuthService;
+  walletAuthService?: WalletAuthService;
   /** Soroban registration hook used by the guided agent onboarding flow. */
   agentOnboarding?: AgentOnboardingOptions;
   /** Enable background queue worker (default: true) */
@@ -137,6 +141,13 @@ export function createApp(opts: AppOptions = {}): {
 } {
   const config = getConfig();
   const logger = createLogger({ module: "api-app" });
+  const jwtSecret = process.env.JWT_SECRET;
+  const authRedis = !opts.walletAuthService && jwtSecret
+    ? new Redis(config.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1 })
+    : undefined;
+  authRedis?.on("error", (error) => logger.error({ err: error }, "wallet auth Redis unavailable"));
+  const walletAuth = opts.walletAuthService ??
+    (authRedis && jwtSecret ? new WalletAuthService(authRedis, jwtSecret) : undefined);
   const app = express();
   const httpServer = createServer(app);
   const eventStore: EventStore = opts.eventStore ?? eventBus.store ?? createEventStore();
@@ -264,6 +275,9 @@ export function createApp(opts: AppOptions = {}): {
   // ── Auth routes ────────────────────────────────────────────────────────────
   app.use("/api/auth", createAuthRouter(opts.authService));
   app.use("/api/webhooks", optionalAuthMiddleware, authedLimiter.middleware, createWebhooksRouter(webhooks));
+  app.use("/api/auth", createAuthRouter(opts.authService, walletAuth));
+  app.use(["/api/tasks", "/api/agents", "/api/payments", "/api/webhooks", "/api/audit"],
+    walletAuthMiddleware(walletAuth));
 
   // ── Admin event replay ─────────────────────────────────────────────────────
   app.use("/api/events", adminLimiter.middleware, createEventsRouter(eventStore));
@@ -308,7 +322,7 @@ export function createApp(opts: AppOptions = {}): {
     }
   });
 
-  app.use("/api/tasks", authedLimiter.middleware, optionalAuthMiddleware, (req, res, next) => {
+  app.use("/api/tasks", authedLimiter.middleware, (req, res, next) => {
     const apiVersion = (res.locals.apiVersion as string) || "1.0";
     if (apiVersion.startsWith("1.")) {
       return v1TasksRouter(req, res, next);
@@ -400,6 +414,7 @@ export function createApp(opts: AppOptions = {}): {
       unsubscribeWebhooks();
       webhooks.stop();
       eventBus.disconnectRedis();
+      authRedis?.disconnect();
       metricsService.setWebSocketProbe(null);
       detachAgentStatusStream();
       detachStream();

@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
+import type { AuthService } from "../../services/authService";
 import { getConfig } from '../../config/index';
 import { getAuthService } from '../../services/auth';
 import type { AccessTokenPayload } from '../../services/auth/tokenService';
@@ -7,6 +8,7 @@ declare global {
   namespace Express {
     interface Request {
       user?: AccessTokenPayload;
+      wallet?: string;
     }
   }
 }
@@ -60,61 +62,31 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
 
 export const sessionAuthMiddleware = authMiddleware;
 
-export function requireWalletAuthMiddleware(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void {
-  const authorization = req.headers["authorization"] ?? "";
-  const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
-  if (!token) {
-    const legacyKey = req.headers["walletpublickey"] as string | undefined;
-    if (legacyKey) {
-      req.user = {
-        sub: legacyKey,
-        sessionId: "legacy",
-        familyId: "legacy",
-        deviceId: "legacy",
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + 86400,
-        jti: "legacy",
-      };
-      return next();
+export function walletAuthMiddleware(service?: AuthService) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const authorization = req.get("authorization") ?? "";
+    const token = /^Bearer ([^\s]+)$/i.exec(authorization)?.[1];
+    if (!token || !service) {
+      res.status(401).json({ error: "UNAUTHORIZED" });
+      return;
     }
-    if (process.env.NODE_ENV === "test") {
-      let sub = (req.body as { stellarPublicKey?: string })?.stellarPublicKey ?? "test-wallet";
-      const targetUrl = req.originalUrl || req.url || req.path;
-      const match = targetUrl.match(/(?:\/api)?\/agents\/([^/]+)/);
-      if (match && match[1]) {
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-          const { getAgentDb, createAgentDb } = require("../../db/agents");
-          const agent = createAgentDb(getAgentDb()).findById(match[1]);
-          if (agent) sub = agent.stellarPublicKey;
-        } catch {
-          // Ignore
-        }
-      }
-      req.user = {
-        sub,
-        sessionId: "test",
-        familyId: "test",
-        deviceId: "test",
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + 86400,
-        jti: "test",
-      };
-      return next();
+    try {
+      req.user = service.verifyAccessToken(token);
+      req.wallet = req.user.sub;
+    } catch {
+      res.status(401).json({ error: "UNAUTHORIZED" });
+      return;
     }
-    res.status(401).json({ error: "Unauthorized", message: "Bearer JWT required" });
+    next();
+  };
+}
+
+export function requireWalletAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
+  if (req.wallet) {
+    next();
     return;
   }
-  try {
-    req.user = getAuthService().verifyAccessToken(token);
-    next();
-  } catch {
-    res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
-  }
+  res.status(401).json({ error: "UNAUTHORIZED" });
 }
 
 /**
