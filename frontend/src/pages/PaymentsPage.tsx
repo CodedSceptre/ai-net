@@ -5,6 +5,7 @@ import { usePayments, type PaymentRow } from '../hooks/usePayments'
 import { useBreadcrumbLabel } from '../components/layout/Breadcrumb'
 import { Skeleton } from '../components/common/Skeleton'
 import { PaymentFeedback } from '../components/wallet/PaymentFeedback'
+import { ExportPaymentsModal } from '../components/wallet/ExportPaymentsModal'
 import styles from './PaymentsPage.module.css'
 
 const ITEMS_PER_PAGE = 20
@@ -58,8 +59,9 @@ function PaymentsPage() {
   const [dateTo, setDateTo] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [page, setPage] = useState(1)
+  const [exportModalOpen, setExportModalOpen] = useState(false)
 
-  const { rows, loading, error, refresh, exportCsv } = usePayments(publicKey, {
+  const { rows, loading, error, refresh } = usePayments(publicKey, {
     dateFrom,
     dateTo,
     status: statusFilter,
@@ -68,10 +70,6 @@ function PaymentsPage() {
 
   const totalPages = Math.max(1, Math.ceil(rows.length / ITEMS_PER_PAGE))
   const pagedRows = rows.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
-
-  const handleExport = useCallback(() => {
-    exportCsv(rows)
-  }, [exportCsv, rows])
 
   const clearFilters = useCallback(() => {
     setDateFrom('')
@@ -119,12 +117,12 @@ function PaymentsPage() {
           </button>
           <button
             className={styles.exportButton}
-            onClick={handleExport}
+            onClick={() => setExportModalOpen(true)}
             disabled={rows.length === 0}
-            aria-label="Export payment history as CSV"
+            aria-label="Export payment history"
           >
             <Download size={15} aria-hidden="true" />
-            Export CSV
+            Export
           </button>
         </div>
       </div>
@@ -278,6 +276,13 @@ function PaymentsPage() {
           </button>
         </nav>
       )}
+
+      {/* ── Export Modal ───────────────────────────────────────────────── */}
+      <ExportPaymentsModal
+        isOpen={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        payments={rows}
+      />
     </div>
   )
 }

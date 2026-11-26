@@ -10,6 +10,10 @@ import { i18nBaseOptions } from './src/i18n/options';
 // toHaveNoViolations() fails a test when axe finds critical or serious WCAG
 // violations.  Import and run `axe(container)` in any component test to check.
 expect.extend(axeMatchers);
+// Guard against versions of vitest-axe that don't export the matcher.
+if (typeof toHaveNoViolations === 'object' && toHaveNoViolations !== null) {
+  expect.extend(toHaveNoViolations);
+}
 
 // Configure axe to only fail on critical/serious violations in tests
 // (the full audit script reports all severity levels).
