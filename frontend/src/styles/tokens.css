@@ -370,3 +370,23 @@
   --status-info-border:        #7dd3fc;
   --status-info-text:          #0c4a6e;
 }
+
+/* ── Theme-switch transition ───────────────────────────────────────────────
+   Applied on :root so every element that inherits color/background smoothly
+   interpolates when [data-theme] flips between "dark" and "light".
+   200 ms matches the design spec in issue #739.
+   The prefers-reduced-motion media query opts out users who have asked the
+   OS to reduce animations.
+────────────────────────────────────────────────────────────────────────── */
+:root {
+  transition:
+    background-color 200ms ease,
+    color 200ms ease,
+    border-color 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    transition: none;
+  }
+}

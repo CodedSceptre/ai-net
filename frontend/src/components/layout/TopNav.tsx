@@ -13,6 +13,8 @@ import './TopNav.css'
 import useTheme from '../../hooks/useTheme'
 import { Sun, Moon, Wallet } from 'lucide-react'
 import LanguageSwitcher from './LanguageSwitcher'
+import { ThemeToggle } from './ThemeToggle'
+import { Wallet } from 'lucide-react'
 
 // ── WS status indicator ────────────────────────────────────────────────────
 
@@ -99,7 +101,6 @@ const TopNav: React.FC<TopNavProps> = ({
   const { showToast } = useToast()
   const { t, i18n } = useTranslation()
   const location = useLocation()
-  const { setMode, effectiveTheme } = useTheme()
   const [isConnecting, setIsConnecting] = useState(false)
 
   const activeLanguage = (i18n.resolvedLanguage ?? 'en') as SupportedLanguage
@@ -184,17 +185,7 @@ const TopNav: React.FC<TopNavProps> = ({
         <GlobalSearch />
         <NotificationBell />
 
-        <button
-          className="theme-toggle"
-          onClick={() => setMode(effectiveTheme === 'dark' ? 'light' : 'dark')}
-          type="button"
-          role="switch"
-          aria-label={`Switch to ${effectiveTheme === 'dark' ? 'light' : 'dark'} theme`}
-          aria-checked={effectiveTheme === 'dark'}
-          title={`Switch to ${effectiveTheme === 'dark' ? 'light' : 'dark'} theme`}
-        >
-          {effectiveTheme === 'dark' ? <Moon size={16} /> : <Sun size={16} />}
-        </button>
+        <ThemeToggle />
 
         <LanguageSwitcher />
 

@@ -38,9 +38,11 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (effective === 'light') {
       root.classList.add('theme-light')
       root.classList.remove('theme-dark')
+      root.setAttribute('data-theme', 'light')
     } else {
       root.classList.remove('theme-light')
       root.classList.add('theme-dark')
+      root.setAttribute('data-theme', 'dark')
     }
 
     const metaThemeColor = document.querySelector('meta[name="theme-color"]')
