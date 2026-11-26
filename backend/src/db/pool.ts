@@ -25,6 +25,7 @@
  */
 
 import Database from "better-sqlite3";
+import { QueryMonitor } from "./queryMonitor";
 import { createLogger } from "../utils/logger";
 
 const logger = createLogger({ component: "db-pool" });
@@ -46,10 +47,10 @@ export interface PoolOptions {
   /**
    * Log statements at or above this duration (ms). Defaults to
    * `SLOW_QUERY_LOG_THRESHOLD_MS` or 100ms. `0` logs every statement;
-   * a negative value disables instrumentation.
+   * a negative value disables slow-query logging.
    */
   slowQueryThresholdMs?: number;
-  /** Test/observability hook overriding the default warn logger. */
+  /** Test/observability hook invoked in addition to the warn logger. */
   onSlowQuery?: (info: SlowQueryInfo) => void;
 }
 
@@ -129,45 +130,6 @@ function resolveSlowQueryThreshold(): number {
   return Number.isFinite(parsed) ? parsed : DEFAULT_SLOW_QUERY_THRESHOLD_MS;
 }
 
-/**
- * Wrap `db.prepare` so statement execution time is measured. Only the SQL
- * text is logged — never bound parameters, which may contain secrets.
- */
-function instrumentStatements(
-  db: Database.Database,
-  thresholdMs: number,
-  onSlowQuery?: (info: SlowQueryInfo) => void,
-): void {
-  if (thresholdMs < 0) return;
-
-  const originalPrepare = db.prepare.bind(db);
-  (db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
-    const statement = originalPrepare(sql);
-    return new Proxy(statement, {
-      get(target, property) {
-        const value = Reflect.get(target, property) as unknown;
-        if (typeof value !== "function") return value;
-        if (!["get", "all", "run", "iterate"].includes(String(property))) {
-          return (value as (...args: unknown[]) => unknown).bind(target);
-        }
-        return (...args: unknown[]) => {
-          const startedAt = performance.now();
-          try {
-            return (value as (...params: unknown[]) => unknown).apply(target, args);
-          } finally {
-            const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
-            if (durationMs >= thresholdMs) {
-              const info: SlowQueryInfo = { sql: sql.slice(0, 1_000), durationMs };
-              if (onSlowQuery) onSlowQuery(info);
-              else logger.warn(info, "slow query");
-            }
-          }
-        };
-      },
-    });
-  };
-}
-
 interface Waiter {
   resolve: (db: Database.Database) => void;
   reject: (err: Error) => void;
@@ -194,15 +156,11 @@ export class PoolClosedError extends Error {
 }
 
 function applyPragmas(db: Database.Database, readonly: boolean): void {
-  // WAL lets readers and the writer proceed concurrently. It is a property of
-  // the database file, so setting it on the writer covers every connection,
-  // but a read-only handle cannot set it at all.
-  if (!readonly) {
-    db.pragma("journal_mode = WAL");
-    // NORMAL is the recommended durability level under WAL: still crash-safe,
-    // without an fsync on every commit.
-    db.pragma("synchronous = NORMAL");
+  const journalMode = db.pragma(readonly ? "journal_mode" : "journal_mode = WAL", { simple: true });
+  if (journalMode !== "wal" && !db.memory) {
+    throw new Error(`SQLite WAL mode is required for ${db.name} (got ${String(journalMode)})`);
   }
+  db.pragma("synchronous = NORMAL");
   db.pragma("busy_timeout = 5000");
   db.pragma("foreign_keys = ON");
 }
@@ -228,12 +186,27 @@ export function createPool(options: PoolOptions): SqlitePool {
   if (min < 1) throw new RangeError("pool min must be at least 1");
   if (max < min) throw new RangeError("pool max must be >= min");
 
-  // The writer also creates the file and runs `onCreate`, so it must exist
-  // before any read-only handle is opened.
-  const writer = new Database(filePath);
-  applyPragmas(writer, false);
-  instrumentStatements(writer, slowQueryThresholdMs, onSlowQuery);
-  onCreate?.(writer);
+  const monitor = new QueryMonitor({ thresholdMs: slowQueryThresholdMs, onSlowQuery });
+  function open(readonly: boolean): Database.Database {
+    const db = new Database(filePath, { readonly });
+    try {
+      applyPragmas(db, readonly);
+      monitor.attach(db);
+      return db;
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+  }
+
+  // The writer creates the file and schema before any read-only handle opens.
+  const writer = open(false);
+  try {
+    onCreate?.(writer);
+  } catch (error) {
+    writer.close();
+    throw error;
+  }
 
   const idle: Database.Database[] = [];
   const waiters: Waiter[] = [];
@@ -255,9 +228,7 @@ export function createPool(options: PoolOptions): SqlitePool {
   let acquireWaitSumSeconds = 0;
 
   function openReader(): Database.Database {
-    const db = new Database(filePath, { readonly: true });
-    applyPragmas(db, true);
-    instrumentStatements(db, slowQueryThresholdMs, onSlowQuery);
+    const db = open(true);
     openReaders += 1;
     return db;
   }
@@ -460,6 +431,7 @@ export function createPool(options: PoolOptions): SqlitePool {
   async function close(): Promise<void> {
     if (closed) return;
     closed = true;
+    stopOptimize();
 
     // Reject anyone still queued; they will never be served.
     while (waiters.length > 0) {
@@ -491,9 +463,16 @@ export function createPool(options: PoolOptions): SqlitePool {
   }
 
   // Warm the pool to `min` so the first requests do not pay connection setup.
-  for (let i = 0; i < min; i += 1) {
-    idle.push(openReader());
+  try {
+    for (let i = 0; i < min; i += 1) {
+      idle.push(openReader());
+    }
+  } catch (error) {
+    idle.forEach(closeHandle);
+    writer.close();
+    throw error;
   }
+  const stopOptimize = monitor.scheduleOptimize(writer);
 
   return {
     read,

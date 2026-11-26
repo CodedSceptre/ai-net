@@ -22,6 +22,7 @@ import os from 'os';
 import { createLogger } from '../utils/logger';
 import { metricsService } from './metrics';
 import type { RequestSample } from './metrics.types';
+import { queryMetrics } from '../db/queryMonitor';
 import { getCacheMetrics } from '../cache/metrics';
 
 const logger = createLogger({ component: 'prometheus' });
@@ -376,6 +377,11 @@ export function generatePrometheusMetrics(): string {
   body += collectQueueMetrics();
   body += '\n';
   body += collectDatabasePoolMetrics();
+  const queries = queryMetrics();
+  body += formatCounter('db_slow_queries_total', 'SQLite statements above the slow-query threshold', queries.slow);
+  body += formatCounter('db_cache_hits_total', 'SQLite query cache hits', queries.hits);
+  body += formatCounter('db_cache_misses_total', 'SQLite query cache misses', queries.misses);
+  body += formatHistogram('db_query_duration_ms', 'SQLite statement execution time in milliseconds', queries.buckets, queries.sum, queries.count);
   body += '\n';
   body += collectCacheMetrics();
   body += '\n';
