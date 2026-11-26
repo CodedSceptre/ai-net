@@ -1,0 +1,80 @@
+/* Research: rotating magnifying glass */
+@keyframes researchSpin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* Coding: cursor blink */
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* Risk: pulsing gauge */
+@keyframes riskPulse {
+  0%, 100% { transform: scale(1);    opacity: 1;    }
+  50%       { transform: scale(1.25); opacity: 0.65; }
+}
+
+/* Design: palette rotation wobble */
+@keyframes designRotate {
+  0%   { transform: rotate(0deg); }
+  25%  { transform: rotate(-15deg); }
+  75%  { transform: rotate(15deg); }
+  100% { transform: rotate(0deg); }
+}
+
+/* Report: pen writing bob */
+@keyframes reportWrite {
+  0%   { transform: translateY(0px)  rotate(-10deg); }
+  25%  { transform: translateY(-3px) rotate(-10deg); }
+  75%  { transform: translateY(2px)  rotate(-10deg); }
+  100% { transform: translateY(0px)  rotate(-10deg); }
+}
+
+.researchSpin {
+  animation: researchSpin 1.2s linear infinite;
+  transform-origin: center;
+}
+
+.riskPulse {
+  animation: riskPulse 1.4s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.designRotate {
+  animation: designRotate 1.6s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.reportWrite {
+  animation: reportWrite 0.9s ease-in-out infinite;
+  transform-origin: 50% 100%;
+}
+
+.codeWrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  font-family: monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.cursor {
+  display: inline-block;
+  color: currentColor;
+  font-weight: 100;
+  animation: cursorBlink 0.8s step-start infinite;
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .researchSpin,
+  .riskPulse,
+  .designRotate,
+  .reportWrite,
+  .cursor {
+    animation: none;
+  }
+}
