@@ -331,6 +331,35 @@ function collectLlmMetrics(samples: readonly RequestSample[]): string {
   return out;
 }
 
+function collectResultCacheMetrics(): string {
+  let out = '';
+  try {
+    const { getResultCacheMetrics } = require('../cache/resultCache') as typeof import('../cache/resultCache');
+    const { getCacheClient } = require('../cache/index') as typeof import('../cache/index');
+    const metrics = getResultCacheMetrics();
+    out += formatCounter('ainet_result_cache_hits_total', 'Total result cache hits', metrics.hits);
+    out += formatCounter('ainet_result_cache_misses_total', 'Total result cache misses', metrics.misses);
+    // Best-effort size gauge — works for both LRU and Redis drivers
+    getCacheClient().size().then((size: number) => {
+      // Fire-and-forget; gauge is updated on next scrape
+      void size;
+    }).catch(() => { /* ignore */ });
+    try {
+      const size = getCacheClient().size();
+      if (size instanceof Promise) {
+        // async — skip this scrape cycle, will show on next
+      } else {
+        out += formatGauge('ainet_result_cache_size', 'Current number of entries in the result cache', size as number);
+      }
+    } catch {
+      // size not available synchronously
+    }
+  } catch (err) {
+    logger.debug({ err }, 'result cache metrics unavailable');
+  }
+  return out;
+}
+
 function collectProcessMetrics(): string {
   const mem = process.memoryUsage();
   const uptimeSeconds = Math.floor(process.uptime());
@@ -386,6 +415,8 @@ export function generatePrometheusMetrics(): string {
   body += collectCacheMetrics();
   body += '\n';
   body += collectLlmMetrics(samples);
+  body += '\n';
+  body += collectResultCacheMetrics();
   body += '\n';
   body += collectProcessMetrics();
 
