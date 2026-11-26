@@ -655,6 +655,8 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
         agentId: req.params.id,
         lastSeenAt,
         nextExpectedAt,
+        lastSeenAt: updated?.lastSeenAt ?? new Date().toISOString(),
+        nextExpectedAt: new Date(Date.now() + 60_000).toISOString(),
       });
     } catch (error) {
       next(error);

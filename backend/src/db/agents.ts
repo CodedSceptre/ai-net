@@ -240,6 +240,14 @@ export interface AgentDb {
   listBannedAgentIds(): string[];
   markStaleAgents(staleThresholdSeconds?: number): number;
   deleteOfflineAgents(offlineThresholdHours?: number): number;
+  /**
+   * Returns agents whose status is 'offline' and whose lastSeenAt is older
+   * than `thresholdMs` milliseconds ago.  Used by HeartbeatMonitor to find
+   * candidates for on-chain deregistration.
+   */
+  findStaleOfflineAgents(thresholdMs: number): AgentRecord[];
+  /** Transition a single agent to 'deregistered' status. */
+  markDeregistered(agentId: string): void;
   // Optional on-chain event handlers used by registry/sync.ts. Not every
   // AgentDb implementation mirrors contract state, so call sites use `?.`.
   remove?(id: string): void;
@@ -523,6 +531,38 @@ export function createAgentDb(db: Database.Database): AgentDb {
           AND datetime(lastSeenAt, '+' || ? || ' hours') < datetime('now')
       `).run(offlineThresholdHours);
       return result.changes;
+    },
+
+    findStaleOfflineAgents(thresholdMs: number): AgentRecord[] {
+      const thresholdSeconds = Math.floor(thresholdMs / 1000);
+      const rows = db.prepare(`
+        SELECT * FROM agents
+        WHERE status = 'offline'
+          AND (
+            (last_seen_at > 0 AND last_seen_at < ?)
+            OR datetime(lastSeenAt) < datetime('now', '-' || ? || ' seconds')
+          )
+      `).all(
+        Math.floor(Date.now() / 1000) - thresholdSeconds,
+        thresholdSeconds,
+      ) as any[];
+      return rows.map((row) => ({
+        ...row,
+        capabilities: JSON.parse(row.capabilities),
+        status: row.status ?? 'offline',
+        reputationScore: Number(row.reputationScore ?? 2.5),
+        bondAmountXLM: Number(row.bondAmountXLM ?? 0),
+        tasksCompleted: Number(row.tasksCompleted ?? 0),
+        tasksFailed: Number(row.tasksFailed ?? 0),
+        lastActiveAt: row.lastActiveAt ?? row.lastSeenAt,
+        bannedAt: row.bannedAt ?? null,
+      }));
+    },
+
+    markDeregistered(agentId: string): void {
+      db.prepare(`
+        UPDATE agents SET status = 'deregistered' WHERE id = ?
+      `).run(agentId);
     },
 
     upsertError(error: {

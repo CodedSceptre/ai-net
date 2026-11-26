@@ -53,7 +53,8 @@ export type DAGEventType =
   | "task_failed"
   | "AgentFailedOver"
   | "AgentRecovered"
-  | "AgentMarkedOffline";
+  | "AgentMarkedOffline"
+  | "AgentDeregistered";
 
 export interface DAGEvent {
   type: DAGEventType;
