@@ -1,7 +1,7 @@
+import { createHorizonServer } from "./horizonClient";
 import {
   BASE_FEE,
   Asset,
-  Horizon,
   Keypair,
   Memo,
   Operation,
@@ -84,7 +84,7 @@ export class StellarService {
     sequenceManager?: SequenceNumberManager;
   } = {}) {
     const config = getConfig();
-    this.server = options.server ?? new Horizon.Server(config.STELLAR_HORIZON_URL) as unknown as StellarHorizonClient;
+    this.server = options.server ?? createHorizonServer(config.STELLAR_HORIZON_URL) as unknown as StellarHorizonClient;
     this.networkPassphrase = options.networkPassphrase ?? config.STELLAR_NETWORK_PASSPHRASE;
     this.maxSequenceRetries = Math.min(3, Math.max(0, options.maxSequenceRetries ?? 3));
     this.pollIntervalMs = options.pollIntervalMs ?? 1_000;

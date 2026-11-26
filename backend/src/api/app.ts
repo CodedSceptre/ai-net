@@ -144,6 +144,7 @@ export function createApp(opts: AppOptions = {}): {
     void eventBus.connectRedis(config.REDIS_URL);
   }
 
+  app.use(requestId);
   app.use(express.json());
   app.use((_req, res, next) => {
     if (config.NODE_ENV === "production") {
@@ -152,7 +153,6 @@ export function createApp(opts: AppOptions = {}): {
     next();
   });
   app.use(createCorsMiddleware());
-  app.use(requestId);
   app.use(requestLogger);
   app.use(metricsMiddleware);
   app.use(ipRateLimitMiddleware);
@@ -354,8 +354,6 @@ export function createApp(opts: AppOptions = {}): {
 
   // ── WebSocket task stream ──────────────────────────────────────────────────
   // ── Agent-status broadcast stream (ws://<host>/ws) ─────────────────────────
-  // Attached BEFORE the task stream: the task-stream upgrade handler destroys
-  // sockets for paths it doesn't own, so /ws must be claimed first.
   const detachAgentStatusStream = attachAgentStatusStream(httpServer, {
     eventBus,
     heartbeatIntervalMs: config.WS_HEARTBEAT_INTERVAL_MS,

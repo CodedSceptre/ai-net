@@ -100,7 +100,7 @@ describe('requestId middleware', () => {
     expect(res.locals.requestId).toBeDefined();
     expect(typeof res.locals.requestId).toBe('string');
     expect(res.locals.requestId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      /^[A-Za-z0-9_-]{12}$/,
     );
     expect(res.setHeader).toHaveBeenCalledWith('X-Request-Id', res.locals.requestId);
     expect(next).toHaveBeenCalled();

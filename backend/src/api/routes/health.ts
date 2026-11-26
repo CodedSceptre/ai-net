@@ -1,3 +1,4 @@
+import { requestIdHeaders } from "../../utils/requestContext";
 import { Router, Request, Response, RequestHandler } from "express";
 import { getConfig } from "../../config";
 import { adminAuthMiddleware } from "../middleware/auth";
@@ -269,7 +270,7 @@ async function checkVenice(apiKey: string, timeoutMs = 5000): Promise<"ok" | "un
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
     const response = await fetch("https://api.venice.ai/api/v1/models", {
-      headers: { Authorization: `Bearer ${apiKey}` },
+      headers: { ...requestIdHeaders(), Authorization: `Bearer ${apiKey}` },
       signal: controller.signal,
     });
     clearTimeout(timeout);
@@ -283,7 +284,7 @@ async function checkHorizon(url: string, timeoutMs = 5000): Promise<"ok" | "unre
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, { headers: requestIdHeaders(), signal: controller.signal });
     clearTimeout(timeout);
     return response.ok ? "ok" : "unreachable";
   } catch {

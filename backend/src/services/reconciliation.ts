@@ -1,3 +1,4 @@
+import { createHorizonServer } from "./horizonClient";
 /**
  * Payment reconciliation service.
  *
@@ -10,7 +11,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import { Horizon, Asset } from '@stellar/stellar-sdk';
+import { type Horizon, Asset } from '@stellar/stellar-sdk';
 import { createLogger } from '../utils/logger';
 import { getConfig } from '../config';
 import { createPaymentDb, getDb, type PaymentDb, type PaymentRecord } from '../db/index';
@@ -63,7 +64,7 @@ export class HorizonClaimableBalanceProvider implements ClaimableBalanceProvider
   private readonly server: Horizon.Server;
 
   constructor(horizonUrl?: string) {
-    this.server = new Horizon.Server(horizonUrl ?? getConfig().STELLAR_HORIZON_URL);
+    this.server = createHorizonServer(horizonUrl ?? getConfig().STELLAR_HORIZON_URL);
   }
 
   async getBalance(balanceId: string): Promise<ClaimableBalanceOnChain | null> {

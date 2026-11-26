@@ -1,9 +1,9 @@
+import { bindRequestContext } from "../../utils/requestContext";
 import type { Request, Response, NextFunction } from "express";
 import {
   createLogger,
   hashLogIdentifier,
   runWithLogContext,
-  updateLogContext,
 } from "../../utils/logger";
 
 const REDACTED_WALLET = "[REDACTED_WALLET]";
@@ -99,13 +99,11 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
   runWithLogContext(buildLogContext(req, res), () => {
     res.locals.logContext = buildLogContext(req, res);
 
-    res.on("finish", () => {
+    res.on("finish", bindRequestContext(() => {
       const durationMs = Date.now() - start;
       const logContext = buildLogContext(req, res);
       res.locals.logContext = logContext;
-      updateLogContext(logContext);
-
-      createLogger().info(
+      runWithLogContext(logContext, () => createLogger().info(
         {
           method: req.method,
           path: req.path,
@@ -114,8 +112,8 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
           ip: req.ip,
         },
         "request completed",
-      );
-    });
+      ));
+    }));
 
     next();
   });

@@ -1,7 +1,9 @@
+import { AGENT_STATUS_PATH } from "./agentStatusStream";
+import { bindRequestContext, getRequestId, requestContext, REQUEST_ID_HEADER, resolveRequestId } from "../../utils/requestContext";
 import type { Server as HttpServer } from 'http';
 import type { Socket } from 'net';
 import type { IncomingMessage } from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { randomUUID } from 'crypto';
 
 import { eventBus as defaultEventBus } from '../../coordinator/eventBus';
@@ -264,31 +266,39 @@ export function attachTaskStream(deps: TaskStreamDeps): () => void {
   const onUpgrade = (req: IncomingMessage, socket: Socket, head: Buffer): void => {
     const match = (req.url ?? '').match(STREAM_PATH);
     if (!match) {
-      socket.destroy();
+      if (!AGENT_STATUS_PATH.test(req.url ?? '')) socket.destroy();
       return;
     }
 
-    // ── Connection rate limit ────────────────────────────────────────────
-    const clientIp = getClientIp(req);
-    if (!trackConnection(clientIp)) {
-      logger.warn({ clientIp }, 'connection rate limit exceeded');
-      socket.write(
-        'HTTP/1.1 429 Too Many Requests\r\n' +
-        'Content-Type: text/plain\r\n' +
-        'Connection: close\r\n\r\n' +
-        'Too many concurrent WebSocket connections'
-      );
-      socket.destroy();
-      return;
-    }
+    const requestId = resolveRequestId(req.headers['x-request-id']);
+    requestContext.run({ requestId }, () => {
+      // ── Connection rate limit ────────────────────────────────────────────
+      const clientIp = getClientIp(req);
+      if (!trackConnection(clientIp)) {
+        logger.warn({ clientIp }, 'connection rate limit exceeded');
+        socket.write(
+          'HTTP/1.1 429 Too Many Requests\r\n' +
+          'Content-Type: text/plain\r\n' +
+          `${REQUEST_ID_HEADER}: ${requestId}\r\n` +
+          'Connection: close\r\n\r\n' +
+          'Too many concurrent WebSocket connections'
+        );
+        socket.destroy();
+        return;
+      }
 
-    const taskId = match[1]!;
-    const lastEventId = parseLastEventId(req.url ?? '');
-    wss.handleUpgrade(req, socket, head, ws => {
-      wss.emit('connection', ws, req, taskId, lastEventId, clientIp);
+      const taskId = match[1]!;
+      const lastEventId = parseLastEventId(req.url ?? '');
+      wss.handleUpgrade(req, socket, head, bindRequestContext((ws: WebSocket) => {
+        wss.emit('connection', ws, req, taskId, lastEventId, clientIp);
+      }));
     });
   };
 
+  wss.on('headers', (headers) => {
+    const requestId = getRequestId();
+    if (requestId) headers.push(`${REQUEST_ID_HEADER}: ${requestId}`);
+  });
   httpServer.on('upgrade', onUpgrade);
 
   wss.on('connection', (
@@ -410,7 +420,7 @@ export function attachTaskStream(deps: TaskStreamDeps): () => void {
       // and nothing is delivered twice.
       // The subscribe/flush run inside the WS trace context so any logging
       // during delivery carries the same traceId.
-      unsubLive = eventBus.subscribe(taskId, () => flush());
+      unsubLive = eventBus.subscribe(taskId, bindRequestContext(flush));
       flush();
       startHeartbeat();
 
@@ -420,7 +430,7 @@ export function attachTaskStream(deps: TaskStreamDeps): () => void {
       );
     };
 
-    ws.on('message', raw => {
+    ws.on('message', bindRequestContext((raw: RawData) => {
       // Reset inactivity timer on every message
       if (authed) resetInactivityTimer();
 
@@ -454,10 +464,10 @@ export function attachTaskStream(deps: TaskStreamDeps): () => void {
         clearTimeout(pongTimer);
         pongTimer = undefined;
       }
-    });
+    }));
 
-    ws.on('close', cleanup);
-    ws.on('error', cleanup);
+    ws.on('close', bindRequestContext(cleanup));
+    ws.on('error', bindRequestContext(cleanup));
   });
 
   return function detach(): void {
