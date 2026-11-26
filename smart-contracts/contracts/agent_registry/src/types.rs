@@ -325,3 +325,49 @@ pub struct ReputationScore {
     /// Formula: `(tasks_completed * 100) / max(tasks_completed + tasks_failed, 1)`
     pub score: u32,
 }
+
+// ─── Semantic Version Pinning for Agent Capabilities (issue #1) ──────────────
+
+/// A specific versioned capability published by an agent.
+///
+/// Stored in Persistent storage at `DataKey::VersionedCap(agent_id, capability, version)`.
+/// The `deprecated_at` field is `None` while the capability is active and set to
+/// a ledger timestamp when the owner marks it deprecated.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VersionedCapability {
+    /// Agent that owns this capability.
+    pub agent_id: Symbol,
+    /// Capability identifier (e.g. `code_gen`).
+    pub capability: Symbol,
+    /// Semantic version string in `MAJOR.MINOR.PATCH` format, e.g. `"2.1.0"`.
+    pub version: soroban_sdk::String,
+    /// Ledger timestamp at which this version was deprecated, or `None` if still active.
+    pub deprecated_at: Option<u64>,
+}
+
+/// Version range selector used when querying agents by capability version.
+///
+/// - `Exact(v)` — only the precise version `v` matches.
+/// - `Compatible(v)` — caret behaviour: same MAJOR, any (MINOR, PATCH) ≥ specified.
+/// - `PatchOnly(v)` — tilde behaviour: same MAJOR.MINOR, any PATCH ≥ specified.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VersionRange {
+    /// Match only the exact version string.
+    Exact(soroban_sdk::String),
+    /// Same major, any minor/patch greater than or equal to the specified value.
+    Compatible(soroban_sdk::String),
+    /// Same major.minor, any patch greater than or equal to the specified value.
+    PatchOnly(soroban_sdk::String),
+}
+
+/// Paginated response for versioned capability listings.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VersionedCapabilityPage {
+    /// Versioned capability entries on this page.
+    pub entries: Vec<VersionedCapability>,
+    /// Total number of entries across all pages (including deprecated).
+    pub total: u32,
+}

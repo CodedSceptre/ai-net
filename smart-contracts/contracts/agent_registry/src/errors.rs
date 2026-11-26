@@ -57,6 +57,8 @@ pub enum Error {
     RateLimitExceeded = 28,
     /// Configuration value is out of accepted bounds.
     InvalidConfig = 29,
+    /// Capability version string does not match the required MAJOR.MINOR.PATCH semver format.
+    InvalidCapabilityVersion = 32,
 }
 
 impl Error {
@@ -94,6 +96,7 @@ impl Error {
             29 => Some(Error::BridgeProofMismatch),
             30 => Some(Error::InvalidBridgeExpiry),
             31 => Some(Error::InvalidAuditRange),
+            32 => Some(Error::InvalidCapabilityVersion),
             _ => None,
         }
     }

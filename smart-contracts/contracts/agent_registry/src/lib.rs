@@ -310,6 +310,11 @@ pub enum DataKey {
     AuditConfig,
     /// Rolling operation counter for one caller.
     CallerActivity(Address),
+    // Semantic version pinning keys (issue #1)
+    /// One versioned capability entry, keyed by (agent_id, capability, version).
+    VersionedCap(Symbol, Symbol, String),
+    /// Sorted list of all version strings registered for a capability.
+    CapVersionIndex(Symbol),
 }
 
 /// Per-item result for batch registration.
@@ -2815,6 +2820,260 @@ impl AgentRegistryContract {
     pub fn error_mapper(_env: Env, raw_code: u32) -> Option<CommonExitCode> {
         shared_exit_codes::CommonExitCode::from_raw(raw_code)
     }
+
+    // ── Semantic Version Pinning (issue #1) ───────────────────────────────────
+
+    /// Register a specific semantic version of a capability for an agent.
+    ///
+    /// The calling agent's registered owner must authorise the transaction.
+    /// `version` must be a three-part dot-separated numeric string such as
+    /// `"2.1.0"`; any other format returns [`Error::InvalidCapabilityVersion`].
+    ///
+    /// Re-registering an existing `(agent_id, capability, version)` triple is
+    /// idempotent: the entry is overwritten with `deprecated_at: None` and both
+    /// storage TTLs are extended.
+    pub fn register_capability_version(
+        env: Env,
+        agent_id: Symbol,
+        capability: Symbol,
+        version: String,
+    ) -> Result<(), Error> {
+        // Authorise via the agent's registered owner.
+        let agent_key = DataKey::Agent(agent_id.clone());
+        let record: AgentRecord = env
+            .storage()
+            .persistent()
+            .get(&agent_key)
+            .ok_or(Error::NotFound)?;
+        record.owner.require_auth();
+
+        // Validate semver format: must match \d+\.\d+\.\d+
+        if !validate_semver(&version) {
+            return Err(Error::InvalidCapabilityVersion);
+        }
+
+        // Store the versioned capability.
+        let cap_key = DataKey::VersionedCap(
+            agent_id.clone(),
+            capability.clone(),
+            version.clone(),
+        );
+        let entry = VersionedCapability {
+            agent_id: agent_id.clone(),
+            capability: capability.clone(),
+            version: version.clone(),
+            deprecated_at: None,
+        };
+        env.storage().persistent().set(&cap_key, &entry);
+        extend_ttl_for_existing_key(&env, &cap_key);
+
+        // Maintain the per-capability version index (Vec<String>).
+        let index_key = DataKey::CapVersionIndex(capability.clone());
+        let mut versions: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&index_key)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        // Append only if this version is not already in the index.
+        let mut already_indexed = false;
+        for i in 0..versions.len() {
+            if versions.get(i).unwrap() == version {
+                already_indexed = true;
+                break;
+            }
+        }
+        if !already_indexed {
+            versions.push_back(version.clone());
+            env.storage().persistent().set(&index_key, &versions);
+        }
+        extend_ttl_for_existing_key(&env, &index_key);
+
+        Ok(())
+    }
+
+    /// Mark a registered capability version as deprecated.
+    ///
+    /// Sets `deprecated_at` to the current ledger timestamp. Deprecated entries
+    /// remain in storage and are still returned by [`get_capability_versions`]
+    /// but are excluded from [`get_agents_by_capability_version`] results.
+    ///
+    /// Returns [`Error::NotFound`] when the `(agent_id, capability, version)`
+    /// triple has never been registered.
+    pub fn deprecate_capability_version(
+        env: Env,
+        agent_id: Symbol,
+        capability: Symbol,
+        version: String,
+    ) -> Result<(), Error> {
+        // Authorise via the agent's registered owner.
+        let agent_key = DataKey::Agent(agent_id.clone());
+        let record: AgentRecord = env
+            .storage()
+            .persistent()
+            .get(&agent_key)
+            .ok_or(Error::NotFound)?;
+        record.owner.require_auth();
+
+        let cap_key = DataKey::VersionedCap(
+            agent_id.clone(),
+            capability.clone(),
+            version.clone(),
+        );
+        let mut entry: VersionedCapability = env
+            .storage()
+            .persistent()
+            .get(&cap_key)
+            .ok_or(Error::NotFound)?;
+
+        entry.deprecated_at = Some(env.ledger().timestamp());
+        env.storage().persistent().set(&cap_key, &entry);
+        extend_ttl_for_existing_key(&env, &cap_key);
+
+        Ok(())
+    }
+
+    /// Return all non-deprecated versioned capabilities for `capability` whose
+    /// version satisfies `version_range`.
+    ///
+    /// - [`VersionRange::Exact`] — only the exact version string.
+    /// - [`VersionRange::Compatible`] — caret semantics: same MAJOR, any
+    ///   (MINOR, PATCH) ≥ specified.
+    /// - [`VersionRange::PatchOnly`] — tilde semantics: same MAJOR.MINOR, any
+    ///   PATCH ≥ specified.
+    pub fn get_agents_by_capability_version(
+        env: Env,
+        capability: Symbol,
+        version_range: VersionRange,
+    ) -> Vec<VersionedCapability> {
+        let index_key = DataKey::CapVersionIndex(capability.clone());
+        let versions: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&index_key)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        // Parse the query version from the range.
+        let query_str = match version_range.clone() {
+            VersionRange::Exact(v) => v,
+            VersionRange::Compatible(v) => v,
+            VersionRange::PatchOnly(v) => v,
+        };
+        let query_parts = match parse_semver_parts(&query_str) {
+            Some(p) => p,
+            None => return Vec::new(&env),
+        };
+
+        let mut results: Vec<VersionedCapability> = Vec::new(&env);
+
+        for i in 0..versions.len() {
+            let ver = versions.get(i).unwrap();
+
+            // Load the entry for this version — iterate over all agent_ids
+            // that may have registered this version.  The CapVersionIndex stores
+            // versions globally per capability, but VersionedCap is keyed by
+            // (agent_id, capability, version).  We scan via a secondary lookup:
+            // load all agents for this capability from CapabilityIndex, then
+            // probe each (agent_id, capability, version) triple.
+            let agent_index_key = DataKey::CapabilityIndex(capability.clone());
+            let agent_ids: Vec<Symbol> = env
+                .storage()
+                .persistent()
+                .get(&agent_index_key)
+                .unwrap_or_else(|| Vec::new(&env));
+
+            for j in 0..agent_ids.len() {
+                let aid = agent_ids.get(j).unwrap();
+                let entry_key = DataKey::VersionedCap(
+                    aid.clone(),
+                    capability.clone(),
+                    ver.clone(),
+                );
+                let entry: VersionedCapability = match env.storage().persistent().get(&entry_key) {
+                    Some(e) => e,
+                    None => continue,
+                };
+
+                // Skip deprecated entries.
+                if entry.deprecated_at.is_some() {
+                    continue;
+                }
+
+                // Check version range.
+                let stored_parts = match parse_semver_parts(&entry.version) {
+                    Some(p) => p,
+                    None => continue,
+                };
+
+                let matches = match version_range.clone() {
+                    VersionRange::Exact(_) => {
+                        stored_parts[0] == query_parts[0]
+                            && stored_parts[1] == query_parts[1]
+                            && stored_parts[2] == query_parts[2]
+                    }
+                    VersionRange::Compatible(_) => {
+                        // Same major; (minor, patch) >= (query_minor, query_patch)
+                        stored_parts[0] == query_parts[0]
+                            && (stored_parts[1] > query_parts[1]
+                                || (stored_parts[1] == query_parts[1]
+                                    && stored_parts[2] >= query_parts[2]))
+                    }
+                    VersionRange::PatchOnly(_) => {
+                        // Same major.minor; patch >= query_patch
+                        stored_parts[0] == query_parts[0]
+                            && stored_parts[1] == query_parts[1]
+                            && stored_parts[2] >= query_parts[2]
+                    }
+                };
+
+                if matches {
+                    results.push_back(entry);
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Return all versioned capabilities registered for `capability`,
+    /// including deprecated ones.
+    pub fn get_capability_versions(
+        env: Env,
+        capability: Symbol,
+    ) -> Vec<VersionedCapability> {
+        let index_key = DataKey::CapVersionIndex(capability.clone());
+        let versions: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&index_key)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let agent_index_key = DataKey::CapabilityIndex(capability.clone());
+        let agent_ids: Vec<Symbol> = env
+            .storage()
+            .persistent()
+            .get(&agent_index_key)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let mut results: Vec<VersionedCapability> = Vec::new(&env);
+
+        for i in 0..versions.len() {
+            let ver = versions.get(i).unwrap();
+            for j in 0..agent_ids.len() {
+                let aid = agent_ids.get(j).unwrap();
+                let entry_key = DataKey::VersionedCap(
+                    aid.clone(),
+                    capability.clone(),
+                    ver.clone(),
+                );
+                if let Some(entry) = env.storage().persistent().get(&entry_key) {
+                    results.push_back(entry);
+                }
+            }
+        }
+
+        results
+    }
 }
 
 fn get_metadata_u32(
@@ -2835,6 +3094,76 @@ fn get_metadata_u32(
         }
     }
     default_val
+}
+
+// ─── Semver helpers (issue #1) ────────────────────────────────────────────────
+
+/// Maximum byte length accepted for a version string (`"999.999.999"` = 11).
+const MAX_SEMVER_LEN: usize = 32;
+
+/// Returns `true` when `version` is a valid `MAJOR.MINOR.PATCH` semver string.
+///
+/// Each component must consist solely of ASCII digits and be parseable as a
+/// `u32`. No leading zeros, pre-release labels, or build metadata are accepted.
+/// Uses a fixed stack buffer so this compiles cleanly under `no_std`.
+fn validate_semver(version: &String) -> bool {
+    parse_semver_parts(version).is_some()
+}
+
+/// Parse `version` into `[major, minor, patch]` u32 values, or return `None`
+/// if the string is not a valid three-component semver.
+fn parse_semver_parts(version: &String) -> Option<[u32; 3]> {
+    let len = version.len() as usize;
+    if len == 0 || len > MAX_SEMVER_LEN {
+        return None;
+    }
+
+    let mut buf = [0u8; MAX_SEMVER_LEN];
+    version.copy_into_slice(&mut buf[..len]);
+    let slice = &buf[..len];
+
+    // Find the two dot positions.
+    let mut dot1: Option<usize> = None;
+    let mut dot2: Option<usize> = None;
+    for (i, &b) in slice.iter().enumerate() {
+        if b == b'.' {
+            if dot1.is_none() {
+                dot1 = Some(i);
+            } else if dot2.is_none() {
+                dot2 = Some(i);
+            } else {
+                // More than two dots — not valid semver.
+                return None;
+            }
+        }
+    }
+
+    let (d1, d2) = match (dot1, dot2) {
+        (Some(a), Some(b)) if a > 0 && b > a + 1 && b < len - 1 => (a, b),
+        _ => return None,
+    };
+
+    let major = parse_u32_bytes(&slice[..d1])?;
+    let minor = parse_u32_bytes(&slice[d1 + 1..d2])?;
+    let patch = parse_u32_bytes(&slice[d2 + 1..])?;
+
+    Some([major, minor, patch])
+}
+
+/// Parse a byte slice of ASCII digits into a `u32`.
+/// Returns `None` for empty slices, non-digit bytes, or values that overflow.
+fn parse_u32_bytes(bytes: &[u8]) -> Option<u32> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut value: u32 = 0;
+    for &b in bytes {
+        if b < b'0' || b > b'9' {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+    }
+    Some(value)
 }
 
 #[cfg(test)]
