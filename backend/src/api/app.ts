@@ -80,6 +80,16 @@ import { createLogger } from "../utils/logger";
 import { AppError } from "../errors";
 import { getConfig } from "../config";
 
+import { createWebhooksRouter } from "./routes/webhooks";
+import { WebhookService, type WebhookEvent } from "../services/webhookService";
+import type { DAGEvent } from "../types/task";
+
+const webhookEventNames: Partial<Record<DAGEvent["type"], WebhookEvent>> = {
+  task_completed: "task.completed",
+  task_failed: "task.failed",
+  payment_released: "payment.released",
+};
+
 const dispatchLogger = createLogger({ module: "http-dispatch" });
 
 export interface AppOptions {
@@ -177,6 +187,26 @@ export function createApp(opts: AppOptions = {}): {
   const releasePayment: PaymentReleaseFn =
     opts.releasePayment ?? createPaymentReleaseFn(tryLoadStellarRelease());
 
+  const webhooks = new WebhookService(getTaskDb());
+  const onWebhookEvent = (event: DAGEvent) => {
+    const type = webhookEventNames[event.type];
+    if (!type) return;
+    try {
+      const task = getTask(event.taskId);
+      if (!task) return;
+      const key = JSON.stringify([event.taskId, type, event.nodeId, event.seq]);
+      webhooks.enqueue(task.walletPublicKey, type, {
+        taskId: event.taskId,
+        nodeId: event.nodeId,
+        ...(type === "payment.released" ? { payment: event.payload } : {}),
+      }, key);
+    } catch (err) {
+      logger.error({ err, taskId: event.taskId, type }, "Failed to enqueue webhook");
+    }
+  };
+  const unsubscribeWebhooks = eventBus.subscribeAll(onWebhookEvent);
+  if (opts.enableQueueWorker !== false) webhooks.start();
+
   const jobQueue = opts.queue ?? getGlobalJobQueue();
   const jobWorker =
     opts.jobWorker ??
@@ -231,6 +261,7 @@ export function createApp(opts: AppOptions = {}): {
 
   // ── Auth routes ────────────────────────────────────────────────────────────
   app.use("/api/auth", createAuthRouter(opts.authService));
+  app.use("/api/webhooks", optionalAuthMiddleware, authedLimiter.middleware, createWebhooksRouter(webhooks));
 
   // ── Admin event replay ─────────────────────────────────────────────────────
   app.use("/api/events", adminLimiter.middleware, createEventsRouter(eventStore));
@@ -363,6 +394,8 @@ export function createApp(opts: AppOptions = {}): {
   function close(callback?: () => void): void {
     jobWorker.stop(opts.jobWorkerStopTimeoutMs ?? 10_000).finally(() => {
       heartbeatService.stop();
+      unsubscribeWebhooks();
+      webhooks.stop();
       eventBus.disconnectRedis();
       metricsService.setWebSocketProbe(null);
       detachAgentStatusStream();
