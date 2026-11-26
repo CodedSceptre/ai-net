@@ -184,6 +184,337 @@ Use streaming when partial text improves perceived latency, such as a user-facin
 
 For local development, set a development-only key through an ignored `.env` file, keep `max_tokens` small, and send a short representative prompt. Mock the HTTP boundary for deterministic unit checks; do not make CI depend on a paid live API. Record model ID, latency, status, retry count, and provider usage, but never log API keys or full sensitive prompts. ai-net's client already uses timeouts, bounded retries, provider failover, a circuit breaker, and optional cached fallback; direct API callers should implement equivalent controls appropriate to their application.
 
+## JSON Output Mode
+
+Venice AI supports structured JSON output via the `response_format` parameter. Set `response_format: { type: "json_object" }` in the request body to constrain the model to emit valid JSON.
+
+### Request wrapper
+
+```typescript
+const response = await fetch('https://api.venice.ai/api/v1/chat/completions', {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    model,
+    messages,
+    max_tokens: maxTokens,
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
+  }),
+});
+```
+
+The system prompt must instruct the model to return JSON in a specific schema. Without an explicit schema instruction, models may produce arbitrary key names. Use this pattern:
+
+```text
+Return your response as a JSON object with exactly these keys:
+{
+  "summary": string,
+  "findings": array of { "point": string, "confidence": number },
+  "sources": array of { "title": string, "url": string },
+  "confidence": number between 0.0 and 1.0
+}
+Do not include any text outside the JSON object.
+```
+
+### Retry strategy for malformed JSON
+
+Models occasionally return malformed JSON despite the `response_format` constraint. Apply up to 3 retries with an explicit correction prompt:
+
+```typescript
+async function completeJson<T>(
+  model: string,
+  messages: Message[],
+  schema: string,
+  maxRetries = 3,
+): Promise<T> {
+  let lastContent = '';
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const content = await complete(model, messages, 1600);
+    lastContent = content;
+    try {
+      return JSON.parse(content) as T;
+    } catch {
+      // Inject a correction prompt on the next attempt
+      messages = [
+        ...messages,
+        { role: 'assistant', content },
+        {
+          role: 'user',
+          content: `Your previous response was not valid JSON. Return only a JSON object matching this schema: ${schema}`,
+        },
+      ];
+    }
+  }
+  throw new Error(`Failed to get valid JSON after ${maxRetries} attempts. Last response: ${lastContent.slice(0, 200)}`);
+}
+```
+
+### TypeScript schema validation
+
+Validate the parsed JSON against a TypeScript schema before using it. Use Zod for runtime validation:
+
+```typescript
+import { z } from 'zod';
+
+const ResearchOutputSchema = z.object({
+  summary: z.string(),
+  findings: z.array(z.object({ point: z.string(), confidence: z.number().min(0).max(1) })),
+  sources: z.array(z.object({ title: z.string(), url: z.string() })),
+  confidence: z.number().min(0).max(1),
+});
+
+type ResearchOutput = z.infer<typeof ResearchOutputSchema>;
+
+const raw = JSON.parse(content);
+const result = ResearchOutputSchema.safeParse(raw);
+if (!result.success) {
+  throw new Error(`Schema validation failed: ${result.error.message}`);
+}
+// result.data is typed as ResearchOutput
+```
+
+Never use an unvalidated model response in downstream processing, on-chain actions, or reputation updates.
+
+---
+
+## Confidence Scoring
+
+Every agent response includes a `confidence` field in the range `[0.0, 1.0]`. This score represents the agent's self-assessed certainty about its output given the available evidence.
+
+### Scoring formula
+
+The score is derived from three components weighted as follows:
+
+| Component | Weight | Derivation |
+|---|---|---|
+| Evidence availability | 0.5 | Fraction of claims backed by cited sources |
+| Scope coverage | 0.3 | Fraction of the user's stated requirements addressed |
+| Consistency | 0.2 | Absence of self-contradictions in the output |
+
+```text
+confidence = 0.5 * (cited_claims / total_claims)
+           + 0.3 * (addressed_requirements / total_requirements)
+           + 0.2 * (1 - contradiction_flag)
+```
+
+The model computes this internally and embeds the result in the `confidence` field of the JSON output. The backend does not recompute it.
+
+### Embedding in the response
+
+Instruct the model to include the score explicitly:
+
+```text
+After producing your analysis, calculate a confidence score between 0.0 and 1.0
+based on how much of your answer is supported by the supplied evidence.
+Include it as the "confidence" field in your JSON output.
+A score of 1.0 means every claim is sourced. A score of 0.0 means you are
+guessing with no evidence.
+```
+
+### Downstream handling of low-confidence results
+
+| Confidence range | Action |
+|---|---|
+| 0.8 – 1.0 | Accept result; pass to downstream agent or return to user |
+| 0.5 – 0.79 | Flag for human review; include confidence in API response |
+| 0.0 – 0.49 | Reject result; do not use in on-chain actions; return error to caller |
+
+Low-confidence results reduce reputation impact: a task completed with confidence < 0.5 contributes 50% of the normal positive reputation delta to the agent's score. This prevents agents from farming reputation through low-quality outputs.
+
+---
+
+## Prompt Versioning
+
+### File naming convention
+
+Prompts are stored in `backend/src/prompts/` with the following naming scheme:
+
+```
+{agent_kind}_v{major}.{minor}.ts
+```
+
+Examples:
+- `research_v1.0.ts` — initial production prompt
+- `research_v1.1.ts` — backward-compatible change (output format unchanged)
+- `research_v2.0.ts` — breaking change (output format changed)
+
+Each file exports a `PromptVersion` object:
+
+```typescript
+export interface PromptVersion {
+  version: string;          // semver: "1.2.0"
+  agentKind: AgentKind;
+  systemPrompt: string;
+  outputSchema: string;     // JSON schema string for the expected output
+  changeLog: string;        // human-readable summary of what changed
+  breakingChange: boolean;  // true if output format changed
+}
+
+export const researchPromptV1: PromptVersion = {
+  version: '1.0.0',
+  agentKind: 'research',
+  systemPrompt: systemPrompts.research,
+  outputSchema: JSON.stringify(ResearchOutputSchema.shape),
+  changeLog: 'Initial production prompt',
+  breakingChange: false,
+};
+```
+
+### When to bump the version
+
+| Change type | Version increment |
+|---|---|
+| Rephrasing that doesn't change output structure | Patch (`1.0.0` → `1.0.1`) |
+| New field added to JSON output | Minor (`1.0.0` → `1.1.0`) |
+| Field removed or renamed; output format changed | Major (`1.0.0` → `2.0.0`) |
+
+A major bump requires updating all consumers that parse the output and updating the Zod schema.
+
+### A/B testing a new prompt version
+
+1. Deploy the new prompt version alongside the current version without replacing it.
+2. Route a configurable percentage of requests (e.g. 10%) to the new version using a feature flag.
+3. Compare on three metrics over at least 500 requests:
+   - **Schema compliance rate**: fraction of responses that pass Zod validation without retries
+   - **Mean confidence score**: higher is better assuming calibration is consistent
+   - **P95 latency**: the new version must not regress latency by more than 15%
+4. If the new version wins on all three metrics, promote it to 100% and archive the old version file.
+
+### Rollback procedure
+
+1. Update the active version reference in `backend/src/prompts/index.ts` to the previous version constant.
+2. Deploy. No database migration or on-chain action is required.
+3. If the bad version produced stored outputs that downstream systems consumed, audit those records manually.
+
+---
+
+## Hallucination Mitigation
+
+Production prompts apply the following techniques. Each entry shows the exact instruction text added to the system prompt.
+
+**1. Chain-of-thought forcing**
+
+```text
+Before writing your final answer, reason step by step through the evidence.
+Label this section "Reasoning:" and do not include it in the JSON output.
+```
+
+**2. Explicit uncertainty acknowledgment**
+
+```text
+If you are uncertain about a claim, write "I am not certain:" before the claim
+and reduce the confidence score accordingly. Do not present uncertain claims
+as facts.
+```
+
+**3. Source citation requirement (research agents only)**
+
+```text
+Every factual claim must include a source reference in the format [SOURCE: title, url].
+If you cannot cite a source for a claim, omit the claim.
+Do not invent citations. If a URL is unavailable, write [SOURCE: title, unavailable].
+```
+
+**4. Refusal instruction for out-of-scope requests**
+
+```text
+If the user's request falls outside the supplied context or your defined role,
+respond with: { "error": "out_of_scope", "message": "<reason>" }
+Do not attempt to answer questions you cannot ground in the supplied evidence.
+```
+
+**5. Closed-world assumption**
+
+```text
+Treat the supplied documents as the complete evidence base.
+Do not introduce information from your training data that is not present in the
+supplied context. If the supplied context is insufficient, say so explicitly.
+```
+
+**6. Anti-hallucination reminder for coding agents**
+
+```text
+Never claim a command was run, a test passed, or a file was created unless it
+actually happened in this conversation. If you are proposing code, say "proposed"
+or "untested". Do not assert correctness.
+```
+
+**7. Structured output discipline**
+
+```text
+Return only the JSON object. Do not include explanatory prose, markdown fences,
+or comments outside the JSON. The response must be parseable by JSON.parse()
+with no preprocessing.
+```
+
+---
+
+## Few-Shot Examples
+
+Few-shot examples are added to the user message, not the system prompt, to keep the system prompt stable across requests. Each agent type has a fixed set of examples stored alongside the prompt version file.
+
+### Format
+
+```typescript
+interface FewShotExample {
+  input: string;
+  output: string;  // must match the agent's JSON output schema
+}
+
+function buildUserMessageWithExamples(
+  examples: FewShotExample[],
+  actualInput: string,
+): string {
+  const exampleBlock = examples
+    .map((ex, i) => `Example ${i + 1}:\nInput: ${ex.input}\nOutput: ${ex.output}`)
+    .join('\n\n');
+  return `${exampleBlock}\n\nNow process this input:\n${actualInput}`;
+}
+```
+
+### Count per agent type
+
+| Agent kind | Examples | Rationale |
+|---|---|---|
+| research | 2 | Long outputs; more examples exceed budget |
+| risk | 2 | Same constraint; risk analysis is verbose |
+| coding | 1 | Code examples are expensive in tokens |
+| design | 2 | Medium length; 2 covers mobile and desktop |
+| report | 1 | Synthesis outputs are long |
+
+### Updating examples
+
+When an agent's output quality degrades, add a new example that demonstrates the correct behavior. Remove examples that are redundant or outdated. Each update constitutes a minor version bump to the prompt version. Never add examples that contain real user data or sensitive project information.
+
+---
+
+## Testing Prompt Changes
+
+Use the test harness documented in [AI Agent Integration Guide](ai-agent-integration-guide.md) to evaluate a modified prompt before deploying it.
+
+### Procedure
+
+1. Create a test dataset of 20–50 representative inputs for the agent type, covering normal cases, edge cases, and known failure modes.
+2. Run both the current prompt version and the candidate version against the full dataset using the test harness.
+3. For each run, record:
+   - **Schema compliance rate**: `passed_zod_validation / total_requests`
+   - **Confidence score distribution**: mean, P10, P90
+   - **Latency**: mean and P95 in milliseconds
+   - **Retry rate**: fraction of requests that required a JSON correction retry
+4. A candidate prompt passes if:
+   - Schema compliance ≥ 98%
+   - Mean confidence ≥ current version mean (within 0.05 tolerance)
+   - P95 latency ≤ current version P95 × 1.15
+   - Retry rate ≤ current version retry rate × 1.25
+5. Record test results in the prompt version's `changeLog` field before merging.
+
+### Mocking for CI
+
+Do not make live API calls in CI. Use the recorded response fixtures in `backend/tests/fixtures/veniceResponses.ts` as the mock layer. Add new fixtures for each new agent capability or output schema change tested.
+
+---
+
 ## References
 
 - [Venice API model catalog](https://api.venice.ai/api/v1/models) — model IDs, context limits, capabilities, and price metadata.
