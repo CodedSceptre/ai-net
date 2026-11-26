@@ -325,3 +325,30 @@ pub struct ReputationScore {
     /// Formula: `(tasks_completed * 100) / max(tasks_completed + tasks_failed, 1)`
     pub score: u32,
 }
+
+// ─── Versioned Capabilities (issue #660) ─────────────────────────────────────
+
+/// Represents an agent capability with semantic versioning and lifecycle deprecation tracking.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Capability {
+    /// Capability name/identifier (e.g. "research", "coding").
+    pub capability: Symbol,
+    /// Semantic version in semver format (e.g. "2.1.0").
+    pub version: String,
+    /// Timestamp when this capability version was marked deprecated (None if active).
+    pub deprecated_at: Option<u64>,
+}
+
+/// Version range specification for capability queries.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VersionRange {
+    /// Exact match (e.g., =2.1.0).
+    Exact(String),
+    /// Caret match (^X.Y.Z): matches same major version >= X.Y.Z.
+    Compatible(String),
+    /// Tilde match (~X.Y.Z): matches same major.minor >= X.Y.Z.
+    PatchOnly(String),
+}
+

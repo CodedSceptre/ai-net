@@ -57,6 +57,8 @@ pub enum Error {
     RateLimitExceeded = 28,
     /// Configuration value is out of accepted bounds.
     InvalidConfig = 29,
+    /// Invalid semantic version string.
+    InvalidSemVer = 30,
 }
 
 impl Error {
@@ -89,11 +91,10 @@ impl Error {
             24 => Some(Error::SlaNotFound),
             25 => Some(Error::SlaViolation),
             26 => Some(Error::InvalidSla),
-            27 => Some(Error::BridgeProofExpired),
-            28 => Some(Error::BridgeProofNotFound),
-            29 => Some(Error::BridgeProofMismatch),
-            30 => Some(Error::InvalidBridgeExpiry),
-            31 => Some(Error::InvalidAuditRange),
+            27 => Some(Error::InvalidRating),
+            28 => Some(Error::RateLimitExceeded),
+            29 => Some(Error::InvalidConfig),
+            30 => Some(Error::InvalidSemVer),
             _ => None,
         }
     }
