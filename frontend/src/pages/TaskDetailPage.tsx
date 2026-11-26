@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
 import { useTranslation, Trans } from "react-i18next";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { useTaskMonitor } from "../hooks/useTaskMonitor";
 import { DAGVisualization } from "../components/tasks/DAGVisualization";
@@ -246,6 +246,11 @@ const TaskDetailPage: React.FC = () => {
               {task?.status || "queued"}
             </div>
           </div>
+          {task?.status === "completed" && id && (
+            <Link to={`/tasks/${encodeURIComponent(id)}/receipt`} className="text-sm underline">
+              Payment receipt
+            </Link>
+          )}
           <button
             onClick={refetch}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[var(--surface-elevated)] hover:bg-[var(--surface-muted)] border border-[var(--border-strong)] transition"
