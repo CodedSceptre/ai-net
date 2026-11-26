@@ -12,6 +12,7 @@ import { WS_CLOSE } from '../../types/stream';
 import { createLogger } from '../../utils/logger';
 import { runWithTraceContext } from '../../services/traceContext';
 import { getConfig } from '../../config';
+import { incrementWebSocketConnections, decrementWebSocketConnections } from '../../utils/metrics';
 
 const STREAM_PATH = /^\/tasks\/([^/?]+)\/stream(?:\?.*)?$/;
 
@@ -297,6 +298,7 @@ export function attachTaskStream(deps: TaskStreamDeps): () => void {
     lastEventId?: number,
     clientIp?: string
   ) => {
+    incrementWebSocketConnections();
     const task = getTask(taskId);
     if (!task) {
       ws.close(WS_CLOSE.TASK_NOT_FOUND, 'Task not found');
@@ -368,7 +370,11 @@ export function attachTaskStream(deps: TaskStreamDeps): () => void {
       }
     };
 
+    let cleanedUp = false;
     const cleanup = (): void => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      decrementWebSocketConnections();
       clearTimeout(authTimer);
       if (heartbeat) clearInterval(heartbeat);
       if (pongTimer) clearTimeout(pongTimer);
