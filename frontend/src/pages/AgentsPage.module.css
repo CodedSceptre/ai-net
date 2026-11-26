@@ -4,6 +4,24 @@
   padding: 24px;
 }
 
+/* ── Filter panel + results two-column layout ────────────────────────────────── */
+.contentLayout {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.resultsColumn {
+  flex: 1;
+  min-width: 0; /* allow children to shrink within flex row */
+}
+
+@media (max-width: 768px) {
+  .contentLayout {
+    flex-direction: column;
+  }
+}
+
 .header {
   display: flex;
   align-items: flex-start;

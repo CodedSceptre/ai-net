@@ -25,8 +25,13 @@ import { ArrowDownUp, Check, ChevronDown, Filter, LayoutGrid, List, Plus, X } fr
 
 import { useInfiniteAgents } from '../hooks/useInfiniteAgents'
 import { AgentCardSkeleton as AgentCardSkeletonCompact } from '../components/agents/AgentCardSkeleton'
+import { useNavigate } from 'react-router-dom'
+import { LayoutGrid, List, Users, Plus } from 'lucide-react'
+
+import { useAgentRegistry } from '../hooks/useAgentRegistry'
+import { useAgentFilters } from '../hooks/useAgentFilters'
 import { AgentTable } from '../components/agents/AgentTable'
-import { AgentFilterBar } from '../components/agents/AgentFilterBar'
+import { AgentFilterPanel } from '../components/agents/AgentFilterPanel'
 import { AgentDetailModal } from '../components/agents/AgentDetailModal'
 import { AgentRegistryCard } from '../components/agents/AgentRegistryCard'
 import { SearchWithTypeahead } from '../components/agents/SearchWithTypeahead'
@@ -37,12 +42,7 @@ import { Skeleton, SkeletonCard } from '../components/common/Skeleton'
 import { Pagination } from '../components/common/Pagination'
 import type { AgentRecord } from '../types/api'
 import {
-  allCapabilities,
   filterAndSortAgents,
-  filtersFromSearchParams,
-  filtersToSearchParams,
-  priceDomain,
-  type AgentFilters,
   type SortKey,
 } from '../utils/agentRegistry'
 import { fuzzyMatch } from '../utils/fuzzy'
@@ -220,6 +220,7 @@ function AgentsPage() {
     return suggestions.slice(0, 10)
   }, [agents])
   const [searchParams, setSearchParams] = useSearchParams()
+  const { agents, loading, error, refetch } = useAgentRegistry()
   const [selected, setSelected] = useState<AgentRecord | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('card')
   const [mobileSheet, setMobileSheet] = useState<MobileSheet>(null)
@@ -249,6 +250,13 @@ function AgentsPage() {
   const resetFilters = useCallback(() => {
     setSearchParams({}, { replace: true })
   }, [setSearchParams])
+  // Filter state lives in the URL via useAgentFilters
+  const {
+    filters,
+    activeFilterCount,
+    updateFilters,
+    clearFilters,
+  } = useAgentFilters()
 
   const handleSort = useCallback(
     (key: SortKey) => {
@@ -261,10 +269,7 @@ function AgentsPage() {
     [filters, updateFilters]
   )
 
-  const capabilities = useMemo(() => allCapabilities(agents), [agents])
-  const domain = useMemo(() => priceDomain(agents), [agents])
-  const visibleAgents = useMemo(
-    () => filterAndSortAgents(agents, filters),
+  const visibleAgents = useMemo(    () => filterAndSortAgents(agents, filters),
     [agents, filters]
   )
 
@@ -286,7 +291,6 @@ function AgentsPage() {
   }, [setSearchParams])
 
   const handleHire = useCallback((agent: AgentRecord) => {
-    // Navigate to task creation pre-filled with this agent
     navigate(`/tasks/new?agent=${encodeURIComponent(agent.id)}`)
   }, [navigate])
 
@@ -470,6 +474,17 @@ function AgentsPage() {
                 </label>
               </div>
 
+          {/* Filter panel + results layout */}
+          <div className={styles.contentLayout}>
+            <AgentFilterPanel
+              filters={filters}
+              activeFilterCount={activeFilterCount}
+              onUpdateFilters={updateFilters}
+              onClearFilters={clearFilters}
+            />
+
+            <div className={styles.resultsColumn}>
+              {/* ── Card view ─────────────────────────────────────────── */}
               {viewMode === 'card' && (
                 <>
                   {visibleAgents.length === 0 ? (
@@ -479,11 +494,13 @@ function AgentsPage() {
                           ? <AgentsEmptyIllustration />
                           : <SearchEmptyIllustration />
                       }
+                      icon={<Users size={40} />}
                       title={t('agent.table.emptyTitle', { defaultValue: 'No agents found' })}
                       description={
                         agents.length === 0
                           ? t('agent.table.emptySubtext', { defaultValue: 'No agents are registered yet. Be the first to register your agent.' })
                           : t('page.agents.noMatchingAgents', { defaultValue: 'No agents match the current filters. Try adjusting or resetting them.' })
+                          : t('page.agents.noMatchingAgents', { defaultValue: 'No agents match your filters. Try adjusting or resetting them.' })
                       }
                       primaryAction={
                         agents.length === 0
@@ -495,6 +512,7 @@ function AgentsPage() {
                           : {
                               label: t('page.agents.resetFilters', { defaultValue: 'Reset Filters' }),
                               onClick: resetFilters,
+                              onClick: clearFilters,
                             }
                       }
                       data-testid="agents-empty"
@@ -540,6 +558,7 @@ function AgentsPage() {
                       aria-label={t('nav.agentRegistry', { defaultValue: 'Agent Registry' })}
                     >
                       {paginatedAgents.map((agent) => (
+                      {visibleAgents.map((agent) => (
                         <div
                           key={agent.id}
                           role="listitem"
@@ -572,6 +591,10 @@ function AgentsPage() {
                         </div>
                       )}
                     </>
+                          />
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </>
               )}
@@ -579,6 +602,10 @@ function AgentsPage() {
               {viewMode === 'table' && (
                 <AgentTable
                   agents={paginatedAgents}
+              {/* ── Table view ────────────────────────────────────────── */}
+              {viewMode === 'table' && (
+                <AgentTable
+                  agents={visibleAgents}
                   loading={loading}
                   sortKey={filters.sortKey}
                   sortDir={filters.sortDir}
@@ -630,6 +657,8 @@ function AgentsPage() {
               Compare
             </button>
           )}
+            </div>
+          </div>
         </div>
       )}
 
