@@ -22,6 +22,7 @@ For agent bond accounting, current contract limitations, and illustrative sizing
 10. [Downtime Handling & Graceful Shutdown](#10-downtime-handling--graceful-shutdown)
 11. [Backup & Disaster Recovery](#11-backup--disaster-recovery)
 12. [Troubleshooting & Common Errors](#12-troubleshooting--common-errors)
+13. [Security Hardening](./SECURITY_HARDENING.md)
 
 ---
 
@@ -58,28 +59,30 @@ An **ai-net Node** is an autonomous coordination daemon that connects AI agents 
 
 ### Recommended Hardware Specifications
 
-| Component | Testnet Node | Production / Mainnet Node |
-|---|---|---|
-| **CPU** | 2 vCPUs (x86_64 or ARM64) | 4+ vCPUs |
-| **RAM** | 4 GB | 8 GB+ |
-| **Disk** | 20 GB NVMe SSD | 80 GB+ NVMe SSD |
-| **Network** | 50 Mbps outbound | 100+ Mbps redundant |
-| **OS** | Ubuntu 22.04/24.04 LTS / Debian 12 | Ubuntu 22.04/24.04 LTS / Debian 12 |
+| Component   | Testnet Node                       | Production / Mainnet Node          |
+| ----------- | ---------------------------------- | ---------------------------------- |
+| **CPU**     | 2 vCPUs (x86_64 or ARM64)          | 4+ vCPUs                           |
+| **RAM**     | 4 GB                               | 8 GB+                              |
+| **Disk**    | 20 GB NVMe SSD                     | 80 GB+ NVMe SSD                    |
+| **Network** | 50 Mbps outbound                   | 100+ Mbps redundant                |
+| **OS**      | Ubuntu 22.04/24.04 LTS / Debian 12 | Ubuntu 22.04/24.04 LTS / Debian 12 |
 
 ### Firewall & Port Configuration
 
-| Port | Protocol | Source | Purpose |
-|---|---|---|---|
-| `3001` | TCP | Ingress / Reverse Proxy (Nginx/Cloudflare) | Backend REST API & WebSockets |
-| `3000` | TCP | Ingress / Internal | Frontend Dashboard (optional) |
-| `5432` | TCP | `127.0.0.1` / Private Subnet only | PostgreSQL Database |
-| `9090` | TCP | Prometheus Scraper / Private VPC | Prometheus Metrics Endpoint (`/metrics`) |
+| Port   | Protocol | Source                                     | Purpose                                  |
+| ------ | -------- | ------------------------------------------ | ---------------------------------------- |
+| `3001` | TCP      | Ingress / Reverse Proxy (Nginx/Cloudflare) | Backend REST API & WebSockets            |
+| `3000` | TCP      | Ingress / Internal                         | Frontend Dashboard (optional)            |
+| `5432` | TCP      | `127.0.0.1` / Private Subnet only          | PostgreSQL Database                      |
+| `9090` | TCP      | Prometheus Scraper / Private VPC           | Prometheus Metrics Endpoint (`/metrics`) |
 
 > ⚠️ **Security Warning**: Never expose port `5432` (PostgreSQL) or your raw secrets to the public internet. Always use SSL/TLS termination with valid certificates.
 
 ---
 
 ## 3. Prerequisites & Tooling
+
+> 🔒 **Security hardening:** Before deploying to production, follow the [Security Hardening Guide](./SECURITY_HARDENING.md) to configure server hardening, key management, Docker security, and incident response procedures.
 
 Install the core dependencies on your host machine:
 
@@ -254,6 +257,7 @@ Key points:
 For a complete architectural visual reference of task funding, sealed bidding, escrow locking/release/refund flows, and juror dispute voting, consult the [Payment Flows & Escrow Lifecycle Specification](file:///Users/apple/Documents/GitHub/ai-net/docs/architecture/payment-escrow-lifecycle.md).
 
 Node operators participating as worker nodes or dispute resolution jurors should verify that:
+
 1. All task escrow allocations are backed by on-chain `EscrowLockedEvent` signatures.
 2. Winning bids are awarded via `ContractAwardedEvent` before commencing off-chain LLM inference.
 3. Juror nodes submit evidence IPFS hashes (`submit_evidence`) within the 3-day evidence window and cast votes (`cast_vote`) prior to the voting deadline.
@@ -269,7 +273,7 @@ Docker Compose encapsulates the backend node, PostgreSQL database, Prometheus me
 1. Create `docker-compose.yml`:
 
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   postgres:
@@ -385,10 +389,13 @@ sudo systemctl status ainet-node
 Verify that your node is running properly and connected to Stellar:
 
 ### 1. Check HTTP Health Endpoint
+
 ```bash
 curl -i http://localhost:3001/api/v1/health
 ```
+
 **Expected Response:**
+
 ```json
 {
   "status": "ok",
@@ -406,13 +413,17 @@ curl -i http://localhost:3001/api/v1/health
 ```
 
 ### 2. Verify Agent Heartbeat
+
 ```bash
 curl -i http://localhost:3001/api/v1/agents
 ```
+
 Check that internal agent workers (Research, Risk, Coding, Design, Report) are listed with `status: "online"`.
 
 ### 3. Test End-to-End Task & Escrow Flow
+
 Submit a test task:
+
 ```bash
 curl -X POST http://localhost:3001/api/v1/tasks \
   -H "Content-Type: application/json" \
@@ -421,6 +432,7 @@ curl -X POST http://localhost:3001/api/v1/tasks \
     "budgetStroops": 50000000
   }'
 ```
+
 Monitor the logs (`journalctl -u ainet-node -f` or `docker compose logs -f`) to verify task decomposition, agent assignment, and escrow release on testnet.
 
 ---
@@ -445,10 +457,10 @@ Add to `/etc/prometheus/prometheus.yml`:
 
 ```yaml
 scrape_configs:
-  - job_name: 'ainet_node'
+  - job_name: "ainet_node"
     scrape_interval: 15s
     static_configs:
-      - targets: ['localhost:3001']
+      - targets: ["localhost:3001"]
 ```
 
 ---
@@ -495,6 +507,7 @@ find "$BACKUP_DIR" -type f -name "*.dump" -mtime +14 -delete
 ```
 
 Add to crontab (`crontab -e`):
+
 ```cron
 0 2 * * * /opt/ai-net/scripts/backup-db.sh > /var/log/ainet-backup.log 2>&1
 ```
@@ -517,31 +530,36 @@ sudo systemctl start ainet-node
 ## 12. Troubleshooting & Common Errors
 
 ### 1. `tx_bad_seq` (Stellar Transaction Bad Sequence)
-* **Symptom**: Transactions fail with Horizon code `tx_bad_seq`.
-* **Cause**: Multiple concurrent transactions submitted from the coordinator keypair caused nonce collision.
-* **Resolution**: Ensure the node's transaction queue is enabled so transactions are serialized. The node automatically re-fetches the account sequence number on sequence mismatches.
+
+- **Symptom**: Transactions fail with Horizon code `tx_bad_seq`.
+- **Cause**: Multiple concurrent transactions submitted from the coordinator keypair caused nonce collision.
+- **Resolution**: Ensure the node's transaction queue is enabled so transactions are serialized. The node automatically re-fetches the account sequence number on sequence mismatches.
 
 ### 2. `insufficient_balance` / `op_underfunded`
-* **Symptom**: On-chain escrow funding or payment transfer fails.
-* **Cause**: Coordinator hot wallet balance is below the required amount + base reserve (0.5 XLM per trustline/subentry).
-* **Resolution**:
+
+- **Symptom**: On-chain escrow funding or payment transfer fails.
+- **Cause**: Coordinator hot wallet balance is below the required amount + base reserve (0.5 XLM per trustline/subentry).
+- **Resolution**:
   - Testnet: Refill via `stellar keys fund coordinator-testnet --network testnet`.
   - Mainnet: Transfer additional XLM to the coordinator public address.
 
 ### 3. `rate_limit_exceeded` / Horizon 429 Too Many Requests
-* **Symptom**: Horizon returns HTTP 429 status code.
-* **Cause**: The public SDF Horizon instance rate limit has been exceeded.
-* **Resolution**: Switch `STELLAR_HORIZON_URL` to a dedicated RPC provider (e.g. Blockdaemon, NowNodes) or run your own Horizon instance.
+
+- **Symptom**: Horizon returns HTTP 429 status code.
+- **Cause**: The public SDF Horizon instance rate limit has been exceeded.
+- **Resolution**: Switch `STELLAR_HORIZON_URL` to a dedicated RPC provider (e.g. Blockdaemon, NowNodes) or run your own Horizon instance.
 
 ### 4. `circuit_breaker_open` (Venice AI Inference)
-* **Symptom**: Agent tasks fail immediately with `CircuitBreakerOpenError`.
-* **Cause**: Consecutive upstream timeouts or 5xx errors from Venice AI inference API.
-* **Resolution**: Verify `VENICE_API_KEY` validity. The circuit breaker automatically resets after a 60-second cooldown once upstream connectivity recovers.
+
+- **Symptom**: Agent tasks fail immediately with `CircuitBreakerOpenError`.
+- **Cause**: Consecutive upstream timeouts or 5xx errors from Venice AI inference API.
+- **Resolution**: Verify `VENICE_API_KEY` validity. The circuit breaker automatically resets after a 60-second cooldown once upstream connectivity recovers.
 
 ### 5. `Stale Agent / Heartbeat Timeout`
-* **Symptom**: Agent marked `offline` in database and excluded from discovery.
-* **Cause**: Agent worker process crashed or network latency prevented sending heartbeats within `HEARTBEAT_STALE_THRESHOLD_MINUTES`.
-* **Resolution**: Check agent worker logs (`npm run logs` or `journalctl -u ainet-node`). Restart the agent worker daemon to re-register its availability.
+
+- **Symptom**: Agent marked `offline` in database and excluded from discovery.
+- **Cause**: Agent worker process crashed or network latency prevented sending heartbeats within `HEARTBEAT_STALE_THRESHOLD_MINUTES`.
+- **Resolution**: Check agent worker logs (`npm run logs` or `journalctl -u ainet-node`). Restart the agent worker daemon to re-register its availability.
 
 ---
 
@@ -558,14 +576,14 @@ an operator leaves the team, or on the routine 90-day rotation schedule.
 
 ### 13.1 Identifying All Secrets
 
-| Secret | Environment Variable | Storage | Rotation Frequency |
-|--------|---------------------|---------|-------------------|
-| Venice AI API key | `VENICE_API_KEY` | GitHub Actions secret + AWS Secrets Manager | 90 days |
+| Secret                                    | Environment Variable         | Storage                                     | Rotation Frequency           |
+| ----------------------------------------- | ---------------------------- | ------------------------------------------- | ---------------------------- |
+| Venice AI API key                         | `VENICE_API_KEY`             | GitHub Actions secret + AWS Secrets Manager | 90 days                      |
 | Stellar Coordinator hot-wallet secret key | `STELLAR_COORDINATOR_SECRET` | GitHub Actions secret + AWS Secrets Manager | On suspected compromise only |
-| Admin API key | `ADMIN_API_KEY` | GitHub Actions secret + AWS Secrets Manager | 90 days |
-| Redis URL (includes password) | `REDIS_URL` | AWS Secrets Manager | 180 days |
-| Database master password | `DATABASE_URL` | AWS Secrets Manager (managed by RDS) | Automated via RDS rotation |
-| JWT / API bearer keys | `API_KEYS` | AWS Secrets Manager | 90 days |
+| Admin API key                             | `ADMIN_API_KEY`              | GitHub Actions secret + AWS Secrets Manager | 90 days                      |
+| Redis URL (includes password)             | `REDIS_URL`                  | AWS Secrets Manager                         | 180 days                     |
+| Database master password                  | `DATABASE_URL`               | AWS Secrets Manager (managed by RDS)        | Automated via RDS rotation   |
+| JWT / API bearer keys                     | `API_KEYS`                   | AWS Secrets Manager                         | 90 days                      |
 
 ### 13.2 Pre-Rotation Checklist
 
