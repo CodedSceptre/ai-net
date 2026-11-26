@@ -1,0 +1,99 @@
+.uptimeBarWrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+
+.bars {
+  display: flex;
+  gap: 1px;
+  width: 100%;
+}
+
+.bar {
+  flex: 1;
+  height: 28px;
+  border-radius: 2px;
+  cursor: default;
+  transition: opacity 0.1s;
+  min-width: 2px;
+}
+
+.bar:hover,
+.bar:focus {
+  opacity: 0.75;
+  outline: none;
+}
+
+.bar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Status colours */
+.bar.operational {
+  background: var(--status-success, #34d399);
+}
+
+.bar.degraded {
+  background: var(--status-warning, #fbbf24);
+}
+
+.bar.outage {
+  background: var(--status-danger, #ef4444);
+}
+
+.rangeLabels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.uptimePct {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* Tooltip */
+.tooltip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+}
+
+.tooltipDate {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tooltipStatus {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tooltipStatus.operational {
+  color: var(--status-success, #34d399);
+}
+
+.tooltipStatus.degraded {
+  color: var(--status-warning, #fbbf24);
+}
+
+.tooltipStatus.outage {
+  color: var(--status-danger, #ef4444);
+}

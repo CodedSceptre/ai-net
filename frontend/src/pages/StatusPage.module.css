@@ -1,0 +1,597 @@
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+
+.header {
+  margin-bottom: 24px;
+}
+
+.title {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 4px 0;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.refreshBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.refreshBtn:hover {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
+.refreshBtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Overall status banner ────────────────────────────────────────────────── */
+
+.overallBanner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-radius: 10px;
+  margin-bottom: 24px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.overallBanner.operational {
+  background: var(--status-success-surface, rgba(16, 185, 129, 0.12));
+  border: 1px solid var(--status-success-border, rgba(16, 185, 129, 0.3));
+  color: var(--status-success-text, #a7f3d0);
+}
+
+.overallBanner.degraded {
+  background: var(--status-warning-surface, rgba(245, 158, 11, 0.12));
+  border: 1px solid var(--status-warning-border, rgba(245, 158, 11, 0.3));
+  color: var(--status-warning-text, #fde68a);
+}
+
+.overallBanner.outage {
+  background: var(--status-danger-surface, rgba(239, 68, 68, 0.12));
+  border: 1px solid var(--status-danger-border, rgba(239, 68, 68, 0.3));
+  color: var(--status-danger-text, #fca5a5);
+}
+
+.bannerDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.overallBanner.operational .bannerDot {
+  background: var(--status-success, #34d399);
+}
+
+.overallBanner.degraded .bannerDot {
+  background: var(--status-warning, #fbbf24);
+}
+
+.overallBanner.outage .bannerDot {
+  background: var(--status-danger, #ef4444);
+}
+
+/* Pulsing dot for active incidents */
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.6; transform: scale(1.3); }
+}
+
+.overallBanner.outage .bannerDot,
+.overallBanner.degraded .bannerDot {
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+/* ── Incident banner ──────────────────────────────────────────────────────── */
+
+.incidentBanner {
+  padding: 14px 18px;
+  border-radius: 8px;
+  margin-bottom: 24px;
+  background: var(--status-danger-surface, rgba(239, 68, 68, 0.1));
+  border: 1px solid var(--status-danger-border, rgba(239, 68, 68, 0.3));
+  color: var(--status-danger-text, #fca5a5);
+  font-size: 14px;
+}
+
+.incidentBanner strong {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.incidentBannerComponents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.incidentBannerComponent {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--status-danger-surface-strong, rgba(239, 68, 68, 0.2));
+  border: 1px solid var(--status-danger-border, rgba(239, 68, 68, 0.3));
+}
+
+/* ── Component grid ──────────────────────────────────────────────────────── */
+
+.sectionTitle {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-secondary);
+  margin: 0 0 14px 0;
+}
+
+.componentGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-bottom: 36px;
+}
+
+@media (min-width: 600px) {
+  .componentGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.componentCard {
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  padding: 18px 20px;
+  background: var(--surface-raised);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.componentCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.componentName {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.componentMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.latency {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Status badge */
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.statusBadge.operational {
+  background: var(--status-success-surface, rgba(16, 185, 129, 0.12));
+  color: var(--status-success-text, #a7f3d0);
+  border: 1px solid var(--status-success-border, rgba(16, 185, 129, 0.3));
+}
+
+.statusBadge.degraded {
+  background: var(--status-warning-surface, rgba(245, 158, 11, 0.12));
+  color: var(--status-warning-text, #fde68a);
+  border: 1px solid var(--status-warning-border, rgba(245, 158, 11, 0.3));
+}
+
+.statusBadge.outage {
+  background: var(--status-danger-surface, rgba(239, 68, 68, 0.1));
+  color: var(--status-danger-text, #fca5a5);
+  border: 1px solid var(--status-danger-border, rgba(239, 68, 68, 0.3));
+}
+
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.statusBadge.operational .statusDot { background: var(--status-success, #34d399); }
+.statusBadge.degraded .statusDot   { background: var(--status-warning, #fbbf24); }
+.statusBadge.outage .statusDot     { background: var(--status-danger, #ef4444); }
+
+/* ── Loading skeleton ─────────────────────────────────────────────────────── */
+
+.loadingGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-bottom: 36px;
+}
+
+@media (min-width: 600px) {
+  .loadingGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.loadingCard {
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  padding: 18px 20px;
+  background: var(--surface-raised);
+  height: 140px;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+/* ── Historical Incidents ─────────────────────────────────────────────────── */
+
+.incidents {
+  margin-bottom: 36px;
+}
+
+.incidentItem {
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 8px;
+  background: var(--surface-raised);
+}
+
+.incidentToggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-primary);
+  transition: background 0.15s;
+}
+
+.incidentToggle:hover {
+  background: var(--surface-elevated);
+}
+
+.incidentToggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.incidentToggleIcon {
+  flex-shrink: 0;
+  transition: transform 0.2s;
+  color: var(--text-secondary);
+}
+
+.incidentToggleIcon.open {
+  transform: rotate(90deg);
+}
+
+.incidentToggleContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.incidentTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.incidentDateRange {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.resolvedBadge {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  background: var(--status-success-surface, rgba(16, 185, 129, 0.12));
+  color: var(--status-success-text, #a7f3d0);
+  border: 1px solid var(--status-success-border, rgba(16, 185, 129, 0.3));
+}
+
+.ongoingBadge {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  background: var(--status-danger-surface, rgba(239, 68, 68, 0.1));
+  color: var(--status-danger-text, #fca5a5);
+  border: 1px solid var(--status-danger-border, rgba(239, 68, 68, 0.3));
+}
+
+.incidentBody {
+  padding: 0 18px 16px 18px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.incidentUpdates {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.incidentUpdate {
+  display: flex;
+  gap: 12px;
+}
+
+.updateTime {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 140px;
+  flex-shrink: 0;
+}
+
+.updateMessage {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* ── Email subscription modal ─────────────────────────────────────────────── */
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: var(--surface-scrim, rgba(0, 0, 0, 0.65));
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.modal {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  padding: 28px 24px;
+  width: 100%;
+  max-width: 420px;
+  position: relative;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+.modalTitle {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 6px 0;
+}
+
+.modalSubtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 20px 0;
+}
+
+.modalCloseBtn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s;
+}
+
+.modalCloseBtn:hover {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+}
+
+.modalCloseBtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.modalInputGroup {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.modalEmailInput {
+  flex: 1;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: 14px;
+  min-width: 0;
+}
+
+.modalEmailInput:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-border, rgba(99, 102, 241, 0.2));
+}
+
+.modalSubscribeBtn {
+  height: 40px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent, #a78bfa);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+
+.modalSubscribeBtn:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.modalSubscribeBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.modalSuccess {
+  font-size: 13px;
+  color: var(--status-success-text, #a7f3d0);
+  margin-top: 8px;
+}
+
+/* ── Footer / CTA bar ─────────────────────────────────────────────────────── */
+
+.cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 20px;
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  margin-bottom: 24px;
+}
+
+.ctaText {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.ctaText strong {
+  color: var(--text-primary);
+}
+
+.notifyBtn {
+  padding: 10px 22px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent, #a78bfa);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+
+.notifyBtn:hover {
+  opacity: 0.88;
+}
+
+.notifyBtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Error notice ─────────────────────────────────────────────────────────── */
+
+.errorNotice {
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--status-warning-surface, rgba(245, 158, 11, 0.1));
+  border: 1px solid var(--status-warning-border, rgba(245, 158, 11, 0.3));
+  color: var(--status-warning-text, #fde68a);
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
+/* ── Mobile adjustments ───────────────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .title {
+    font-size: 1.4rem;
+  }
+
+  .incidentUpdate {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .updateTime {
+    min-width: unset;
+  }
+
+  .modalInputGroup {
+    flex-direction: column;
+  }
+
+  .modalSubscribeBtn {
+    width: 100%;
+  }
+}
