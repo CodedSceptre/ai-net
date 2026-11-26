@@ -12,6 +12,7 @@ import { metricsService, MetricsService } from "../../services/metrics";
 import { register } from "../../utils/metrics";
 import { emptyBodySchema } from "../../schemas/common";
 import { validate } from "../middleware/validate";
+import { register } from "../../utils/metrics";
 
 export interface MetricsRouterOptions {
   service?: MetricsService;
@@ -50,6 +51,12 @@ export function createMetricsRouter(options: MetricsRouterOptions = {}): Router 
       const combined = [serviceMetrics, promMetrics].filter(Boolean).join("\n");
       res.setHeader("Content-Type", "text/plain; version=0.0.4");
       res.status(200).send(combined);
+      const [serviceOutput, promClientOutput] = await Promise.all([
+        service.exportPrometheusMetrics(),
+        register.metrics(),
+      ]);
+      res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+      res.status(200).send(`${serviceOutput}\n${promClientOutput}`);
     } catch (err) {
       next(err);
     }
