@@ -1,0 +1,48 @@
+# Frontend NetworkPolicy
+# Ingress: allow only from the ingress controller namespace
+# Egress:  allow only to the backend service namespace and DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-network-policy
+  namespace: frontend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ai-net-frontend
+
+  policyTypes:
+    - Ingress
+    - Egress
+
+  # ── Ingress rules ─────────────────────────────────────────────────────────
+  ingress:
+    # Allow traffic from the ingress controller namespace only
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 5173
+
+  # ── Egress rules ──────────────────────────────────────────────────────────
+  egress:
+    # DNS — required for name resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Backend service in the backend namespace
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: backend
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ai-net-backend
+      ports:
+        - protocol: TCP
+          port: 3000
