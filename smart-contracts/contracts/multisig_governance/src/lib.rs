@@ -54,6 +54,7 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, IntoVal, String,
     Symbol, Val, Vec,
 };
+use soroban_sdk::xdr::ToXdr;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -206,6 +207,24 @@ pub struct ProposalExpiredEvent {
     pub ledger: u32,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingThreshold {
+    pub signers: Vec<Address>,
+    pub required: u32,
+    pub proposal_timestamp: u64,
+    pub activation_time: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThresholdUpdated {
+    pub old_signer_count: u32,
+    pub old_required: u32,
+    pub new_signer_count: u32,
+    pub new_required: u32,
+}
+
 // ─── Storage keys ────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -225,6 +244,9 @@ pub enum DataKey {
     PlatformConfig,
     /// Action-specific threshold (Issue #416).
     ActionThreshold(Symbol),
+    PendingThreshold,
+    ThresholdRevision,
+    ThresholdApprovals(BytesN<32>),
 }
 
 // ─── Contract ────────────────────────────────────────────────────────────────
@@ -248,6 +270,54 @@ fn threshold(env: &Env) -> u32 {
         .instance()
         .get(&DataKey::Threshold)
         .unwrap_or(1)
+}
+
+fn validate_threshold(signers: &Vec<Address>, required: u32) -> Result<(), Error> {
+    let count = signers.len();
+    if count > 11 {
+        return Err(Error::TooManySigners);
+    }
+    if required <= count / 2 || required > count {
+        return Err(Error::InvalidThreshold);
+    }
+    for (index, signer) in signers.iter().enumerate() {
+        if signers.iter().skip(index + 1).any(|other| other == signer) {
+            return Err(Error::InvalidSignerList);
+        }
+    }
+    Ok(())
+}
+
+fn threshold_revision(env: &Env) -> u64 {
+    env.storage().instance().get(&DataKey::ThresholdRevision).unwrap_or(0)
+}
+
+fn advance_threshold_revision(env: &Env) {
+    env.storage().instance().set(&DataKey::ThresholdRevision, &(threshold_revision(env) + 1));
+}
+
+fn threshold_approvals_key(env: &Env, signers: Vec<Address>, required: u32) -> DataKey {
+    let candidate = (threshold_revision(env), signers, required).to_xdr(env);
+    DataKey::ThresholdApprovals(env.crypto().sha256(&candidate).into())
+}
+
+fn apply_threshold(env: &Env, signers: &Vec<Address>, required: u32) {
+    let (old_signers, old_required) = MultisigGovernanceContract::get_config(env.clone());
+    let instance = env.storage().instance();
+    instance.set(&DataKey::Signers, signers);
+    instance.set(&DataKey::Threshold, &required);
+    instance.remove(&DataKey::PendingThreshold);
+    advance_threshold_revision(env);
+    instance.extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+    env.events().publish(
+        (Symbol::new(env, "ThresholdUpdated"),),
+        ThresholdUpdated {
+            old_signer_count: old_signers.len(),
+            old_required,
+            new_signer_count: signers.len(),
+            new_required: required,
+        },
+    );
 }
 
 fn action_symbol(env: &Env, action: &GovernanceAction) -> Symbol {
@@ -359,6 +429,75 @@ impl MultisigGovernanceContract {
             .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
 
         Ok(())
+    }
+
+    /// Authorize a specific candidate configuration as a current signer.
+    pub fn approve_threshold(
+        env: Env,
+        signer: Address,
+        new_signers: Vec<Address>,
+        required: u32,
+    ) -> Result<(), Error> {
+        if !is_signer(&env, &signer) {
+            return Err(Error::NotSigner);
+        }
+        signer.require_auth();
+        validate_threshold(&new_signers, required)?;
+        let key = threshold_approvals_key(&env, new_signers, required);
+        let storage = env.storage().persistent();
+        let mut approvals: Vec<Address> = storage.get(&key).unwrap_or_else(|| Vec::new(&env));
+        if approvals.contains(&signer) {
+            return Err(Error::AlreadyApproved);
+        }
+        approvals.push_back(signer);
+        storage.set(&key, &approvals);
+        storage.extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Ok(())
+    }
+
+    /// Queue a configuration once the current quorum has authorized it.
+    pub fn update_threshold(env: Env, new_signers: Vec<Address>, required: u32) -> Result<(), Error> {
+        validate_threshold(&new_signers, required)?;
+        if !env.storage().instance().has(&DataKey::Initialized) {
+            return Err(Error::NotInitialized);
+        }
+        let key = threshold_approvals_key(&env, new_signers.clone(), required);
+        let storage = env.storage().persistent();
+        let approvals: Vec<Address> = storage.get(&key).unwrap_or_else(|| Vec::new(&env));
+        if approvals.len() < threshold(&env) {
+            return Err(Error::InsufficientApprovals);
+        }
+        let proposal_timestamp = env.ledger().timestamp();
+        let pending = PendingThreshold {
+            signers: new_signers,
+            required,
+            proposal_timestamp,
+            activation_time: proposal_timestamp.saturating_add(TIMELOCK_SECS),
+        };
+        storage.remove(&key);
+        advance_threshold_revision(&env);
+        let instance = env.storage().instance();
+        instance.set(&DataKey::PendingThreshold, &pending);
+        instance.extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+        Ok(())
+    }
+
+    /// Apply the already authorized change once the timelock expires.
+    pub fn activate_pending_threshold(env: Env) -> Result<(), Error> {
+        let pending = Self::get_pending_threshold(env.clone()).ok_or(Error::NoPendingThreshold)?;
+        if env.ledger().timestamp() < pending.activation_time {
+            return Err(Error::TimelockNotExpired);
+        }
+        apply_threshold(&env, &pending.signers, pending.required);
+        Ok(())
+    }
+
+    pub fn get_config(env: Env) -> (Vec<Address>, u32) {
+        (Self::get_signers(env.clone()), threshold(&env))
+    }
+
+    pub fn get_pending_threshold(env: Env) -> Option<PendingThreshold> {
+        env.storage().instance().get(&DataKey::PendingThreshold)
     }
 
     // ── Proposal lifecycle ────────────────────────────────────────────────────
@@ -667,8 +806,10 @@ impl MultisigGovernanceContract {
                 env.invoke_contract::<()>(&target, &method, args);
             }
             GovernanceAction::ChangeSigners(new_signers, new_threshold) => {
-                if new_signers.is_empty() {
-                    return Err(Error::InvalidSignerList);
+                validate_threshold(&new_signers, new_threshold)?;
+                let current_approvals = proposal.approvals.iter().filter(|signer| is_signer(&env, signer)).count();
+                if current_approvals < threshold(&env) as usize {
+                    return Err(Error::InsufficientApprovals);
                 }
                 if new_threshold == 0 || new_threshold > new_signers.len() {
                     return Err(Error::InvalidThreshold);
@@ -691,6 +832,7 @@ impl MultisigGovernanceContract {
                 env.storage()
                     .instance()
                     .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+                apply_threshold(&env, &new_signers, new_threshold);
             }
         }
 
@@ -922,6 +1064,46 @@ mod test {
         let mut replacement_signers = Vec::new(env);
         replacement_signers.push_back(Address::generate(env));
         GovernanceAction::ChangeSigners(replacement_signers, 1)
+    }
+
+    #[test]
+    fn threshold_update_requires_quorum_and_waits_48_hours() {
+        let env = make_env();
+        let (client, current) = deploy(&env, 3, 2);
+        let replacement = signers(&env, 5);
+        client.approve_threshold(&current.get(0).unwrap(), &replacement, &3);
+        assert_eq!(client.try_update_threshold(&replacement, &3), Err(Ok(Error::InsufficientApprovals)));
+        client.approve_threshold(&current.get(2).unwrap(), &replacement, &3);
+        client.update_threshold(&replacement, &3);
+
+        let pending = client.get_pending_threshold().unwrap();
+        assert_eq!(pending.activation_time, pending.proposal_timestamp + TIMELOCK_SECS);
+        env.ledger().with_mut(|ledger| ledger.timestamp = pending.activation_time - 60);
+        assert_eq!(client.try_activate_pending_threshold(), Err(Ok(Error::TimelockNotExpired)));
+        env.ledger().with_mut(|ledger| ledger.timestamp = pending.activation_time);
+        assert_eq!(client.get_config(), (current, 2));
+
+        client.activate_pending_threshold();
+        assert_eq!(client.get_config(), (replacement, 3));
+        assert_eq!(client.get_pending_threshold(), None);
+        let event = env.events().all().last().unwrap();
+        assert_eq!(event.1, (Symbol::new(&env, "ThresholdUpdated"),).into_val(&env));
+        assert_eq!(event.2, ThresholdUpdated {
+            old_signer_count: 3,
+            old_required: 2,
+            new_signer_count: 5,
+            new_required: 3,
+        }.into_val(&env));
+    }
+
+    #[test]
+    fn threshold_update_rejects_invalid_configurations() {
+        let env = make_env();
+        let (client, _) = deploy(&env, 3, 2);
+        let five = signers(&env, 5);
+        assert_eq!(client.try_update_threshold(&five, &1), Err(Ok(Error::InvalidThreshold)));
+        assert_eq!(client.try_update_threshold(&five, &6), Err(Ok(Error::InvalidThreshold)));
+        assert_eq!(client.try_update_threshold(&signers(&env, 12), &7), Err(Ok(Error::TooManySigners)));
     }
 
     // ── Basic proposal flow ───────────────────────────────────────────────────

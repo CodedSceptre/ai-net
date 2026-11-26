@@ -37,4 +37,7 @@ pub enum Error {
     /// The proposal has reached the rejection threshold.
     ProposalRejected = 16,
     InvalidDisputeDecision = 17,
+    TooManySigners = 17,
+    TimelockNotExpired = 18,
+    NoPendingThreshold = 19,
 }
