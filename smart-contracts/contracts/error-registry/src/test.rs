@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Ledger as _, BytesN, Env, Symbol};
+use soroban_sdk::{testutils::{Address as _, Ledger as _}, BytesN, Env, Symbol};
 
 /// Build a contract client with the ledger clock pinned to `start_ts`.
 fn setup(start_ts: u64) -> (Env, ErrorRegistryContractClient<'static>) {
@@ -48,7 +48,7 @@ fn submit_error_stores_expires_at() {
     let (env, client) = setup(1_000);
     let error_id = submit(&client, &env, 1, 42, 3_600);
 
-    let record = client.get_error(&error_id).unwrap();
+    let record = client.get_error_report(&error_id).unwrap();
     assert_eq!(record.error_code, 42);
     assert_eq!(record.created_at, 1_000);
     assert_eq!(record.expires_at, 1_000 + 3_600);
@@ -61,7 +61,7 @@ fn submit_error_at_max_ttl_is_accepted() {
     let (env, client) = setup(500);
     let error_id = submit(&client, &env, 2, 7, MAX_TTL_SECONDS);
 
-    let record = client.get_error(&error_id).unwrap();
+    let record = client.get_error_report(&error_id).unwrap();
     assert_eq!(record.expires_at, 500 + MAX_TTL_SECONDS);
 }
 
@@ -86,7 +86,7 @@ fn ttl_zero_is_rejected() {
     let res = client.try_submit_error(&error_id, &1, &sym(&env, "m"), &sym(&env, "a"), &0);
     assert_eq!(res, Err(Ok(Error::InvalidTtl)));
     // Nothing should have been stored.
-    assert!(client.get_error(&error_id).is_none());
+    assert!(client.get_error_report(&error_id).is_none());
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn ttl_above_max_is_rejected() {
         &(MAX_TTL_SECONDS + 1),
     );
     assert_eq!(res, Err(Ok(Error::InvalidTtl)));
-    assert!(client.get_error(&error_id).is_none());
+    assert!(client.get_error_report(&error_id).is_none());
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn ttl_overflow_is_rejected() {
         &100, // > 10, so (u64::MAX - 10) + 100 overflows
     );
     assert_eq!(res, Err(Ok(Error::TtlOverflow)));
-    assert!(client.get_error(&error_id).is_none());
+    assert!(client.get_error_report(&error_id).is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -131,11 +131,11 @@ fn get_error_hides_expired_record() {
     let error_id = submit(&client, &env, 7, 9, 100); // expires at 1_100
 
     // Still active before and at the boundary.
-    assert!(client.get_error(&error_id).is_some());
+    assert!(client.get_error_report(&error_id).is_some());
 
     // Move past expiry — the record must read as absent.
     env.ledger().set_timestamp(1_101);
-    assert!(client.get_error(&error_id).is_none());
+    assert!(client.get_error_report(&error_id).is_none());
 }
 
 #[test]
@@ -169,14 +169,14 @@ fn boundary_timestamp_equals_expires_at_is_active() {
     // Exactly at expiry: still active.
     env.ledger().set_timestamp(1_500);
     assert!(
-        client.get_error(&error_id).is_some(),
+        client.get_error_report(&error_id).is_some(),
         "record must be active when now == expires_at"
     );
 
     // One second later: expired.
     env.ledger().set_timestamp(1_501);
     assert!(
-        client.get_error(&error_id).is_none(),
+        client.get_error_report(&error_id).is_none(),
         "record must be expired when now > expires_at"
     );
 }
@@ -215,9 +215,9 @@ fn cleanup_removes_expired_and_keeps_active() {
     assert_eq!(stats.removed, 1);
     assert_eq!(stats.remaining, 1);
     // Expired one is gone from primary storage.
-    assert!(client.get_error(&short_lived).is_none());
+    assert!(client.get_error_report(&short_lived).is_none());
     // Active one is untouched.
-    assert!(client.get_error(&long_lived).is_some());
+    assert!(client.get_error_report(&long_lived).is_some());
 }
 
 #[test]
@@ -269,7 +269,7 @@ fn cleanup_keeps_code_index_for_surviving_records() {
     let remaining = client.get_errors_by_code(&900);
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining.get(0).unwrap().expires_at, 11_000);
-    assert!(client.get_error(&survivor).is_some());
+    assert!(client.get_error_report(&survivor).is_some());
 }
 
 // ---------------------------------------------------------------------------
@@ -352,7 +352,7 @@ fn active_records_do_not_consume_batch_budget() {
     // one behind it is still removed in this single pass.
     let stats = client.cleanup_expired_errors(&1);
     assert_eq!(stats.removed, 1);
-    assert!(client.get_error(&expired).is_none());
+    assert!(client.get_error_report(&expired).is_none());
     assert_eq!(client.count_active_by_code(&1), 1);
 }
 
@@ -363,4 +363,28 @@ fn cleanup_on_empty_registry_is_safe() {
     assert_eq!(stats.scanned, 0);
     assert_eq!(stats.removed, 0);
     assert_eq!(stats.remaining, 0);
+}
+
+#[test]
+fn catalog_registration_update_and_deprecation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(ErrorRegistryContract, ());
+    let client = ErrorRegistryContractClient::new(&env, &id);
+    client.initialize(&Address::generate(&env));
+    let name = String::from_str(&env, "TIMEOUT");
+    let description = String::from_str(&env, "Timed out");
+    assert_eq!(client.try_get_error(&42), Err(Ok(Error::ErrorCodeNotFound)));
+    client.register_error(&42, &name, &description, &ErrorSeverity::Warning);
+    assert_eq!(
+        client.try_register_error(&42, &name, &description, &ErrorSeverity::Warning),
+        Err(Ok(Error::DuplicateErrorCode))
+    );
+    let updated = String::from_str(&env, "Agent timed out");
+    client.update_error_description(&42, &updated);
+    assert_eq!(client.get_error(&42).description, updated);
+    client.deprecate_error(&42);
+    assert!(client.get_error(&42).deprecated);
+    assert!(client.list_errors(&false, &0, &1).records.is_empty());
+    assert_eq!(client.list_errors(&true, &0, &1).records.len(), 1);
 }
