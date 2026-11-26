@@ -273,12 +273,15 @@ export function createApp(opts: AppOptions = {}): {
     pongTimeoutMs: config.WS_PONG_TIMEOUT_MS,
     getAgentSnapshot: () => {
       try {
-        return createAgentDb(getAgentDb()).list().map((agent) => ({
-          id: agent.id,
-          capabilities: agent.capabilities,
-          status: agent.status,
-          lastSeenAt: agent.lastSeenAt,
-        }));
+        return createAgentDb(getAgentDb()).list().flatMap((agent) => {
+          if (agent.status === 'deregistered') return [];
+          return [{
+            id: agent.id,
+            capabilities: agent.capabilities,
+            status: agent.status,
+            lastSeenAt: agent.lastSeenAt,
+          }];
+        });
       } catch {
         return [];
       }

@@ -643,7 +643,9 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): Router {
 
       res.status(200).json({
         status: "ok",
+        agentId: req.params.id,
         lastSeenAt: updated?.lastSeenAt ?? new Date().toISOString(),
+        nextExpectedAt: new Date(Date.now() + 60_000).toISOString(),
       });
     } catch (error) {
       next(error);
