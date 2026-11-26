@@ -122,6 +122,8 @@ pub enum DataKey {
     SlaSettlement(BytesN<32>),
     PaymentEscrow,
     TaskResult(BytesN<32>),
+    BatchRoot(Bytes),
+    VerifiedBatchTask(Bytes, Bytes),
 }
 
 /// Emitted exactly once per successful `store_task_metadata` call, under
@@ -279,4 +281,35 @@ pub enum Error {
     DeadlineExpired = 20,
     ResultHashMismatch = 21,
     ResultAlreadyCommitted = 22,
+    BatchSizeExceeded = 20,
+    InvalidMerkleProof = 21,
+    AlreadyVerified = 22,
+    InvalidBatchSize = 23,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchRootSubmitted {
+    pub batch_id: Bytes,
+    pub merkle_root: BytesN<32>,
+    pub task_count: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskVerifiedInBatch {
+    pub batch_id: Bytes,
+    pub task_id: Bytes,
+    pub result_hash: BytesN<32>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractUpgradedEvent {
+    pub version: u32,
+    pub old_version: String,
+    pub new_version: String,
+    pub new_wasm_hash: BytesN<32>,
+    pub admin: Address,
+    pub ledger_sequence: u32,
 }
