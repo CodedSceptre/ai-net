@@ -1,7 +1,7 @@
 extern crate std;
 
 #[cfg(test)]
-mod test {
+mod legacy {
     use crate::{
         CapabilityStakingContract, CapabilityStakingContractClient, DEFAULT_MIN_STAKE_STROOPS,
         UNBONDING_PERIOD_LEDGERS,
@@ -14,7 +14,12 @@ mod test {
     // ── Test Helpers ──────────────────────────────────────────────────────────
 
     /// Deploy and initialise the contract, returning (env, client, admin, treasury).
-    fn setup() -> (Env, CapabilityStakingContractClient<'static>, Address, Address) {
+    fn setup() -> (
+        Env,
+        CapabilityStakingContractClient<'static>,
+        Address,
+        Address,
+    ) {
         let env = Env::default();
         env.mock_all_auths();
 
@@ -24,7 +29,7 @@ mod test {
         let admin = Address::generate(&env);
         let treasury = Address::generate(&env);
 
-        client.initialize(&admin, &treasury);
+        client.initialize(&admin, &treasury, &admin);
 
         (env, client, admin, treasury)
     }
@@ -46,7 +51,7 @@ mod test {
     fn test_initialize_twice_panics() {
         let (env, client, admin, treasury) = setup();
         // Second initialisation must panic.
-        client.initialize(&admin, &treasury);
+        client.initialize(&admin, &treasury, &admin);
         let _ = env;
     }
 
@@ -256,7 +261,7 @@ mod test {
 
         // Move forward by only half the unbonding period.
         env.ledger().with_mut(|li| {
-            li.sequence_number = 1000 + (UNBONDING_PERIOD_LEDGERS / 2) as u64;
+            li.sequence_number = 1000 + (UNBONDING_PERIOD_LEDGERS / 2);
         });
 
         // This must panic.
@@ -278,7 +283,7 @@ mod test {
 
         // Jump past the full unbonding period.
         env.ledger().with_mut(|li| {
-            li.sequence_number = 1000 + UNBONDING_PERIOD_LEDGERS as u64 + 1;
+            li.sequence_number = 1000 + UNBONDING_PERIOD_LEDGERS + 1;
         });
 
         // Should succeed without panic.
@@ -303,7 +308,7 @@ mod test {
 
         // Set ledger to exactly claimable_at.
         env.ledger().with_mut(|li| {
-            li.sequence_number = 500 + UNBONDING_PERIOD_LEDGERS as u64;
+            li.sequence_number = 500 + UNBONDING_PERIOD_LEDGERS;
         });
 
         client.claim_unbonded(&owner, &agent_id, &capability);
@@ -507,5 +512,127 @@ mod test {
         // 7 days * 24 hours * 3600 seconds / 5 seconds per ledger = 120_960
         let expected: u32 = 7 * 24 * 3600 / 5;
         assert_eq!(UNBONDING_PERIOD_LEDGERS, expected);
+    }
+}
+
+mod delegation {
+    use crate::*;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
+
+    #[contract]
+    struct RegistryFixture;
+
+    #[contractimpl]
+    impl RegistryFixture {
+        pub fn get_agent_owner(env: Env, agent: Symbol) -> Option<Address> {
+            env.storage().instance().get(&agent)
+        }
+    }
+
+    fn setup() -> (
+        Env,
+        CapabilityStakingContractClient<'static>,
+        Address,
+        Address,
+        Address,
+    ) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let agent = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let asset = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let id = env.register(CapabilityStakingContract, ());
+        let client = CapabilityStakingContractClient::new(&env, &id);
+        let registry = env.register(RegistryFixture, ());
+        let name = symbol_short!("agent");
+        env.as_contract(&registry, || env.storage().instance().set(&name, &agent));
+        client.initialize(&admin, &treasury, &asset);
+        client.set_registry(&registry);
+        client.set_dispute_resolution(&admin);
+        client.bind_agent(&agent, &name);
+        (env, client, agent, asset, treasury)
+    }
+
+    fn fund(
+        env: &Env,
+        client: &CapabilityStakingContractClient<'_>,
+        asset: &Address,
+        owner: &Address,
+        amount: i128,
+    ) {
+        token::StellarAssetClient::new(env, asset).mint(owner, &amount);
+        client.fund_stake(owner, &amount);
+    }
+
+    #[test]
+    fn rewards_and_slashes_follow_three_delegators() {
+        let (env, client, agent, asset, treasury) = setup();
+        fund(&env, &client, &asset, &agent, 60);
+        let contributors = [
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ];
+        for (owner, amount) in contributors.iter().zip([10, 20, 10]) {
+            fund(&env, &client, &asset, owner, amount);
+            client.delegate_stake(owner, &agent, &amount);
+            assert_eq!(client.get_effective_stake(owner), 0);
+        }
+        assert_eq!(client.get_effective_stake(&agent), 100);
+        let cap = symbol_short!("research");
+        client.set_min_stake(&cap, &100);
+        assert!(client.is_sufficiently_staked(&symbol_short!("agent"), &cap));
+        let payer = Address::generate(&env);
+        token::StellarAssetClient::new(&env, &asset).mint(&payer, &100);
+        client.distribute_rewards(&payer, &agent, &100);
+        let tokens = token::Client::new(&env, &asset);
+        assert_eq!(tokens.balance(&agent), 60);
+        for (owner, amount) in contributors.iter().zip([10, 20, 10]) {
+            assert_eq!(tokens.balance(owner), amount);
+        }
+
+        client.undelegate_stake(&contributors[1], &agent, &10);
+        client.slash(&agent, &Bytes::new(&env), &20, &Bytes::new(&env));
+        assert_eq!(tokens.balance(&treasury), 20);
+        assert_eq!(client.get_effective_stake(&agent), 72);
+        let delegated = client.get_delegations(&agent);
+        for record in delegated {
+            assert_eq!(record.amount, 8);
+        }
+        env.ledger().set_timestamp(DELEGATION_UNBONDING_SECS - 1);
+        assert_eq!(
+            client.try_claim_undelegated(&contributors[1], &agent),
+            Err(Ok(Error::UnbondingPeriodActive))
+        );
+        env.ledger().set_timestamp(DELEGATION_UNBONDING_SECS);
+        assert_eq!(client.claim_undelegated(&contributors[1], &agent), 8);
+        assert_eq!(client.get_effective_stake(&contributors[1]), 8);
+    }
+
+    #[test]
+    fn limits_delegators_and_reuses_claimed_slots() {
+        let (env, client, agent, asset, _) = setup();
+        let mut first = None;
+        for _ in 0..MAX_DELEGATORS {
+            let owner = Address::generate(&env);
+            fund(&env, &client, &asset, &owner, 1);
+            client.delegate_stake(&owner, &agent, &1);
+            first.get_or_insert(owner);
+        }
+        let extra = Address::generate(&env);
+        fund(&env, &client, &asset, &extra, 1);
+        assert_eq!(
+            client.try_delegate_stake(&extra, &agent, &1),
+            Err(Ok(Error::DelegatorLimitReached))
+        );
+        let first = first.unwrap();
+        client.undelegate_stake(&first, &agent, &1);
+        env.ledger().set_timestamp(DELEGATION_UNBONDING_SECS);
+        assert_eq!(client.claim_undelegated(&first, &agent), 1);
+        client.delegate_stake(&extra, &agent, &1);
+        assert_eq!(client.get_delegations(&agent).len(), MAX_DELEGATORS);
     }
 }

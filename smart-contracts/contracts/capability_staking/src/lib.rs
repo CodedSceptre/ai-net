@@ -20,6 +20,19 @@
 //! 6. **`slash_bond`** — admin slashes the entire remaining stake for
 //!    misbehaviour, routing the slashed amount to the treasury.
 //!
+//! ## Delegation
+//!
+//! The admin configures the agent registry with `set_registry`. A registered
+//! agent owner calls `bind_agent` with its registry ID. Any wallet can deposit
+//! token-backed stake with `fund_stake` and move it to a registered owner's
+//! pool with `delegate_stake`. A wallet authorizes its own undelegation and
+//! claim. Active stake counts toward eligibility and rewards. Unbonding stake
+//! stops counting immediately and remains slashable until claimed.
+//!
+//! A delegation claim credits the caller's own stake balance. To withdraw
+//! own stake to the wallet, pass the same address as both arguments to
+//! `undelegate_stake` and, after the cooldown, `claim_undelegated`.
+//!
 //! ## Storage Layout
 //!
 //! | Key                              | Type                    | Scope      |
@@ -45,6 +58,15 @@ use soroban_sdk::{
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
     contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, IntoVal, Symbol,
 };
+mod types;
+
+pub use types::{DelegationRecord, StakeDelegated, UndelegationInitiated};
+
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env,
+    IntoVal, Symbol, Vec, I256,
+};
+use types::PendingUndelegation;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -94,6 +116,11 @@ pub enum DataKey {
     UnbondingOwner(Symbol, Symbol),
     StakeHistory(Address),
     TotalStakeHistory,
+    Registry,
+    RegisteredAgent(Address),
+    Delegations(Address),
+    PendingUndelegations(Address),
+    OwnStake(Address),
 }
 
 // ─── Data Types ──────────────────────────────────────────────────────────────
@@ -208,8 +235,8 @@ pub struct AddressStakeRecord {
 // ─── Error Codes ─────────────────────────────────────────────────────────────
 
 /// Contract error discriminants, returned via `panic_with_error!` / panic.
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[contracterror]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 #[repr(u32)]
 pub enum Error {
     /// Contract has already been initialised.
@@ -232,6 +259,12 @@ pub enum Error {
     InvalidSlashAmount = 9,
     /// Agent is currently blacklisted and may not stake.
     AgentBlacklisted = 10,
+    InvalidDelegation = 11,
+    UnknownDelegatee = 12,
+    DelegatorLimitReached = 13,
+    UnbondingPeriodActive = 14,
+    PendingUndelegationExists = 15,
+    ArithmeticOverflow = 16,
 }
 
 // ─── Internal Helpers ────────────────────────────────────────────────────────
@@ -366,6 +399,63 @@ fn load_token(env: &Env) -> Address {
         .unwrap_or_else(|| panic!("token contract not configured"))
 }
 
+const MAX_DELEGATORS: u32 = 10;
+const DELEGATION_UNBONDING_SECS: u64 = 7 * 24 * 60 * 60;
+
+fn own_stake(env: &Env, address: &Address) -> i128 {
+    let key = DataKey::OwnStake(address.clone());
+    extend_persistent_ttl(env, &key);
+    env.storage().persistent().get(&key).unwrap_or(0)
+}
+
+fn delegations(env: &Env, delegatee: &Address) -> Vec<DelegationRecord> {
+    let key = DataKey::Delegations(delegatee.clone());
+    extend_persistent_ttl(env, &key);
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+fn pending(env: &Env, delegatee: &Address) -> Vec<PendingUndelegation> {
+    let key = DataKey::PendingUndelegations(delegatee.clone());
+    extend_persistent_ttl(env, &key);
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+fn save<T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(env: &Env, key: &DataKey, value: &T) {
+    env.storage().persistent().set(key, value);
+    extend_persistent_ttl(env, key);
+}
+
+fn delegation_total(records: &Vec<DelegationRecord>) -> Result<i128, Error> {
+    records.iter().try_fold(0i128, |total, record| {
+        total
+            .checked_add(record.amount)
+            .ok_or(Error::ArithmeticOverflow)
+    })
+}
+
+fn proportion(env: &Env, amount: i128, weight: i128, total: i128) -> i128 {
+    I256::from_i128(env, amount)
+        .mul(&I256::from_i128(env, weight))
+        .div(&I256::from_i128(env, total))
+        .to_i128()
+        .unwrap()
+}
+
+fn registered_owner(env: &Env, agent: &Symbol) -> Option<Address> {
+    let registry: Address = env.storage().instance().get(&DataKey::Registry)?;
+    env.invoke_contract(
+        &registry,
+        &Symbol::new(env, "get_agent_owner"),
+        (agent.clone(),).into_val(env),
+    )
+}
+
 // ─── Contract ────────────────────────────────────────────────────────────────
 
 #[contract]
@@ -449,6 +539,280 @@ impl CapabilityStakingContract {
             .instance()
             .set(&DataKey::DisputeResolutionContract, &contract_id);
         extend_instance_ttl(&env);
+    }
+
+    /// Configure the authoritative agent registry.
+    pub fn set_registry(env: Env, registry: Address) {
+        load_admin(&env).require_auth();
+        env.storage().instance().set(&DataKey::Registry, &registry);
+        extend_instance_ttl(&env);
+    }
+
+    /// Associate a wallet with an agent it owns in the registry.
+    pub fn bind_agent(env: Env, owner: Address, agent_id: Symbol) -> Result<(), Error> {
+        owner.require_auth();
+        if registered_owner(&env, &agent_id) != Some(owner.clone()) {
+            return Err(Error::UnknownDelegatee);
+        }
+        save(&env, &DataKey::RegisteredAgent(owner), &agent_id);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Move tokens into the wallet's own, delegatable stake balance.
+    pub fn fund_stake(env: Env, owner: Address, amount: i128) -> Result<(), Error> {
+        owner.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidDelegation);
+        }
+        let balance = own_stake(&env, &owner)
+            .checked_add(amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let asset = token::Client::new(&env, &load_token(&env));
+        asset.transfer(&owner, &env.current_contract_address(), &amount);
+        save(&env, &DataKey::OwnStake(owner), &balance);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    pub fn delegate_stake(
+        env: Env,
+        delegator: Address,
+        delegatee: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        delegator.require_auth();
+        if amount <= 0 || delegator == delegatee {
+            return Err(Error::InvalidDelegation);
+        }
+        let binding = DataKey::RegisteredAgent(delegatee.clone());
+        let agent: Symbol = env
+            .storage()
+            .persistent()
+            .get(&binding)
+            .ok_or(Error::UnknownDelegatee)?;
+        if registered_owner(&env, &agent) != Some(delegatee.clone()) {
+            return Err(Error::UnknownDelegatee);
+        }
+        if Self::is_blacklisted(env.clone(), delegatee.clone()) {
+            return Err(Error::AgentBlacklisted);
+        }
+        let mut active = delegations(&env, &delegatee);
+        let unbonding = pending(&env, &delegatee);
+        let balance = own_stake(&env, &delegator);
+        if balance < amount {
+            return Err(Error::StakeNotFound);
+        }
+        let existing = active
+            .iter()
+            .position(|record| record.delegator == delegator);
+        if let Some(index) = existing {
+            let mut record = active.get(index as u32).unwrap();
+            record.amount = record
+                .amount
+                .checked_add(amount)
+                .ok_or(Error::ArithmeticOverflow)?;
+            active.set(index as u32, record);
+        } else {
+            // Pending positions retain their slot until claimed so they remain slashable
+            // within the same bounded budget as active positions.
+            let pending_only = unbonding
+                .iter()
+                .filter(|position| {
+                    position.delegator != delegatee
+                        && !active
+                            .iter()
+                            .any(|record| record.delegator == position.delegator)
+                })
+                .count() as u32;
+            let already_pending = unbonding
+                .iter()
+                .any(|position| position.delegator == delegator);
+            if active.len() + pending_only >= MAX_DELEGATORS && !already_pending {
+                return Err(Error::DelegatorLimitReached);
+            }
+            active.push_back(DelegationRecord {
+                delegator: delegator.clone(),
+                amount,
+                delegated_at: env.ledger().timestamp(),
+            });
+        }
+        save(
+            &env,
+            &DataKey::OwnStake(delegator.clone()),
+            &(balance - amount),
+        );
+        save(&env, &DataKey::Delegations(delegatee.clone()), &active);
+        extend_persistent_ttl(&env, &binding);
+        env.events().publish(
+            (symbol_short!("staking"), symbol_short!("delegated")),
+            StakeDelegated {
+                delegator,
+                delegatee,
+                amount,
+            },
+        );
+        Ok(())
+    }
+
+    /// Begin unbonding. Passing the caller as both addresses unbonds own stake.
+    pub fn undelegate_stake(
+        env: Env,
+        delegator: Address,
+        delegatee: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        delegator.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidDelegation);
+        }
+        let mut unbonding = pending(&env, &delegatee);
+        if unbonding
+            .iter()
+            .any(|position| position.delegator == delegator)
+        {
+            return Err(Error::PendingUndelegationExists);
+        }
+        if delegator == delegatee {
+            let balance = own_stake(&env, &delegator);
+            if balance < amount {
+                return Err(Error::StakeNotFound);
+            }
+            save(
+                &env,
+                &DataKey::OwnStake(delegator.clone()),
+                &(balance - amount),
+            );
+        } else {
+            let mut active = delegations(&env, &delegatee);
+            let index = active
+                .iter()
+                .position(|record| record.delegator == delegator)
+                .ok_or(Error::StakeNotFound)? as u32;
+            let mut record = active.get(index).unwrap();
+            if amount > record.amount {
+                return Err(Error::StakeNotFound);
+            }
+            record.amount -= amount;
+            if record.amount == 0 {
+                active.remove(index);
+            } else {
+                active.set(index, record);
+            }
+            save(&env, &DataKey::Delegations(delegatee.clone()), &active);
+        }
+        let claimable_at = env.ledger().timestamp() + DELEGATION_UNBONDING_SECS;
+        unbonding.push_back(PendingUndelegation {
+            delegator: delegator.clone(),
+            amount,
+            claimable_at,
+        });
+        save(
+            &env,
+            &DataKey::PendingUndelegations(delegatee.clone()),
+            &unbonding,
+        );
+        extend_instance_ttl(&env);
+        env.events().publish(
+            (symbol_short!("staking"), symbol_short!("unbonding")),
+            UndelegationInitiated {
+                delegator,
+                delegatee,
+                amount,
+                claimable_at,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn claim_undelegated(
+        env: Env,
+        delegator: Address,
+        delegatee: Address,
+    ) -> Result<i128, Error> {
+        delegator.require_auth();
+        let mut unbonding = pending(&env, &delegatee);
+        let index = unbonding
+            .iter()
+            .position(|position| position.delegator == delegator)
+            .ok_or(Error::UnbondingNotFound)? as u32;
+        let position = unbonding.get(index).unwrap();
+        if env.ledger().timestamp() < position.claimable_at {
+            return Err(Error::UnbondingPeriodActive);
+        }
+        unbonding.remove(index);
+        save(
+            &env,
+            &DataKey::PendingUndelegations(delegatee.clone()),
+            &unbonding,
+        );
+        if delegator == delegatee {
+            if position.amount > 0 {
+                token::Client::new(&env, &load_token(&env)).transfer(
+                    &env.current_contract_address(),
+                    &delegator,
+                    &position.amount,
+                );
+            }
+        } else {
+            let balance = own_stake(&env, &delegator)
+                .checked_add(position.amount)
+                .ok_or(Error::ArithmeticOverflow)?;
+            save(&env, &DataKey::OwnStake(delegator), &balance);
+        }
+        extend_instance_ttl(&env);
+        Ok(position.amount)
+    }
+
+    pub fn get_delegations(env: Env, delegatee: Address) -> Vec<DelegationRecord> {
+        delegations(&env, &delegatee)
+    }
+
+    pub fn get_effective_stake(env: Env, agent: Address) -> Result<i128, Error> {
+        own_stake(&env, &agent)
+            .checked_add(delegation_total(&delegations(&env, &agent))?)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Distribute a payer-funded reward based on active stake at execution.
+    pub fn distribute_rewards(
+        env: Env,
+        payer: Address,
+        agent: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        payer.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidDelegation);
+        }
+        let active = delegations(&env, &agent);
+        let delegated = delegation_total(&active)?;
+        let total = own_stake(&env, &agent)
+            .checked_add(delegated)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if total == 0 {
+            return Err(Error::StakeNotFound);
+        }
+        let asset = token::Client::new(&env, &load_token(&env));
+        let mut reward_left = amount;
+        // Cumulative rounding gives the entire delegated share to delegators.
+        let mut weight = 0;
+        let mut paid = 0;
+        for record in active {
+            weight += record.amount;
+            let cumulative = proportion(&env, amount, weight, total);
+            let reward = cumulative - paid;
+            if reward > 0 && payer != record.delegator {
+                asset.transfer(&payer, &record.delegator, &reward);
+            }
+            reward_left -= reward;
+            paid = cumulative;
+        }
+        if reward_left > 0 && payer != agent {
+            asset.transfer(&payer, &agent, &reward_left);
+        }
+        extend_instance_ttl(&env);
+        Ok(())
     }
 
     // ── Configuration ───────────────────────────────────────────────────────
@@ -791,15 +1155,11 @@ impl CapabilityStakingContract {
     /// Slash a specific capability bond. May only be called by the configured
     /// dispute_resolution contract (verified via cross-contract caller check).
     ///
-    /// Behaviour:
-    /// - Deducts `slash_amount` from the agent's active stake for `capability`.
-    /// - If `slash_amount >= staked amount`, the full bond is taken, the
-    ///   capability stake record is removed, and the agent is blacklisted for
-    ///   30 ledger-days (BLACKLIST_PERIOD_LEDGERS).
-    /// - Slashed funds are transferred to the treasury via the native token
-    ///   contract.
-    /// - Emits `capability_slashed { agent_id, capability, slash_amount,
-    ///   remaining_stake, ledger }`.
+    /// Applies the slash proportionally to the address-keyed capability
+    /// bond and the agent's token-backed own, delegated, and unbonding stake.
+    /// The slash is capped at the total at risk, and the treasury receives
+    /// the exact deducted amount. Exhausting active stake blacklists the
+    /// agent for 30 ledger-days.
     ///
     /// # Authorization
     /// Caller must be the dispute_resolution contract address stored in
@@ -810,8 +1170,7 @@ impl CapabilityStakingContract {
     /// - Panics with `Error::CallerNotDisputeResolution` when called by anyone
     ///   other than the configured dispute_resolution contract.
     /// - Panics with `Error::InvalidSlashAmount` when `slash_amount <= 0`.
-    /// - Panics with `Error::StakeNotFound` when no active stake exists for
-    ///   the (agent_id, capability) pair.
+    /// - Panics when the agent has no slashable stake.
     pub fn slash(
         env: Env,
         agent_id: Address,
@@ -907,13 +1266,74 @@ impl CapabilityStakingContract {
             record.amount_stroops
         } else {
             slash_amount
+        let addr_key = DataKey::AddressStakeRecord(agent_id.clone(), capability.clone());
+        let legacy: Option<AddressStakeRecord> = env.storage().persistent().get(&addr_key);
+        let own = own_stake(&env, &agent_id);
+        let active = delegations(&env, &agent_id);
+        let mut unbonding = pending(&env, &agent_id);
+        let legacy_amount = legacy.as_ref().map_or(0, |record| record.amount_stroops);
+        let active_total = own + legacy_amount + delegation_total(&active).unwrap();
+        let unbonding_total: i128 = unbonding.iter().map(|position| position.amount).sum();
+        let total = active_total + unbonding_total;
+        if total == 0 {
+            panic!("stake not found");
+        }
+        let actual_slash = slash_amount.min(total);
+        // Apply the same rate to every component. Cumulative rounding charges
+        // exactly the requested number of stroops across all positions.
+        let mut weight = 0;
+        let mut deducted = 0;
+        let mut deduction = |amount| {
+            weight += amount;
+            let cumulative = proportion(&env, actual_slash, weight, total);
+            let result = cumulative - deducted;
+            deducted = cumulative;
+            result
         };
-        let remaining = record.amount_stroops - actual_slash;
+        let mut remaining = 0;
+        if let Some(mut record) = legacy {
+            record.amount_stroops -= deduction(record.amount_stroops);
+            remaining += record.amount_stroops;
+            if record.amount_stroops == 0 {
+                env.storage().persistent().remove(&addr_key);
+            } else {
+                save(&env, &addr_key, &record);
+            }
+        }
+        let own_remaining = own - deduction(own);
+        remaining += own_remaining;
+        if own > 0 {
+            save(&env, &DataKey::OwnStake(agent_id.clone()), &own_remaining);
+        }
+        let mut remaining_delegations = Vec::new(&env);
+        for mut record in active.iter() {
+            record.amount -= deduction(record.amount);
+            remaining += record.amount;
+            if record.amount > 0 {
+                remaining_delegations.push_back(record);
+            }
+        }
+        if !active.is_empty() {
+            save(
+                &env,
+                &DataKey::Delegations(agent_id.clone()),
+                &remaining_delegations,
+            );
+        }
+        for index in 0..unbonding.len() {
+            let mut position = unbonding.get(index).unwrap();
+            position.amount -= deduction(position.amount);
+            unbonding.set(index, position);
+        }
+        if !unbonding.is_empty() {
+            save(
+                &env,
+                &DataKey::PendingUndelegations(agent_id.clone()),
+                &unbonding,
+            );
+        }
 
-        if remaining == 0 {
-            // Full slash: remove record and blacklist agent for 30 ledger-days.
-            env.storage().persistent().remove(&addr_key);
-
+        if active_total > 0 && remaining == 0 {
             let blacklist_expires = current_ledger + BLACKLIST_PERIOD_LEDGERS;
             let bl_key = DataKey::Blacklist(agent_id.clone());
             env.storage().persistent().set(&bl_key, &blacklist_expires);
@@ -929,6 +1349,11 @@ impl CapabilityStakingContract {
             let key = DataKey::Blacklist(agent_id.clone());
             storage.set(&key, &expires);
             extend_persistent_ttl(&env, &key);
+            save(
+                &env,
+                &DataKey::Blacklist(agent_id.clone()),
+                &blacklist_expires,
+            );
         }
 
         // Transfer slashed funds to treasury via the token contract.
@@ -952,7 +1377,7 @@ impl CapabilityStakingContract {
             },
         );
 
-        // Suppress unused warning on reason — stored in event for off-chain indexers.
+        // Retain the dispute-resolution ABI. The dispute tracks the reason.
         let _ = reason;
     }
 
@@ -1001,14 +1426,27 @@ impl CapabilityStakingContract {
             .get(&DataKey::MinStakePerCapability(capability.clone()))
             .unwrap_or(DEFAULT_MIN_STAKE_STROOPS);
 
-        match env
+        let own = env
             .storage()
             .persistent()
-            .get::<DataKey, StakeRecord>(&DataKey::StakeRecord(agent_id, capability))
-        {
-            Some(record) => record.amount_stroops >= min_stake,
-            None => false,
+            .get::<_, StakeRecord>(&DataKey::StakeRecord(agent_id.clone(), capability))
+            .map(|record| record.amount_stroops);
+        if let Some(owner) = registered_owner(&env, &agent_id) {
+            if Self::is_blacklisted(env.clone(), owner.clone()) {
+                return false;
+            }
+            let binding = DataKey::RegisteredAgent(owner.clone());
+            let bound_agent: Option<Symbol> = env.storage().persistent().get(&binding);
+            let delegated_and_own = if bound_agent == Some(agent_id) {
+                extend_persistent_ttl(&env, &binding);
+                Self::get_effective_stake(env, owner).unwrap()
+            } else {
+                0
+            };
+            return (own.is_some() || delegated_and_own > 0)
+                && own.unwrap_or(0).saturating_add(delegated_and_own) >= min_stake;
         }
+        own.is_some_and(|amount| amount >= min_stake)
     }
 
     /// Returns `true` if `agent_id` is currently blacklisted (i.e. their
