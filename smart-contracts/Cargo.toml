@@ -13,6 +13,7 @@ members = [
     "contracts/platform_config",
     "contracts/agent_marketplace",
     "contracts/capability_staking",
+    "contracts/reputation",
 ]
 resolver = "2"
 
