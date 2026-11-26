@@ -21,7 +21,7 @@
 //!    configurable voting period (default 7 days). The current total voting
 //!    power is snapshotted into the proposal.
 //! 4. **`vote_on_proposal`** — registered agents cast exactly one vote each,
-//!    weighted by their current voting power.
+//!    weighted by their historical stake once capability staking is configured.
 //! 5. **`execute_proposal`** — after the deadline, quorum and majority are
 //!    evaluated and the proposal is finalised.
 //!
@@ -37,19 +37,49 @@ mod types;
 
 pub use errors::Error;
 pub use types::{
-    voting_power, AgentInfo, DataKey, Proposal, ProposalCreatedEvent, ProposalExecutedEvent,
-    ProposalFailedEvent, ProposalStatus, ProposalType, VoteCastEvent, VoteChoice, VoteRecord,
-    VotingStartedEvent, QuorumReachedEvent, QuorumFailedEvent,
-    BPS_DENOMINATOR, DEFAULT_VOTING_PERIOD_SECS, DEFAULT_VOTING_PERIOD_LEDGERS, DEFAULT_QUORUM_THRESHOLD_BPS,
-    MAJORITY_BPS, MAX_REPUTATION,
-    MAX_VOTING_PERIOD_SECS, MIN_VOTING_PERIOD_SECS, QUORUM_BPS, REPUTATION_POWER_UNIT,
+    voting_power,
+    AgentInfo,
+    ChangeCancelledEvent,
+    ChangeExecutedEvent,
     // Timelock exports
-    ChangeProposedEvent, ChangeExecutedEvent, ChangeCancelledEvent, GuardianApprovalEvent,
-    GuardianConfig, PendingChange, TimelockKey,
-    CHANGE_EXPIRY_LEDGERS, DEFAULT_GUARDIAN_THRESHOLD, DEFAULT_GUARDIAN_SET_SIZE, MIN_DELAY_LEDGERS,
+    ChangeProposedEvent,
+    DataKey,
+    GuardianApprovalEvent,
+    GuardianConfig,
+    PendingChange,
+    Proposal,
+    ProposalCreatedEvent,
+    ProposalExecutedEvent,
+    ProposalFailedEvent,
+    ProposalStatus,
+    ProposalType,
+    QuorumFailedEvent,
+    QuorumReachedEvent,
+    TimelockKey,
+    VoteCastEvent,
+    VoteChoice,
+    VoteRecord,
+    VotingStartedEvent,
+    BPS_DENOMINATOR,
+    CHANGE_EXPIRY_LEDGERS,
+    DEFAULT_GUARDIAN_SET_SIZE,
+    DEFAULT_GUARDIAN_THRESHOLD,
+    DEFAULT_QUORUM_THRESHOLD_BPS,
+    DEFAULT_VOTING_PERIOD_LEDGERS,
+    DEFAULT_VOTING_PERIOD_SECS,
+    MAJORITY_BPS,
+    MAX_REPUTATION,
+    MAX_VOTING_PERIOD_SECS,
+    MIN_DELAY_LEDGERS,
+    MIN_VOTING_PERIOD_SECS,
+    QUORUM_BPS,
+    REPUTATION_POWER_UNIT,
 };
 
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, Address, Env, IntoVal, Map, String, Symbol, TryIntoVal,
+    Val, Vec,
+};
 
 // ─── TTL constants (mirrored from agent_registry) ────────────────────────────
 
@@ -88,6 +118,28 @@ fn total_power(env: &Env) -> i128 {
         .instance()
         .get(&DataKey::TotalPower)
         .unwrap_or(0)
+}
+
+fn load_proposal(env: &Env, id: u64) -> Option<Proposal> {
+    let mut fields: Map<Symbol, Val> = env.storage().persistent().get(&DataKey::Proposal(id))?;
+    let ledger = Symbol::new(env, "snapshot_ledger");
+    if !fields.contains_key(ledger.clone()) {
+        fields.set(ledger, fields.get(Symbol::new(env, "voting_start_ledger"))?);
+        fields.set(
+            Symbol::new(env, "snapshot_staking"),
+            Option::<Address>::None.into_val(env),
+        );
+    }
+    let value: Val = fields.into_val(env);
+    value.try_into_val(env).ok()
+}
+
+fn stake_power_at(env: &Env, staking: &Address, voter: &Address, ledger: u32) -> i128 {
+    env.invoke_contract(
+        staking,
+        &Symbol::new(env, "get_voting_power_at"),
+        soroban_sdk::vec![env, voter.into_val(env), ledger.into_val(env)],
+    )
 }
 
 // ─── Contract ────────────────────────────────────────────────────────────────
@@ -253,7 +305,20 @@ impl AgentGovernanceContract {
             return Err(Error::InvalidVotingPeriod);
         }
 
-        let snapshot = total_power(&env);
+        let start_ledger = env.ledger().sequence();
+        let staking: Option<Address> = env.storage().instance().get(&DataKey::CapabilityStaking);
+        let snapshot = if let Some(contract) = &staking {
+            if stake_power_at(&env, contract, &proposer, start_ledger) <= 0 {
+                return Err(Error::InsufficientVotingPower);
+            }
+            env.invoke_contract(
+                contract,
+                &Symbol::new(&env, "get_total_voting_power_at"),
+                soroban_sdk::vec![&env, start_ledger.into_val(&env)],
+            )
+        } else {
+            total_power(&env)
+        };
         if snapshot <= 0 {
             return Err(Error::ZeroVotingPower);
         }
@@ -266,7 +331,6 @@ impl AgentGovernanceContract {
             + 1;
 
         let now = env.ledger().timestamp();
-        let start_ledger = env.ledger().sequence();
         let period_ledgers: u32 = env
             .storage()
             .instance()
@@ -289,6 +353,8 @@ impl AgentGovernanceContract {
             total_power_snapshot: snapshot,
             voting_start_ledger: start_ledger,
             voting_end_ledger: end_ledger,
+            snapshot_ledger: start_ledger,
+            snapshot_staking: staking,
         };
 
         let key = DataKey::Proposal(id);
@@ -320,11 +386,8 @@ impl AgentGovernanceContract {
         Ok(id)
     }
 
-    /// Cast a vote on an active proposal. The `voter` must be a registered
-    /// agent, must authorise the call, and must not have voted already.
-    ///
-    /// The vote weight is the agent's current voting power. Emits
-    /// `(gov, vote_cast)`.
+    /// Cast a vote once on an active proposal, using stake at creation for
+    /// proposals backed by capability staking. Emits `(gov, vote_cast)`.
     pub fn vote_on_proposal(
         env: Env,
         proposal_id: u64,
@@ -334,14 +397,8 @@ impl AgentGovernanceContract {
         require_initialized(&env)?;
         voter.require_auth();
 
-        let agent = load_agent(&env, &voter)?;
-
         let prop_key = DataKey::Proposal(proposal_id);
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&prop_key)
-            .ok_or(Error::NotFound)?;
+        let mut proposal = load_proposal(&env, proposal_id).ok_or(Error::NotFound)?;
 
         if proposal.status != ProposalStatus::Active {
             return Err(Error::ProposalNotActive);
@@ -355,7 +412,15 @@ impl AgentGovernanceContract {
             return Err(Error::AlreadyVoted);
         }
 
-        let weight = agent.power;
+        let weight = if let Some(staking) = &proposal.snapshot_staking {
+            let power = stake_power_at(&env, staking, &voter, proposal.snapshot_ledger);
+            if power <= 0 {
+                return Err(Error::InsufficientVotingPower);
+            }
+            power
+        } else {
+            load_agent(&env, &voter)?.power
+        };
         match choice {
             VoteChoice::For => proposal.for_power = proposal.for_power.saturating_add(weight),
             VoteChoice::Against => {
@@ -401,11 +466,7 @@ impl AgentGovernanceContract {
         require_initialized(&env)?;
 
         let prop_key = DataKey::Proposal(proposal_id);
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&prop_key)
-            .ok_or(Error::NotFound)?;
+        let mut proposal = load_proposal(&env, proposal_id).ok_or(Error::NotFound)?;
 
         if proposal.status != ProposalStatus::Active {
             return Err(Error::ProposalFinalized);
@@ -428,7 +489,8 @@ impl AgentGovernanceContract {
             .instance()
             .get(&DataKey::QuorumThresholdBps)
             .unwrap_or(DEFAULT_QUORUM_THRESHOLD_BPS);
-        let quorum_needed = (proposal.total_power_snapshot.saturating_mul(quorum_bps)) / BPS_DENOMINATOR;
+        let quorum_needed =
+            (proposal.total_power_snapshot.saturating_mul(quorum_bps)) / BPS_DENOMINATOR;
         let quorum_met = proposal.total_power_snapshot > 0
             && cast_power.saturating_mul(BPS_DENOMINATOR)
                 >= proposal.total_power_snapshot.saturating_mul(quorum_bps);
@@ -514,9 +576,15 @@ impl AgentGovernanceContract {
     /// Configure proposal voting period in ledgers (Issue #408).
     pub fn set_voting_period_ledgers(env: Env, period: u32) -> Result<(), Error> {
         require_initialized(&env)?;
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
         admin.require_auth();
-        env.storage().instance().set(&DataKey::VotingPeriodLedgers, &period);
+        env.storage()
+            .instance()
+            .set(&DataKey::VotingPeriodLedgers, &period);
         Ok(())
     }
 
@@ -531,9 +599,15 @@ impl AgentGovernanceContract {
     /// Configure quorum threshold in basis points (Issue #408).
     pub fn set_quorum_threshold_bps(env: Env, bps: u32) -> Result<(), Error> {
         require_initialized(&env)?;
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
         admin.require_auth();
-        env.storage().instance().set(&DataKey::QuorumThresholdBps, &(bps as i128));
+        env.storage()
+            .instance()
+            .set(&DataKey::QuorumThresholdBps, &(bps as i128));
         Ok(())
     }
 
@@ -550,9 +624,29 @@ impl AgentGovernanceContract {
     /// Configure platform_config contract address (Issue #408).
     pub fn set_platform_config(env: Env, platform_config: Address) -> Result<(), Error> {
         require_initialized(&env)?;
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
         admin.require_auth();
-        env.storage().instance().set(&DataKey::PlatformConfig, &platform_config);
+        env.storage()
+            .instance()
+            .set(&DataKey::PlatformConfig, &platform_config);
+        Ok(())
+    }
+
+    /// Set the staking contract used for future proposals.
+    pub fn set_capability_staking(env: Env, staking: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::CapabilityStaking, &staking);
         Ok(())
     }
 
@@ -560,7 +654,7 @@ impl AgentGovernanceContract {
 
     /// Return the proposal record for `id`, if it exists.
     pub fn get_proposal(env: Env, id: u64) -> Option<Proposal> {
-        env.storage().persistent().get(&DataKey::Proposal(id))
+        load_proposal(&env, id)
     }
 
     /// Return a specific agent's vote on a proposal, if cast.
@@ -612,9 +706,7 @@ impl AgentGovernanceContract {
         admin.require_auth();
 
         let delay = min_delay_ledgers.unwrap_or(MIN_DELAY_LEDGERS);
-        env.storage()
-            .instance()
-            .set(&TimelockKey::MinDelay, &delay);
+        env.storage().instance().set(&TimelockKey::MinDelay, &delay);
         Ok(())
     }
 
@@ -644,7 +736,10 @@ impl AgentGovernanceContract {
             return Err(Error::ZeroVotingPower); // reuse: invalid threshold
         }
 
-        let config = GuardianConfig { guardians, threshold };
+        let config = GuardianConfig {
+            guardians,
+            threshold,
+        };
         env.storage()
             .instance()
             .set(&TimelockKey::GuardianConfig, &config);
@@ -710,9 +805,11 @@ impl AgentGovernanceContract {
 
         let key = TimelockKey::PendingChange(change_id);
         env.storage().temporary().set(&key, &change);
-        env.storage()
-            .temporary()
-            .extend_ttl(&key, CHANGE_EXPIRY_LEDGERS - 1, CHANGE_EXPIRY_LEDGERS);
+        env.storage().temporary().extend_ttl(
+            &key,
+            CHANGE_EXPIRY_LEDGERS - 1,
+            CHANGE_EXPIRY_LEDGERS,
+        );
 
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("chg_prop")),
@@ -759,11 +856,10 @@ impl AgentGovernanceContract {
 
         let current_ledger = env.ledger().sequence();
         let emergency = change.guardian_approvals >= {
-            let cfg: Option<GuardianConfig> = env
-                .storage()
-                .instance()
-                .get(&TimelockKey::GuardianConfig);
-            cfg.map(|c| c.threshold).unwrap_or(DEFAULT_GUARDIAN_THRESHOLD)
+            let cfg: Option<GuardianConfig> =
+                env.storage().instance().get(&TimelockKey::GuardianConfig);
+            cfg.map(|c| c.threshold)
+                .unwrap_or(DEFAULT_GUARDIAN_THRESHOLD)
         };
 
         if !emergency && current_ledger < change.execute_after_ledger {
@@ -859,9 +955,11 @@ impl AgentGovernanceContract {
 
         // Record the approval.
         env.storage().temporary().set(&approval_key, &true);
-        env.storage()
-            .temporary()
-            .extend_ttl(&approval_key, CHANGE_EXPIRY_LEDGERS - 1, CHANGE_EXPIRY_LEDGERS);
+        env.storage().temporary().extend_ttl(
+            &approval_key,
+            CHANGE_EXPIRY_LEDGERS - 1,
+            CHANGE_EXPIRY_LEDGERS,
+        );
 
         // Increment approval count on the pending change.
         let change_key = TimelockKey::PendingChange(change_id);
@@ -880,9 +978,11 @@ impl AgentGovernanceContract {
 
         change.guardian_approvals = change.guardian_approvals.saturating_add(1);
         env.storage().temporary().set(&change_key, &change);
-        env.storage()
-            .temporary()
-            .extend_ttl(&change_key, CHANGE_EXPIRY_LEDGERS - 1, CHANGE_EXPIRY_LEDGERS);
+        env.storage().temporary().extend_ttl(
+            &change_key,
+            CHANGE_EXPIRY_LEDGERS - 1,
+            CHANGE_EXPIRY_LEDGERS,
+        );
 
         env.events().publish(
             (symbol_short!("gov"), symbol_short!("grd_appr")),
@@ -905,9 +1005,7 @@ impl AgentGovernanceContract {
 
     /// Return the current guardian configuration, if set.
     pub fn get_guardian_config(env: Env) -> Option<GuardianConfig> {
-        env.storage()
-            .instance()
-            .get(&TimelockKey::GuardianConfig)
+        env.storage().instance().get(&TimelockKey::GuardianConfig)
     }
 
     /// Return the configured minimum timelock delay in ledgers.

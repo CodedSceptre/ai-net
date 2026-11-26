@@ -168,6 +168,10 @@ pub struct Proposal {
     pub voting_start_ledger: u32,
     /// Ledger sequence when voting ends (Issue #408).
     pub voting_end_ledger: u32,
+    /// Proposal creation ledger used for historical stake lookup.
+    pub snapshot_ledger: u32,
+    /// Staking contract pinned when the proposal is created.
+    pub snapshot_staking: Option<Address>,
 }
 
 /// A single agent's vote on a proposal.
@@ -204,6 +208,7 @@ pub enum DataKey {
     VotingPeriodLedgers,
     /// Configured quorum threshold in basis points.
     QuorumThresholdBps,
+    CapabilityStaking,
 }
 
 // ─── Event payloads ──────────────────────────────────────────────────────────
