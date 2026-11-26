@@ -1,5 +1,7 @@
 import { Suspense } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { TaskSubmissionWizard } from '../../components/tasks/TaskSubmissionWizard';
+import { TaskCreationStepper } from '../../components/tasks/TaskCreationStepper';
 import { Skeleton, SkeletonCard, SkeletonText } from '../../components/common/Skeleton';
 
 /**
@@ -51,6 +53,25 @@ export function NewTaskPageSkeleton() {
 }
 
 export default function NewTaskPage() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const useStepper = searchParams.get('stepper') === '1';
+
+  if (useStepper) {
+    return (
+      <div style={{ padding: '24px 0' }}>
+        <h1 style={{ marginBottom: '24px', fontSize: '1.5rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+          Create New Task
+        </h1>
+        <TaskCreationStepper
+          onSubmit={() => {
+            navigate('/tasks/history');
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <Suspense fallback={<NewTaskPageSkeleton />}>
       <TaskSubmissionWizard />

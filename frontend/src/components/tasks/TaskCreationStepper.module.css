@@ -1,0 +1,547 @@
+.stepper {
+  max-width: 640px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* ── Step Indicator ──────────────────────────────────────────────────────────── */
+
+.stepIndicator {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+  margin-bottom: 32px;
+}
+
+.stepItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  flex: 1;
+  max-width: 140px;
+}
+
+.stepCircle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+  border: 2px solid var(--border-primary);
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+  position: relative;
+  z-index: 1;
+}
+
+.stepCircle.active {
+  background: var(--accent-surface, rgba(99, 102, 241, 0.2));
+  color: var(--accent-text-strong, #a78bfa);
+  border-color: var(--accent, #a78bfa);
+}
+
+.stepCircle.completed {
+  background: var(--status-success-surface, rgba(16, 185, 129, 0.15));
+  color: var(--status-success, #34d399);
+  border-color: var(--status-success, #34d399);
+}
+
+.stepLabel {
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Connector line sits between step items */
+.stepConnector {
+  position: absolute;
+  top: 18px;
+  left: calc(50% + 20px);
+  right: calc(-50% + 20px);
+  height: 2px;
+  background: var(--border-primary);
+  transition: background 0.2s;
+  z-index: 0;
+}
+
+.stepConnectorDone {
+  background: var(--status-success, #34d399);
+}
+
+/* ── Step Content ─────────────────────────────────────────────────────────────── */
+
+.stepContent {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Slide transitions */
+@keyframes slideInForward {
+  from { transform: translateX(40px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+@keyframes slideInBackward {
+  from { transform: translateX(-40px); opacity: 0; }
+  to   { transform: translateX(0);     opacity: 1; }
+}
+
+.stepContent[data-direction='forward'] .stepPane {
+  animation: slideInForward 0.25s ease forwards;
+}
+
+.stepContent[data-direction='backward'] .stepPane {
+  animation: slideInBackward 0.25s ease forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stepContent[data-direction] .stepPane {
+    animation: none;
+  }
+}
+
+.stepPane {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.stepTitle {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+/* ── Form Fields ─────────────────────────────────────────────────────────────── */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fieldLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.3px;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 140px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.6;
+  resize: vertical;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-border, rgba(99, 102, 241, 0.2));
+}
+
+.textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.charCountRow {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.charCount {
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: color 0.15s;
+}
+
+.charCountWarning {
+  color: var(--status-warning, #fbbf24);
+}
+
+/* ── Suggestion Chips ─────────────────────────────────────────────────────────── */
+
+.suggestionChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  padding: 6px 14px;
+  border: 1px solid var(--border-primary);
+  border-radius: 20px;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  background: var(--accent-surface, rgba(99, 102, 241, 0.12));
+  color: var(--accent-text-strong, #a78bfa);
+  border-color: var(--accent-border, rgba(99, 102, 241, 0.3));
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Budget Slider ─────────────────────────────────────────────────────────────── */
+
+.budgetDisplay {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.budgetAmount {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.budgetUsd {
+  font-size: 1rem;
+  color: var(--text-secondary);
+}
+
+.slider {
+  width: 100%;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--surface-elevated);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+  accent-color: var(--accent, #a78bfa);
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent, #a78bfa);
+  cursor: pointer;
+  border: 2px solid var(--surface-primary);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent, #a78bfa);
+  cursor: pointer;
+  border: 2px solid var(--surface-primary);
+}
+
+.slider:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.sliderLabels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ── DAG Preview ─────────────────────────────────────────────────────────────── */
+
+.dagPreview {
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--surface-raised);
+}
+
+.dagTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 12px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.noAgents {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.agentRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.agentName {
+  color: var(--text-primary);
+  text-transform: capitalize;
+}
+
+.agentCost {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dagDivider {
+  height: 1px;
+  background: var(--border-primary);
+  margin: 8px 0;
+}
+
+.dagLabel {
+  color: var(--text-secondary);
+}
+
+.dagValue {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dagTotal {
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+.dagTotalLabel {
+  color: var(--text-primary);
+}
+
+.dagTotalValue {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.budgetWarning {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--status-warning-surface, rgba(245, 158, 11, 0.12));
+  border: 1px solid var(--status-warning-border, rgba(245, 158, 11, 0.3));
+  color: var(--status-warning-text, #fde68a);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* ── Review sections ─────────────────────────────────────────────────────────── */
+
+.reviewSection {
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--surface-raised);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.reviewSectionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.reviewSectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.editLink {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-text-strong, #a78bfa);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.editLink:hover {
+  background: var(--accent-surface, rgba(99, 102, 241, 0.1));
+}
+
+.editLink:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.reviewText {
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  margin: 0;
+  word-break: break-word;
+}
+
+.reviewBudget {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+}
+
+.reviewBudgetAmount {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.reviewBudgetUsd {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+/* ── Button groups ─────────────────────────────────────────────────────────────── */
+
+.buttonGroup {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.backButton {
+  padding: 10px 20px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.backButton:hover {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
+.backButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.nextButton {
+  padding: 10px 24px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent, #a78bfa);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.nextButton:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.nextButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.nextButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.submitButton {
+  padding: 10px 28px;
+  border: none;
+  border-radius: 8px;
+  background: var(--status-success, #34d399);
+  color: #000;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.submitButton:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.submitButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.submitButton:focus-visible {
+  outline: 2px solid var(--status-success);
+  outline-offset: 2px;
+}
+
+/* ── Mobile ─────────────────────────────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .stepLabel {
+    font-size: 10px;
+  }
+
+  .stepCircle {
+    width: 30px;
+    height: 30px;
+    font-size: 12px;
+  }
+
+  .budgetAmount {
+    font-size: 1.5rem;
+  }
+
+  .buttonGroup {
+    flex-direction: column-reverse;
+    gap: 10px;
+  }
+
+  .backButton,
+  .nextButton,
+  .submitButton {
+    width: 100%;
+    text-align: center;
+  }
+}
