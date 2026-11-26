@@ -1,4 +1,6 @@
-import { Router, Request, Response } from "express";
+import { CostEstimator, budgetOverage } from "../../../coordinator/costEstimator";
+import type { AgentRegistry } from "../../../types/agent";
+import { Router, Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import { getTaskDb, createTaskDb } from "../../../db/tasks";
@@ -36,63 +38,81 @@ import { createTaskSchema, listTasksQuerySchema } from "../../../schemas/task";
 export function createV1TasksRouter(
   dispatch: DispatchFn,
   releasePayment: PaymentReleaseFn,
-  queue?: JobQueue
+  queue?: JobQueue,
+  registry?: AgentRegistry
 ): Router {
   const tasksRouter = Router();
   const jobQueue = queue ?? getGlobalJobQueue();
 
   // POST /api/tasks — v1 format, idempotent
-  tasksRouter.post("/", idempotencyMiddleware, rateLimitMiddleware, validate(createTaskSchema), (req: Request, res: Response): void => {
-    const { prompt, priority } = req.body as z.infer<typeof createTaskSchema>;
-    const walletPublicKey =
-      req.user?.sub ??
-      (req.headers["walletpublickey"] as string) ??
-      (req.body as { walletPublicKey?: string })?.walletPublicKey ??
-      "anonymous";
+  tasksRouter.post("/", idempotencyMiddleware, rateLimitMiddleware, validate(createTaskSchema), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { prompt, priority } = req.body as z.infer<typeof createTaskSchema>;
+      const walletPublicKey =
+        req.user?.sub ??
+        (req.headers["walletpublickey"] as string) ??
+        (req.body as { walletPublicKey?: string })?.walletPublicKey ??
+        "anonymous";
 
-    const dailyTaskLimit = getConfig().DAILY_TASK_LIMIT_PER_WALLET;
-    if (dailyTaskLimit > 0 && walletPublicKey !== "anonymous") {
-      const db = createTaskDb(getTaskDb());
-      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const { total } = db.list(walletPublicKey, 1, 1, { createdAfter: since });
-      if (total >= dailyTaskLimit) {
-        res.status(429).json({
-          error: {
-            message: `Daily task limit reached (max ${dailyTaskLimit} per 24 hours)`,
-            code: "DAILY_LIMIT_EXCEEDED",
-          },
-        });
-        return;
+      const dailyTaskLimit = getConfig().DAILY_TASK_LIMIT_PER_WALLET;
+      if (dailyTaskLimit > 0 && walletPublicKey !== "anonymous") {
+        const db = createTaskDb(getTaskDb());
+        const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const { total } = db.list(walletPublicKey, 1, 1, { createdAfter: since });
+        if (total >= dailyTaskLimit) {
+          res.status(429).json({
+            error: {
+              message: `Daily task limit reached (max ${dailyTaskLimit} per 24 hours)`,
+              code: "DAILY_LIMIT_EXCEEDED",
+            },
+          });
+          return;
+        }
       }
+
+      const taskId = `task_${nanoid(12)}`;
+      const dag = decompose(taskId, prompt);
+      const { maxBudgetXLM } = req.body as z.infer<typeof createTaskSchema>;
+      if (registry) {
+        const estimate = await new CostEstimator().estimate(dag, registry);
+        if ("error" in estimate) {
+          res.status(422).json(estimate);
+          return;
+        }
+        const overage = budgetOverage(estimate.totalXLM, maxBudgetXLM);
+        if (overage.budgetExceeded) {
+          res.status(422).json({ ...estimate, ...overage });
+          return;
+        }
+      }
+      const now = new Date().toISOString();
+      const traceId = currentTraceId();
+      const task: Task = {
+        id: taskId,
+        prompt,
+        walletPublicKey,
+        status: "queued",
+        dag,
+        createdAt: now,
+        updatedAt: now,
+        requestId: res.locals.requestId,
+        traceId,
+      };
+
+      createTask(task);
+
+      jobQueue.enqueue({
+        taskId: task.id,
+        type: "execute_task",
+        priority: (priority as JobPriority) ?? "normal",
+        payload: { taskId: task.id },
+      });
+
+      // v1 response format - simple response without additional metadata
+      res.status(201).json({ taskId: task.id, dagPreview: dag, status: "queued" });
+    } catch (error) {
+      next(error);
     }
-
-    const taskId = `task_${nanoid(12)}`;
-    const dag = decompose(taskId, prompt);
-    const now = new Date().toISOString();
-    const traceId = currentTraceId();
-    const task: Task = {
-      id: taskId,
-      prompt,
-      walletPublicKey,
-      status: "queued",
-      dag,
-      createdAt: now,
-      updatedAt: now,
-      requestId: res.locals.requestId,
-      traceId,
-    };
-
-    createTask(task);
-
-    jobQueue.enqueue({
-      taskId: task.id,
-      type: "execute_task",
-      priority: (priority as JobPriority) ?? "normal",
-      payload: { taskId: task.id },
-    });
-
-    // v1 response format - simple response without additional metadata
-    res.status(201).json({ taskId: task.id, dagPreview: dag, status: "queued" });
   });
 
   // GET /api/tasks — v1 format

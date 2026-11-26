@@ -65,6 +65,8 @@ import { getOpenapiJson, getOpenapiYaml, openapiSpec, swaggerUiOptions } from ".
 import { createAdminQueueRouter } from "./routes/admin";
 import { createAdminManagementRouter } from "./routes/adminManagement";
 import { createEventsRouter } from "./routes/events";
+import { CostEstimator } from "../coordinator/costEstimator";
+import { createTaskEstimateRouter } from "./routes/tasks";
 import { createV1TasksRouter } from "./routes/v1/tasks";
 import { createV2TasksRouter } from "./routes/v2/tasks";
 import { createAuthRouter } from "./routes/auth";
@@ -156,7 +158,22 @@ export function createApp(opts: AppOptions = {}): {
     app.use(...compressionMiddleware());
   }
 
-  const dispatch: DispatchFn = opts.dispatch ?? makeHttpDispatch(opts.agentRegistry);
+  const registeredAgents: AgentRegistry = opts.agentRegistry ?? {
+    getAgents: (capability) => createAgentDb(getAgentDb())
+      .list({ capability, status: "online" })
+      .filter((agent) => !agent.bannedAt)
+      .map((agent) => ({
+        id: agent.id,
+        type: capability ?? agent.capabilities[0],
+        endpoint: agent.endpoint,
+        cost: agent.pricingXLM,
+        status: agent.status,
+      })),
+  };
+  const registry: AgentRegistry = {
+    getAgents: async (capability) => excludeBannedAgents(await registeredAgents.getAgents(capability)),
+  };
+  const dispatch: DispatchFn = opts.dispatch ?? makeHttpDispatch(registry);
   const releasePayment: PaymentReleaseFn =
     opts.releasePayment ?? createPaymentReleaseFn(tryLoadStellarRelease());
 
@@ -226,8 +243,9 @@ export function createApp(opts: AppOptions = {}): {
   app.use("/api/agents", agentsRouter);
 
   // ── Task routes ────────────────────────────────────────────────────────────
-  const v1TasksRouter = createV1TasksRouter(dispatch, releasePayment, jobQueue);
-  const v2TasksRouter = createV2TasksRouter(dispatch, releasePayment, jobQueue);
+  app.use("/api/tasks", createTaskEstimateRouter(registry));
+  const v1TasksRouter = createV1TasksRouter(dispatch, releasePayment, jobQueue, registry);
+  const v2TasksRouter = createV2TasksRouter(dispatch, releasePayment, jobQueue, registry);
 
   app.get("/api/tasks/:id/payments", authedLimiter.middleware, optionalAuthMiddleware, (req, res, next) => {
     try {
@@ -366,30 +384,13 @@ export function createApp(opts: AppOptions = {}): {
  * Build a DispatchFn that looks up the cheapest agent for a node's type in the
  * provided registry and forwards the call to that agent via HTTP.
  */
-function makeHttpDispatch(registry?: AgentRegistry): DispatchFn {
+function makeHttpDispatch(registry: AgentRegistry): DispatchFn {
+  const estimator = new CostEstimator();
   return async (_taskId: string, node: DAGNode, context: string): Promise<unknown> => {
-    if (!registry) {
-      throw new Error(
-        "No agent registry configured. Provide agentRegistry in AppOptions or supply a custom dispatch function.",
-      );
+    const agent = await estimator.findCheapest(node.type, registry);
+    if (!agent) {
+      throw new AppError(`No online agent for type: ${node.type}`, 503, "NO_ELIGIBLE_AGENT");
     }
-
-    const agents = await registry.getAgents(node.type);
-    if (!agents || agents.length === 0) {
-      throw new AppError(`No agent registered for type: ${node.type}`, 500, "AGENT_NOT_FOUND");
-    }
-
-    // Admin-banned agents are excluded from all new task assignments (#33).
-    const eligible = excludeBannedAgents(agents);
-    if (eligible.length === 0) {
-      throw new AppError(
-        `All agents for type ${node.type} are banned`,
-        503,
-        "NO_ELIGIBLE_AGENT",
-      );
-    }
-
-    const agent = [...eligible].sort((a, b) => a.cost - b.cost)[0];
     return httpDispatch(agent, node.nodeId, node, context);
   };
 }

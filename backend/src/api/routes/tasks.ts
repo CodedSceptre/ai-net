@@ -1,3 +1,5 @@
+import { CostEstimator, budgetOverage } from "../../coordinator/costEstimator";
+import type { AgentRegistry } from "../../types/agent";
 import { Router, Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { nanoid } from "nanoid";
@@ -51,7 +53,8 @@ import { createTaskSchema, listTasksQuerySchema } from "../../schemas/task";
 export function createTasksRouter(
   dispatch: DispatchFn,
   releasePayment: PaymentReleaseFn,
-  queue?: JobQueue
+  queue?: JobQueue,
+  registry?: AgentRegistry
 ): Router {
   const tasksRouter = Router();
   const jobQueue = queue ?? getGlobalJobQueue();
@@ -140,7 +143,7 @@ export function createTasksRouter(
    *               $ref: '#/components/schemas/InternalServerError'
    */
   // POST /api/tasks — idempotent, rate-limited, then Zod-validated
-  tasksRouter.post("/", idempotencyMiddleware, rateLimitMiddleware, validate(createTaskSchema), (req: Request, res: Response, next: NextFunction): void => {
+  tasksRouter.post("/", idempotencyMiddleware, rateLimitMiddleware, validate(createTaskSchema), async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { prompt, priority } = req.body as z.infer<typeof createTaskSchema>;
       // Body first, then the header (both spellings accepted), then "anonymous".
@@ -167,6 +170,19 @@ export function createTasksRouter(
 
       const taskId = `task_${nanoid(12)}`;
       const dag = decompose(taskId, prompt);
+      const { maxBudgetXLM } = req.body as z.infer<typeof createTaskSchema>;
+      if (registry) {
+        const estimate = await new CostEstimator().estimate(dag, registry);
+        if ("error" in estimate) {
+          res.status(422).json(estimate);
+          return;
+        }
+        const overage = budgetOverage(estimate.totalXLM, maxBudgetXLM);
+        if (overage.budgetExceeded) {
+          res.status(422).json({ ...estimate, ...overage });
+          return;
+        }
+      }
       const now = new Date().toISOString();
       const task: Task = {
         id: taskId,
@@ -524,4 +540,22 @@ export function createTasksRouter(
   });
 
   return tasksRouter;
+}
+/** Quote the same server-generated DAG used for task submission. */
+export function createTaskEstimateRouter(registry: AgentRegistry): Router {
+  const router = Router();
+  const estimator = new CostEstimator();
+  router.post("/estimate", rateLimitMiddleware, validate(createTaskSchema), async (req, res, next) => {
+    try {
+      const { prompt, maxBudgetXLM } = req.body as z.infer<typeof createTaskSchema>;
+      const estimate = await estimator.estimate(decompose("estimate", prompt), registry);
+      res.json("error" in estimate ? estimate : {
+        ...estimate,
+        ...budgetOverage(estimate.totalXLM, maxBudgetXLM),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+  return router;
 }

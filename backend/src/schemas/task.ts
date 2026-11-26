@@ -56,7 +56,7 @@ export const promptSchema = z
 export const createTaskSchema = z.object({
   prompt: promptSchema,
   walletPublicKey: stellarPublicKeySchema.optional(),
-  maxBudgetXLM: z.number().min(0.1).max(1_000_000).optional().default(1),
+  maxBudgetXLM: z.number().min(0).max(1_000_000).optional(),
   agentPreferences: z.array(z.string().min(1).max(128)).max(20).optional(),
   priority: taskPrioritySchema.optional().default("normal"),
 });
