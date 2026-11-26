@@ -1,5 +1,6 @@
 [package]
 name = "payment_escrow"
+name = "payment-escrow"
 version = "0.1.0"
 edition = "2021"
 publish = false
@@ -12,6 +13,14 @@ soroban-sdk = { version = "=28.0.0" }
 
 [dev-dependencies]
 soroban-sdk = { version = "=28.0.0", features = ["testutils"] }
+[features]
+testutils = ["soroban-sdk/testutils"]
+
+[dependencies]
+soroban-sdk = { version = "=22.0.11" }
+
+[dev-dependencies]
+soroban-sdk = { version = "=22.0.11", features = ["testutils"] }
 
 [profile.release]
 opt-level = "z"
