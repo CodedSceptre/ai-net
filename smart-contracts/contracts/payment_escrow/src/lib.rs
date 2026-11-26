@@ -22,7 +22,22 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, IntoVal,
+    Symbol,
 };
+
+fn registry_allows(env: &Env, registry: &Address, caller: &Address, function: &str) -> bool {
+    env.invoke_contract(
+        registry,
+        &Symbol::new(env, "is_authorized"),
+        (
+            caller.clone(),
+            env.current_contract_address(),
+            soroban_sdk::String::from_str(env, function),
+        )
+            .into_val(env),
+    )
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -34,6 +49,7 @@ pub const ESCROW_TIMEOUT_SECS: u64 = 7 * 24 * 60 * 60;
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub enum DataKey {
+    AuthRegistry,
     /// Per-(task_id, node_id) escrow record.
     Escrow(Symbol, Symbol),
     /// Singleton coordinator address (authorized to release/refund).
@@ -201,6 +217,15 @@ impl PaymentEscrowContract {
             .unwrap_or(0)
     }
 
+    /// Configure the platform authorization registry for privileged calls.
+    pub fn set_auth_registry(env: Env, registry: Address) -> Result<(), Error> {
+        Self::read_coordinator(&env)?.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::AuthRegistry, &registry);
+        Ok(())
+    }
+
     /// Set platform config contract address (coordinator only).
     pub fn set_platform_config(env: Env, platform_config: Address) -> Result<(), Error> {
         let coordinator = Self::read_coordinator(&env)?;
@@ -291,7 +316,7 @@ impl PaymentEscrowContract {
         node_id: Symbol,
     ) -> Result<EscrowRecord, Error> {
         let coordinator = Self::read_coordinator(&env)?;
-        coordinator.require_auth();
+        Self::authorize_coordinator(&env, &coordinator, "release_funds")?;
 
         let key = DataKey::Escrow(task_id.clone(), node_id.clone());
         let mut record: EscrowRecord = env
@@ -401,6 +426,20 @@ impl PaymentEscrowContract {
         let record = Self::get_escrow(env.clone(), task_id.clone(), node_id.clone())?;
         if record.submitter != submitter || record.agent != agent {
             return Err(Error::EscrowMismatch);
+        let key = DataKey::Escrow(task_id.clone(), node_id.clone());
+        let mut record: EscrowRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::NotFound)?;
+
+        let now = env.ledger().timestamp();
+        let is_expired = now >= record.expires_at;
+
+        if !is_expired {
+            // Before timeout: only the coordinator may refund.
+            let coordinator = Self::read_coordinator(&env)?;
+            Self::authorize_coordinator(&env, &coordinator, "refund_funds")?;
         }
         if !env
             .storage()
@@ -450,6 +489,20 @@ impl PaymentEscrowContract {
     }
 
     // ── Internals ─────────────────────────────────────────────────────────────
+
+    fn authorize_coordinator(env: &Env, caller: &Address, function: &str) -> Result<(), Error> {
+        if let Some(registry) = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::AuthRegistry)
+        {
+            if !registry_allows(env, &registry, caller, function) {
+                return Err(Error::Unauthorized);
+            }
+        }
+        caller.require_auth();
+        Ok(())
+    }
 
     fn read_coordinator(env: &Env) -> Result<Address, Error> {
         env.storage()

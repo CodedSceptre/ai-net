@@ -113,6 +113,7 @@ pub enum DataKey {
     Coordinator,
     /// Optional reputation contract address.
     ReputationContract,
+    AuthRegistry,
     /// Recorded weighted task assignment result.
     TaskAssignment(BytesN<32>),
     TaskCreator(BytesN<32>),
@@ -184,6 +185,18 @@ pub struct CoordinatorSetEvent {
     pub version: u32,
     /// The new coordinator address.
     pub coordinator: Address,
+}
+
+/// Emitted after the admin upgrades the contract Wasm.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractUpgradedEvent {
+    pub version: u32,
+    pub old_version: String,
+    pub new_version: String,
+    pub new_wasm_hash: BytesN<32>,
+    pub admin: Address,
+    pub ledger_sequence: u32,
 }
 
 /// Emitted when a task is assigned to an agent via weighted selection or direct assignment.

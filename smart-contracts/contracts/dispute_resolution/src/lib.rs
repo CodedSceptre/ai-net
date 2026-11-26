@@ -27,7 +27,7 @@ pub use types::*;
 
 use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, symbol_short, token, Address, Bytes,
-    BytesN, Env, String, Symbol, Vec,
+    BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 
 // ── Thin client for capability_staking.slash() ───────────────────────────────
@@ -84,6 +84,7 @@ struct EscalationConfig {
     governance: Address,
     native_token: Address,
     fee_recipient: Address,
+    AuthRegistry,
 }
 
 #[contract]
@@ -369,6 +370,15 @@ impl DisputeResolutionContract {
         Ok(())
     }
 
+    /// Configure platform_config as the source of the capability_staking address.
+    pub fn set_auth_registry(env: Env, registry: Address) -> Result<(), Error> {
+        require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::AuthRegistry, &registry);
+        Ok(())
+    }
+
     /// Admin: set the capability_staking contract address.
     ///
     /// When set, `resolve_dispute` will call `capability_staking.slash(...)` on
@@ -598,6 +608,21 @@ impl DisputeResolutionContract {
         }
         let resolution = automated_decision(&record);
         settle_dispute(&env, &mut record, settled_escrow.clone(), &resolution);
+        let recipient = if resolution == Resolution::Approve {
+            settled_escrow.agent.clone()
+        } else {
+            settled_escrow.submitter.clone()
+        };
+        token::Client::new(&env, &settled_escrow.asset).transfer(
+            &env.current_contract_address(),
+            &recipient,
+            &settled_escrow.amount,
+        );
+        settled_escrow.settled = true;
+        env.storage().persistent().set(&escrow_key, &settled_escrow);
+        extend_ttl(&env, &escrow_key);
+        env.storage().persistent().set(&dispute_key, &record);
+        extend_ttl(&env, &dispute_key);
 
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("resolved")),
@@ -611,11 +636,22 @@ impl DisputeResolutionContract {
 
         // On Reject: slash the agent's capability bond via cross-contract call.
         if resolution == Resolution::Reject {
-            if let Some(staking_contract) = env
-                .storage()
-                .instance()
-                .get::<DataKey, Address>(&DataKey::CapabilityStakingContract)
-            {
+            let registry: Option<Address> = env.storage().instance().get(&DataKey::AuthRegistry);
+            let staking: Option<Address> = match registry {
+                Some(registry) => env
+                    .try_invoke_contract::<Address, soroban_sdk::Error>(
+                        &registry,
+                        &Symbol::new(&env, "get_contract"),
+                        (String::from_str(&env, "capability_staking"),).into_val(&env),
+                    )
+                    .ok()
+                    .and_then(Result::ok),
+                None => env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::CapabilityStakingContract),
+            };
+            if let Some(staking_contract) = staking {
                 // Use the full escrow amount as the slash amount; the staking
                 // contract will cap it at the agent's actual bond.
                 let slash_amount = settled_escrow.amount;

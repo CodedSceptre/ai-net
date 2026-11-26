@@ -43,6 +43,8 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, Symbol, Vec,
 };
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
+    contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, IntoVal, Symbol,
+};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -67,6 +69,7 @@ const TTL_EXTEND_TO: u32 = 535_680;
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
+    AuthRegistry,
     /// The governance / admin address.
     Admin,
     /// Destination for slashed funds.
@@ -336,6 +339,19 @@ fn load_treasury(env: &Env) -> Address {
         .unwrap_or_else(|| panic!("not initialized"))
 }
 
+fn registry_allows(env: &Env, registry: &Address, caller: &Address, function: &str) -> bool {
+    env.invoke_contract(
+        registry,
+        &Symbol::new(env, "is_authorized"),
+        (
+            caller.clone(),
+            env.current_contract_address(),
+            soroban_sdk::String::from_str(env, function),
+        )
+            .into_val(env),
+    )
+}
+
 fn load_dispute_resolution(env: &Env) -> Address {
     env.storage()
         .instance()
@@ -409,6 +425,15 @@ impl CapabilityStakingContract {
             .get(&DataKey::TotalStakeHistory)
             .unwrap_or_else(|| Vec::new(&env));
         balance_at(&history, ledger)
+    }
+
+    /// Configure the platform authorization registry for privileged calls.
+    pub fn set_auth_registry(env: Env, registry: Address) {
+        load_admin(&env).require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::AuthRegistry, &registry);
+        extend_instance_ttl(&env);
     }
 
     /// Admin: set the dispute_resolution contract address that is permitted to
@@ -795,7 +820,20 @@ impl CapabilityStakingContract {
         reason: Bytes,
     ) {
         // ── Caller verification ──────────────────────────────────────────────
-        let dr_contract = load_dispute_resolution(&env);
+        let registry: Option<Address> = env.storage().instance().get(&DataKey::AuthRegistry);
+        let dr_contract = if let Some(registry) = registry {
+            let caller: Address = env.invoke_contract(
+                &registry,
+                &Symbol::new(&env, "get_contract"),
+                (soroban_sdk::String::from_str(&env, "dispute_resolution"),).into_val(&env),
+            );
+            if !registry_allows(&env, &registry, &caller, "slash") {
+                soroban_sdk::panic_with_error!(&env, Error::CallerNotDisputeResolution);
+            }
+            caller
+        } else {
+            load_dispute_resolution(&env)
+        };
         // The dispute_resolution contract must authorise this call via
         // `env.current_contract_address()` in its own invocation context.
         // We verify the invoker is the dispute_resolution contract.
@@ -837,6 +875,54 @@ impl CapabilityStakingContract {
                     extend_persistent_ttl(&env, &key);
                 }
                 (actual, record.amount_stroops)
+        // ── Convert Bytes capability key to Symbol for storage lookup ────────
+        // Stake records are keyed by Symbol; we derive a lookup key from the
+        // raw Bytes by interpreting up to 9 ASCII bytes as a symbol.
+        // For the slash path we search using a dedicated Address-keyed store.
+        // Because the existing StakeRecord keys use (Symbol, Symbol) we store
+        // the address-based record under a separate compound key using the
+        // agent Address as the first component.
+        //
+        // We use DataKey::Blacklist(agent_id) which takes Address — reuse that
+        // address in a second lookup key form for the stake:
+        // DataKey::StakeRecord stores (Symbol, Symbol). We need to support the
+        // new Address-based slash path separately.
+        //
+        // Implementation: look up stake by iterating known patterns or store
+        // address-keyed stakes. Since the current StakeRecord key is
+        // (Symbol, Symbol) and the new slash() takes Address + Bytes, we store
+        // an Address+Bytes keyed stake under a new DataKey variant:
+        // AddressStakeRecord(Address, Bytes).
+        //
+        // However, to avoid a breaking storage migration we also check if
+        // there is a matching record under the legacy (Symbol, Symbol) key.
+        // For new stakers the agent owner is tracked via AddressStakeRecord.
+
+        let addr_key = DataKey::AddressStakeRecord(agent_id.clone(), capability.clone());
+        let stake_opt: Option<AddressStakeRecord> = env.storage().persistent().get(&addr_key);
+
+        let record = stake_opt.unwrap_or_else(|| panic!("stake not found"));
+
+        let actual_slash = if slash_amount >= record.amount_stroops {
+            record.amount_stroops
+        } else {
+            slash_amount
+        };
+        let remaining = record.amount_stroops - actual_slash;
+
+        if remaining == 0 {
+            // Full slash: remove record and blacklist agent for 30 ledger-days.
+            env.storage().persistent().remove(&addr_key);
+
+            let blacklist_expires = current_ledger + BLACKLIST_PERIOD_LEDGERS;
+            let bl_key = DataKey::Blacklist(agent_id.clone());
+            env.storage().persistent().set(&bl_key, &blacklist_expires);
+            extend_persistent_ttl(&env, &bl_key);
+        } else {
+            // Partial slash: update the stake record.
+            let updated = AddressStakeRecord {
+                amount_stroops: remaining,
+                ..record
             };
         if remaining == 0 {
             let expires = current_ledger.saturating_add(BLACKLIST_PERIOD_LEDGERS);

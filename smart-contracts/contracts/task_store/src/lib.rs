@@ -43,6 +43,14 @@ pub use types::{
 use soroban_sdk::{
     contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, IntoVal, Map, String,
     Symbol, TryIntoVal, Val, Vec,
+    ContractUpgradedEvent, CoordinatorSetEvent, DataKey, Error, OracleManagerSetEvent,
+    TaskAssignedEvent, TaskAssignmentRecord, TaskCreatedEvent, TaskFinalizedEvent, TaskMetadata,
+    TaskStatus, TaskUpdatedEvent, DEFAULT_TTL_DAYS, LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES,
+    MAX_TTL_DAYS, TASK_CONFIG_EVENT_VERSION, TASK_LIFECYCLE_EVENT_VERSION,
+};
+
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 
 const SECONDS_PER_DAY: u64 = 86_400;
@@ -313,6 +321,15 @@ impl TaskStoreContract {
         Ok(())
     }
 
+    /// Configure platform_config as the source of the reputation address.
+    pub fn set_auth_registry(env: Env, registry: Address) -> Result<(), Error> {
+        require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::AuthRegistry, &registry);
+        Ok(())
+    }
+
     /// Configure the optional reputation contract (admin only).
     pub fn set_reputation_contract(env: Env, contract: Option<Address>) -> Result<(), Error> {
         require_admin(&env)?;
@@ -331,7 +348,18 @@ impl TaskStoreContract {
 
     /// Read the configured reputation contract, if any.
     pub fn get_reputation_contract(env: Env) -> Option<Address> {
-        env.storage().instance().get(&DataKey::ReputationContract)
+        let registry: Option<Address> = env.storage().instance().get(&DataKey::AuthRegistry);
+        match registry {
+            Some(registry) => env
+                .try_invoke_contract::<Address, soroban_sdk::Error>(
+                    &registry,
+                    &Symbol::new(&env, "get_contract"),
+                    (String::from_str(&env, "reputation"),).into_val(&env),
+                )
+                .ok()
+                .and_then(Result::ok),
+            None => env.storage().instance().get(&DataKey::ReputationContract),
+        }
     }
 
     /// Assign a task using on-chain reputation-weighted deterministic selection.
