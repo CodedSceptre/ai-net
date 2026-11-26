@@ -27,18 +27,21 @@ request/response schemas, and copy-paste `curl` examples for every endpoint.
    - [9.8 Metrics (`/metrics`)](#98-metrics-metrics)
    - [9.9 API Versions (`/api/versions`)](#99-api-versions-apiversions)
 10. [Common Schemas](#10-common-schemas)
+11. [WebSocket API](./WEBSOCKET_API.md)
 
 ---
 
 ## 1. Overview & Base URLs
 
-| Environment | Base URL |
-|---|---|
-| **Local Development** | `http://localhost:3000` |
-| **Stellar Testnet** | `https://api.testnet.ai-net.epta-node.io` |
+| Environment           | Base URL                                  |
+| --------------------- | ----------------------------------------- |
+| **Local Development** | `http://localhost:3000`                   |
+| **Stellar Testnet**   | `https://api.testnet.ai-net.epta-node.io` |
 
 All endpoints accept and return `application/json` unless otherwise stated.
 Timestamps are ISO-8601 UTC strings (`2026-09-30T11:07:12.000Z`).
+
+> **Real-time task monitoring:** Live task progress is available via the WebSocket streaming API. See the [WebSocket API Reference](./WEBSOCKET_API.md) for connection, authentication, event types, and reconnection guidance.
 
 ---
 
@@ -84,29 +87,29 @@ without any authentication header.
 
 ## 3. Request Headers
 
-| Header | Required | Description |
-|---|---|---|
-| `Content-Type` | Yes (mutations) | Must be `application/json` for all POST/PUT/PATCH requests |
-| `Accept` | No | Use `application/json` (default) |
-| `Authorization` | Conditional | `Bearer <jwt_token>` for session-authenticated endpoints |
-| `walletpublickey` | Conditional | Stellar G-address for task endpoints |
-| `X-Admin-API-Key` | Conditional | Admin operations |
-| `Idempotency-Key` | Recommended | UUID v4 for safe mutation replay (see §7) |
-| `X-Request-Id` | No | Client-supplied correlation ID (echoed back in response) |
+| Header            | Required        | Description                                                |
+| ----------------- | --------------- | ---------------------------------------------------------- |
+| `Content-Type`    | Yes (mutations) | Must be `application/json` for all POST/PUT/PATCH requests |
+| `Accept`          | No              | Use `application/json` (default)                           |
+| `Authorization`   | Conditional     | `Bearer <jwt_token>` for session-authenticated endpoints   |
+| `walletpublickey` | Conditional     | Stellar G-address for task endpoints                       |
+| `X-Admin-API-Key` | Conditional     | Admin operations                                           |
+| `Idempotency-Key` | Recommended     | UUID v4 for safe mutation replay (see §7)                  |
+| `X-Request-Id`    | No              | Client-supplied correlation ID (echoed back in response)   |
 
 ---
 
 ## 4. Response Headers
 
-| Header | Description |
-|---|---|
-| `X-Request-Id` | Unique request identifier (UUID). Use for support tickets and log correlation. |
-| `X-RateLimit-Limit` | Maximum requests allowed in the current window |
-| `X-RateLimit-Remaining` | Requests remaining in the current window |
-| `X-RateLimit-Reset` | Unix timestamp when the rate-limit window resets |
-| `Retry-After` | Seconds to wait before retrying (present on `429` responses) |
-| `Deprecation` | `true` when the called API version is deprecated |
-| `Sunset` | ISO-8601 date when the deprecated version will be removed |
+| Header                  | Description                                                                    |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| `X-Request-Id`          | Unique request identifier (UUID). Use for support tickets and log correlation. |
+| `X-RateLimit-Limit`     | Maximum requests allowed in the current window                                 |
+| `X-RateLimit-Remaining` | Requests remaining in the current window                                       |
+| `X-RateLimit-Reset`     | Unix timestamp when the rate-limit window resets                               |
+| `Retry-After`           | Seconds to wait before retrying (present on `429` responses)                   |
+| `Deprecation`           | `true` when the called API version is deprecated                               |
+| `Sunset`                | ISO-8601 date when the deprecated version will be removed                      |
 
 ---
 
@@ -119,30 +122,30 @@ All error responses use a uniform JSON envelope:
   "error": "Human-readable description",
   "code": "MACHINE_READABLE_CODE",
   "correlationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "details": { }
+  "details": {}
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `error` | `string` | Human-readable error description |
-| `code` | `string` | Machine-readable error code (see table below) |
-| `correlationId` | `string` | Request ID for log correlation (equals `X-Request-Id`) |
-| `details` | `object` | Optional structured details (validation field errors, etc.) |
+| Field           | Type     | Description                                                 |
+| --------------- | -------- | ----------------------------------------------------------- |
+| `error`         | `string` | Human-readable error description                            |
+| `code`          | `string` | Machine-readable error code (see table below)               |
+| `correlationId` | `string` | Request ID for log correlation (equals `X-Request-Id`)      |
+| `details`       | `object` | Optional structured details (validation field errors, etc.) |
 
 ### 5.1 HTTP Status → Error Code Registry
 
-| HTTP Status | Error Code | Cause | Resolution |
-|---|---|---|---|
-| `400 Bad Request` | `VALIDATION_ERROR` | Request body or query params fail schema validation | Inspect `details.issues` and correct the request |
-| `401 Unauthorized` | `AUTHENTICATION_ERROR` | Missing, expired, or invalid JWT or API key | Re-issue token via `POST /api/auth/token` or supply valid credentials |
-| `402 Payment Required` | `PAYMENT_REQUIRED` | Insufficient XLM balance or missing Soroban fee authorization | Fund the Stellar account or sign the payment transaction |
-| `403 Forbidden` | `FORBIDDEN` | Authenticated but caller does not own the resource | Verify the `walletpublickey` header matches the resource owner |
-| `404 Not Found` | `NOT_FOUND` | Resource does not exist | Verify the ID or address in the path |
-| `409 Conflict` | `CONFLICT` | Duplicate idempotency key with a different payload | Reuse the same payload or supply a new `Idempotency-Key` |
-| `429 Too Many Requests` | `RATE_LIMIT_EXCEEDED` | Rate limit or daily task quota exceeded | Respect `Retry-After` header before retrying |
-| `500 Internal Server Error` | `INTERNAL_ERROR` | Unhandled backend exception | Report the `correlationId` to the support channel |
-| `503 Service Unavailable` | `SERVICE_UNAVAILABLE` | Upstream dependency (Venice AI, Stellar Horizon) unreachable | Retry with exponential backoff |
+| HTTP Status                 | Error Code             | Cause                                                         | Resolution                                                            |
+| --------------------------- | ---------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `400 Bad Request`           | `VALIDATION_ERROR`     | Request body or query params fail schema validation           | Inspect `details.issues` and correct the request                      |
+| `401 Unauthorized`          | `AUTHENTICATION_ERROR` | Missing, expired, or invalid JWT or API key                   | Re-issue token via `POST /api/auth/token` or supply valid credentials |
+| `402 Payment Required`      | `PAYMENT_REQUIRED`     | Insufficient XLM balance or missing Soroban fee authorization | Fund the Stellar account or sign the payment transaction              |
+| `403 Forbidden`             | `FORBIDDEN`            | Authenticated but caller does not own the resource            | Verify the `walletpublickey` header matches the resource owner        |
+| `404 Not Found`             | `NOT_FOUND`            | Resource does not exist                                       | Verify the ID or address in the path                                  |
+| `409 Conflict`              | `CONFLICT`             | Duplicate idempotency key with a different payload            | Reuse the same payload or supply a new `Idempotency-Key`              |
+| `429 Too Many Requests`     | `RATE_LIMIT_EXCEEDED`  | Rate limit or daily task quota exceeded                       | Respect `Retry-After` header before retrying                          |
+| `500 Internal Server Error` | `INTERNAL_ERROR`       | Unhandled backend exception                                   | Report the `correlationId` to the support channel                     |
+| `503 Service Unavailable`   | `SERVICE_UNAVAILABLE`  | Upstream dependency (Venice AI, Stellar Horizon) unreachable  | Retry with exponential backoff                                        |
 
 ### 5.2 Validation Error Detail
 
@@ -156,7 +159,10 @@ When `code` is `VALIDATION_ERROR`, the `details` object contains field-level iss
   "details": {
     "issues": [
       { "path": ["prompt"], "message": "Required" },
-      { "path": ["maxBudgetXLM"], "message": "Number must be greater than or equal to 0.1" }
+      {
+        "path": ["maxBudgetXLM"],
+        "message": "Number must be greater than or equal to 0.1"
+      }
     ]
   }
 }
@@ -169,12 +175,12 @@ When `code` is `VALIDATION_ERROR`, the `details` object contains field-level iss
 Rate limits are enforced per IP address with separate tiers for public and
 authenticated endpoints.
 
-| Endpoint Group | Limit | Window |
-|---|---|---|
-| Public (health, agents, stats) | 100 req | 15 min |
-| Authenticated (tasks) | 60 req | 15 min |
-| Agent heartbeat | 1 req | 30 sec per agent |
-| Admin | 30 req | 15 min |
+| Endpoint Group                 | Limit   | Window           |
+| ------------------------------ | ------- | ---------------- |
+| Public (health, agents, stats) | 100 req | 15 min           |
+| Authenticated (tasks)          | 60 req  | 15 min           |
+| Agent heartbeat                | 1 req   | 30 sec per agent |
+| Admin                          | 30 req  | 15 min           |
 
 When a limit is exceeded the server responds with `429 Too Many Requests` and
 includes a `Retry-After` header indicating when the window resets.
@@ -235,11 +241,13 @@ Basic liveness check. Returns process uptime and configured Stellar network.
 No authentication required.
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/health
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "status": "ok",
@@ -249,11 +257,11 @@ curl -s http://localhost:3000/health
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `status` | `string` | Always `"ok"` when the process is running |
-| `uptime` | `number` | Process uptime in seconds |
-| `version` | `string` | Deployed npm package version |
+| Field            | Type     | Description                                             |
+| ---------------- | -------- | ------------------------------------------------------- |
+| `status`         | `string` | Always `"ok"` when the process is running               |
+| `uptime`         | `number` | Process uptime in seconds                               |
+| `version`        | `string` | Deployed npm package version                            |
 | `stellarNetwork` | `string` | Configured Stellar network (`"testnet"` or `"mainnet"`) |
 
 ---
@@ -263,6 +271,7 @@ curl -s http://localhost:3000/health
 Alias for `GET /health`. Kubernetes liveness probe endpoint.
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/health/live
 ```
@@ -278,11 +287,13 @@ reachability, and Stellar Horizon connectivity. Returns `500` when any required
 dependency is degraded.
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/health/ready
 ```
 
 **Response `200 OK`** (all checks pass)
+
 ```json
 {
   "status": "ok",
@@ -298,6 +309,7 @@ curl -s http://localhost:3000/health/ready
 ```
 
 **Response `500 Internal Server Error`** (degraded)
+
 ```json
 {
   "status": "error",
@@ -312,13 +324,13 @@ curl -s http://localhost:3000/health/ready
 }
 ```
 
-| Check | Values | Description |
-|---|---|---|
-| `tasks` | `ok` / `error` | Tasks SQLite database connectivity |
-| `payments` | `ok` / `error` | Payments SQLite database connectivity |
-| `queue` | `ok` / `error` | Job queue SQLite database connectivity |
-| `venice` | `ok` / `error` | Venice AI API reachability |
-| `horizon` | `ok` / `error` | Stellar Horizon connectivity |
+| Check       | Values                     | Description                                                  |
+| ----------- | -------------------------- | ------------------------------------------------------------ |
+| `tasks`     | `ok` / `error`             | Tasks SQLite database connectivity                           |
+| `payments`  | `ok` / `error`             | Payments SQLite database connectivity                        |
+| `queue`     | `ok` / `error`             | Job queue SQLite database connectivity                       |
+| `venice`    | `ok` / `error`             | Venice AI API reachability                                   |
+| `horizon`   | `ok` / `error`             | Stellar Horizon connectivity                                 |
 | `websocket` | `ok` / `error` / `unknown` | SSE/WebSocket stream layer status (`unknown` = not attached) |
 
 ---
@@ -329,11 +341,13 @@ Extended health check that performs live Venice AI and Horizon HTTP probes.
 Responds `503` if any upstream is unreachable.
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/health/deep
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "status": "ok",
@@ -347,6 +361,7 @@ curl -s http://localhost:3000/health/deep
 ```
 
 **Response `503 Service Unavailable`**
+
 ```json
 {
   "status": "degraded",
@@ -363,6 +378,7 @@ curl -s http://localhost:3000/health/deep
 Aggregated system metrics dashboard. **Requires admin authentication.**
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/health/dashboard \
   -H "X-Admin-API-Key: <admin_key>"
@@ -378,22 +394,22 @@ implementation-defined and may change between releases.
 
 Retrieve a distributed trace by its correlation ID.
 
-| Path Parameter | Type | Description |
-|---|---|---|
-| `traceId` | `string` | Correlation ID (`X-Request-Id` from a previous response) |
+| Path Parameter | Type     | Description                                              |
+| -------------- | -------- | -------------------------------------------------------- |
+| `traceId`      | `string` | Correlation ID (`X-Request-Id` from a previous response) |
 
 **Request**
+
 ```bash
 curl -s "http://localhost:3000/health/traces/f47ac10b-58cc-4372-a567-0e02b2c3d479"
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "correlationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "spans": [
-    { "name": "POST /api/tasks", "durationMs": 42, "status": "ok" }
-  ],
+  "spans": [{ "name": "POST /api/tasks", "durationMs": 42, "status": "ok" }],
   "startedAt": "2026-09-30T11:00:00.000Z",
   "endedAt": "2026-09-30T11:00:00.042Z",
   "totalDurationMs": 42
@@ -401,6 +417,7 @@ curl -s "http://localhost:3000/health/traces/f47ac10b-58cc-4372-a567-0e02b2c3d47
 ```
 
 **Response `404 Not Found`**
+
 ```json
 { "error": "Trace not found", "traceId": "f47ac10b-..." }
 ```
@@ -415,13 +432,14 @@ Issues a new JWT access token and refresh token for a wallet/device pair.
 
 **Request Body**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `walletPublicKey` | `string` | Yes | Stellar G-address of the wallet |
-| `deviceId` | `string` | Yes | Stable device identifier (UUID recommended) |
-| `deviceName` | `string` | No | Human-readable device label |
+| Field             | Type     | Required | Description                                 |
+| ----------------- | -------- | -------- | ------------------------------------------- |
+| `walletPublicKey` | `string` | Yes      | Stellar G-address of the wallet             |
+| `deviceId`        | `string` | Yes      | Stable device identifier (UUID recommended) |
+| `deviceName`      | `string` | No       | Human-readable device label                 |
 
 **Request**
+
 ```bash
 curl -s -X POST http://localhost:3000/api/auth/token \
   -H "Content-Type: application/json" \
@@ -433,6 +451,7 @@ curl -s -X POST http://localhost:3000/api/auth/token \
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
@@ -442,19 +461,22 @@ curl -s -X POST http://localhost:3000/api/auth/token \
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `accessToken` | `string` | JWT access token (15-minute default lifetime) |
-| `refreshToken` | `string` | Refresh token for rotation |
-| `expiresIn` | `number` | Access token lifetime in seconds |
-| `sessionId` | `string` | Session identifier |
+| Field          | Type     | Description                                   |
+| -------------- | -------- | --------------------------------------------- |
+| `accessToken`  | `string` | JWT access token (15-minute default lifetime) |
+| `refreshToken` | `string` | Refresh token for rotation                    |
+| `expiresIn`    | `number` | Access token lifetime in seconds              |
+| `sessionId`    | `string` | Session identifier                            |
 
 **Response `400 Bad Request`**
+
 ```json
 {
   "error": "Invalid request body",
   "code": "VALIDATION_ERROR",
-  "details": { "issues": [{ "path": ["walletPublicKey"], "message": "Required" }] }
+  "details": {
+    "issues": [{ "path": ["walletPublicKey"], "message": "Required" }]
+  }
 }
 ```
 
@@ -470,11 +492,12 @@ Replaying an already-consumed refresh token revokes the entire session family
 
 **Request Body**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `refreshToken` | `string` | Yes | Active refresh token to exchange |
+| Field          | Type     | Required | Description                      |
+| -------------- | -------- | -------- | -------------------------------- |
+| `refreshToken` | `string` | Yes      | Active refresh token to exchange |
 
 **Request**
+
 ```bash
 curl -s -X POST http://localhost:3000/api/auth/refresh \
   -H "Content-Type: application/json" \
@@ -484,6 +507,7 @@ curl -s -X POST http://localhost:3000/api/auth/refresh \
 **Response `200 OK`** — same schema as `POST /api/auth/token`.
 
 **Response `401 Unauthorized`**
+
 ```json
 { "error": "Invalid or expired refresh token", "code": "AUTHENTICATION_ERROR" }
 ```
@@ -497,12 +521,13 @@ Requires a valid access token in the `Authorization` header.
 
 **Request Body**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `sessionId` | `string` | No | Session to revoke; defaults to the caller's current session |
-| `reason` | `string` | No | Optional reason for audit log |
+| Field       | Type     | Required | Description                                                 |
+| ----------- | -------- | -------- | ----------------------------------------------------------- |
+| `sessionId` | `string` | No       | Session to revoke; defaults to the caller's current session |
+| `reason`    | `string` | No       | Optional reason for audit log                               |
 
 **Request**
+
 ```bash
 curl -s -X POST http://localhost:3000/api/auth/revoke \
   -H "Authorization: Bearer <access_token>" \
@@ -511,6 +536,7 @@ curl -s -X POST http://localhost:3000/api/auth/revoke \
 ```
 
 **Response `200 OK`**
+
 ```json
 { "revoked": true, "sessionId": "sess_f47ac10b..." }
 ```
@@ -523,12 +549,14 @@ Lists all active sessions for the authenticated wallet.
 Requires a valid access token.
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/api/auth/sessions \
   -H "Authorization: Bearer <access_token>"
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "sessions": [
@@ -557,21 +585,23 @@ Lists registered agents. Supports two modes:
 
 **Query Parameters**
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `cursor` | `string` | — | Opaque pagination cursor from `pagination.nextCursor` |
-| `limit` | `number` | `20` | Page size (1–100); triggers cursor mode when present |
-| `capability` | `string` | — | Filter by capability tag (e.g. `research`, `coding`) |
-| `minReputation` | `number` | — | Filter agents with reputation ≥ this value |
-| `maxPriceXLM` | `number` | — | Filter agents with price ≤ this value (in XLM) |
-| `status` | `string` | — | `online` or `offline` |
+| Parameter       | Type     | Default | Description                                           |
+| --------------- | -------- | ------- | ----------------------------------------------------- |
+| `cursor`        | `string` | —       | Opaque pagination cursor from `pagination.nextCursor` |
+| `limit`         | `number` | `20`    | Page size (1–100); triggers cursor mode when present  |
+| `capability`    | `string` | —       | Filter by capability tag (e.g. `research`, `coding`)  |
+| `minReputation` | `number` | —       | Filter agents with reputation ≥ this value            |
+| `maxPriceXLM`   | `number` | —       | Filter agents with price ≤ this value (in XLM)        |
+| `status`        | `string` | —       | `online` or `offline`                                 |
 
 **Request (legacy)**
+
 ```bash
 curl -s "http://localhost:3000/api/agents?capability=research"
 ```
 
 **Response `200 OK` (legacy — flat array)**
+
 ```json
 [
   {
@@ -588,11 +618,13 @@ curl -s "http://localhost:3000/api/agents?capability=research"
 ```
 
 **Request (cursor-paginated)**
+
 ```bash
 curl -s "http://localhost:3000/api/agents?limit=10&capability=coding"
 ```
 
 **Response `200 OK` (cursor-paginated)**
+
 ```json
 {
   "data": {
@@ -623,16 +655,16 @@ curl -s "http://localhost:3000/api/agents?limit=10&capability=coding"
 
 **Agent Object Fields**
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | `string` | Unique agent identifier |
-| `capabilities` | `string[]` | List of capability tags |
-| `pricingXLM` | `number` | Service price in XLM |
-| `endpoint` | `string` | Agent's HTTP execution endpoint |
-| `stellarPublicKey` | `string` | Agent's Stellar G-address |
-| `reputationScore` | `number` | Reputation score (0–100) |
-| `status` | `string` | `online` or `offline` |
-| `lastSeenAt` | `string` | ISO-8601 timestamp of last heartbeat |
+| Field              | Type       | Description                          |
+| ------------------ | ---------- | ------------------------------------ |
+| `id`               | `string`   | Unique agent identifier              |
+| `capabilities`     | `string[]` | List of capability tags              |
+| `pricingXLM`       | `number`   | Service price in XLM                 |
+| `endpoint`         | `string`   | Agent's HTTP execution endpoint      |
+| `stellarPublicKey` | `string`   | Agent's Stellar G-address            |
+| `reputationScore`  | `number`   | Reputation score (0–100)             |
+| `status`           | `string`   | `online` or `offline`                |
+| `lastSeenAt`       | `string`   | ISO-8601 timestamp of last heartbeat |
 
 **Rate Limit**: 100 req / 15 min per IP. Responses are cached server-side (TTL configurable).
 
@@ -644,11 +676,12 @@ Returns the full profile for a single agent by its unique identifier.
 
 **Path Parameters**
 
-| Parameter | Type | Description |
-|---|---|---|
-| `id` | `string` | Unique agent identifier |
+| Parameter | Type     | Description             |
+| --------- | -------- | ----------------------- |
+| `id`      | `string` | Unique agent identifier |
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/api/agents/agent_research_01
 ```
@@ -656,6 +689,7 @@ curl -s http://localhost:3000/api/agents/agent_research_01
 **Response `200 OK`** — same schema as a single item in `GET /api/agents`.
 
 **Response `404 Not Found`**
+
 ```json
 { "error": "Agent not found" }
 ```
@@ -668,16 +702,18 @@ Performs a live HTTP health check against the agent's registered endpoint.
 Returns `healthy` or `unreachable` regardless of the agent's reachability
 (i.e. this endpoint always returns `200`; the `status` field indicates health).
 
-| Path Parameter | Type | Description |
-|---|---|---|
-| `id` | `string` | Agent identifier |
+| Path Parameter | Type     | Description      |
+| -------------- | -------- | ---------------- |
+| `id`           | `string` | Agent identifier |
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/api/agents/agent_research_01/health
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "status": "healthy",
@@ -685,12 +721,13 @@ curl -s http://localhost:3000/api/agents/agent_research_01/health
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `status` | `string` | `healthy` if endpoint responded OK; `unreachable` otherwise |
-| `latencyMs` | `number` | Round-trip latency in milliseconds |
+| Field       | Type     | Description                                                 |
+| ----------- | -------- | ----------------------------------------------------------- |
+| `status`    | `string` | `healthy` if endpoint responded OK; `unreachable` otherwise |
+| `latencyMs` | `number` | Round-trip latency in milliseconds                          |
 
 **Response `404 Not Found`**
+
 ```json
 { "error": "Agent not found" }
 ```
@@ -704,22 +741,23 @@ against Horizon unless `SKIP_STELLAR_ACCOUNT_VERIFY=true` is set.
 
 **Request Headers**
 
-| Header | Required | Description |
-|---|---|---|
-| `Content-Type` | Yes | `application/json` |
+| Header            | Required    | Description             |
+| ----------------- | ----------- | ----------------------- |
+| `Content-Type`    | Yes         | `application/json`      |
 | `Idempotency-Key` | Recommended | UUID v4 for safe replay |
 
 **Request Body**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `agentId` | `string` | Yes | Unique agent identifier (non-empty string) |
-| `capabilities` | `string[]` | Yes | Non-empty list of capability tags |
-| `pricingXLM` | `number` | Yes | Service price in XLM (minimum `0.001`) |
-| `endpoint` | `string` | Yes | Full HTTP URL for task execution |
-| `stellarPublicKey` | `string` | Yes | Valid Stellar G-address (56-char base32) |
+| Field              | Type       | Required | Description                                |
+| ------------------ | ---------- | -------- | ------------------------------------------ |
+| `agentId`          | `string`   | Yes      | Unique agent identifier (non-empty string) |
+| `capabilities`     | `string[]` | Yes      | Non-empty list of capability tags          |
+| `pricingXLM`       | `number`   | Yes      | Service price in XLM (minimum `0.001`)     |
+| `endpoint`         | `string`   | Yes      | Full HTTP URL for task execution           |
+| `stellarPublicKey` | `string`   | Yes      | Valid Stellar G-address (56-char base32)   |
 
 **Request**
+
 ```bash
 curl -s -X POST http://localhost:3000/api/agents/register \
   -H "Content-Type: application/json" \
@@ -734,6 +772,7 @@ curl -s -X POST http://localhost:3000/api/agents/register \
 ```
 
 **Response `201 Created`**
+
 ```json
 {
   "id": "agent_research_01",
@@ -748,19 +787,24 @@ curl -s -X POST http://localhost:3000/api/agents/register \
 ```
 
 **Response `400 Bad Request`** (validation failure)
+
 ```json
 {
   "error": "Invalid agent registration data",
   "code": "VALIDATION_ERROR",
   "details": {
     "issues": [
-      { "path": ["stellarPublicKey"], "message": "Invalid Stellar public key format" }
+      {
+        "path": ["stellarPublicKey"],
+        "message": "Invalid Stellar public key format"
+      }
     ]
   }
 }
 ```
 
 **Response `400 Bad Request`** (Stellar account not found on network)
+
 ```json
 {
   "error": "Stellar account not found",
@@ -769,6 +813,7 @@ curl -s -X POST http://localhost:3000/api/agents/register \
 ```
 
 **Response `429 Too Many Requests`**
+
 ```json
 { "error": "Too many requests", "code": "RATE_LIMIT_EXCEEDED" }
 ```
@@ -782,17 +827,19 @@ curl -s -X POST http://localhost:3000/api/agents/register \
 Updates the agent's `lastSeenAt` timestamp, keeping its `online` status active
 in the registry. Must be called regularly (recommended: every 30–60 s).
 
-| Path Parameter | Type | Description |
-|---|---|---|
-| `id` | `string` | Agent identifier |
+| Path Parameter | Type     | Description      |
+| -------------- | -------- | ---------------- |
+| `id`           | `string` | Agent identifier |
 
 **Request**
+
 ```bash
 curl -s -X POST http://localhost:3000/api/agents/agent_research_01/heartbeat \
   -H "Content-Type: application/json"
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "status": "ok",
@@ -801,11 +848,13 @@ curl -s -X POST http://localhost:3000/api/agents/agent_research_01/heartbeat \
 ```
 
 **Response `404 Not Found`**
+
 ```json
 { "error": "Agent not found" }
 ```
 
 **Response `429 Too Many Requests`**
+
 ```json
 { "error": "Too many requests", "code": "RATE_LIMIT_EXCEEDED" }
 ```
@@ -827,23 +876,24 @@ execution DAG, persists the task record, and enqueues a background job.
 
 **Request Headers**
 
-| Header | Required | Description |
-|---|---|---|
-| `Content-Type` | Yes | `application/json` |
+| Header            | Required    | Description                         |
+| ----------------- | ----------- | ----------------------------------- |
+| `Content-Type`    | Yes         | `application/json`                  |
 | `walletpublickey` | Recommended | Stellar G-address of the task owner |
-| `Idempotency-Key` | Recommended | UUID v4 for deduplication |
+| `Idempotency-Key` | Recommended | UUID v4 for deduplication           |
 
 **Request Body**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `prompt` | `string` | Yes | Natural-language task description (max 100,000 chars) |
-| `walletPublicKey` | `string` | No | Stellar wallet address of the task owner (overrides header) |
-| `maxBudgetXLM` | `number` | No | Maximum XLM the task may spend (minimum `0.1` when provided) |
-| `agentPreferences` | `string[]` | No | Preferred agent IDs to include in the DAG |
-| `priority` | `string` | No | `"low"`, `"normal"` (default), or `"high"` |
+| Field              | Type       | Required | Description                                                  |
+| ------------------ | ---------- | -------- | ------------------------------------------------------------ |
+| `prompt`           | `string`   | Yes      | Natural-language task description (max 100,000 chars)        |
+| `walletPublicKey`  | `string`   | No       | Stellar wallet address of the task owner (overrides header)  |
+| `maxBudgetXLM`     | `number`   | No       | Maximum XLM the task may spend (minimum `0.1` when provided) |
+| `agentPreferences` | `string[]` | No       | Preferred agent IDs to include in the DAG                    |
+| `priority`         | `string`   | No       | `"low"`, `"normal"` (default), or `"high"`                   |
 
 **Request**
+
 ```bash
 curl -s -X POST http://localhost:3000/api/tasks \
   -H "Content-Type: application/json" \
@@ -857,6 +907,7 @@ curl -s -X POST http://localhost:3000/api/tasks \
 ```
 
 **Response `201 Created`**
+
 ```json
 {
   "taskId": "task_ab12cd34ef56",
@@ -887,25 +938,26 @@ curl -s -X POST http://localhost:3000/api/tasks \
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `taskId` | `string` | Unique task identifier |
-| `status` | `string` | Initial status — always `"queued"` |
-| `dagPreview` | `array` | Decomposed DAG nodes (see DAG node schema below) |
+| Field        | Type     | Description                                      |
+| ------------ | -------- | ------------------------------------------------ |
+| `taskId`     | `string` | Unique task identifier                           |
+| `status`     | `string` | Initial status — always `"queued"`               |
+| `dagPreview` | `array`  | Decomposed DAG nodes (see DAG node schema below) |
 
 **DAG Node Fields**
 
-| Field | Type | Description |
-|---|---|---|
-| `nodeId` | `string` | Node identifier within the DAG |
-| `agentType` | `string` | Agent capability required for this node |
-| `prompt` | `string` | Node-specific prompt passed to the agent |
-| `dependsOn` | `string[]` | Node IDs that must complete before this node runs |
-| `status` | `string` | Node status: `pending`, `running`, `completed`, `failed` |
-| `result` | `object\|null` | Agent output (populated when completed) |
-| `error` | `string\|null` | Error message (populated on failure) |
+| Field       | Type           | Description                                              |
+| ----------- | -------------- | -------------------------------------------------------- |
+| `nodeId`    | `string`       | Node identifier within the DAG                           |
+| `agentType` | `string`       | Agent capability required for this node                  |
+| `prompt`    | `string`       | Node-specific prompt passed to the agent                 |
+| `dependsOn` | `string[]`     | Node IDs that must complete before this node runs        |
+| `status`    | `string`       | Node status: `pending`, `running`, `completed`, `failed` |
+| `result`    | `object\|null` | Agent output (populated when completed)                  |
+| `error`     | `string\|null` | Error message (populated on failure)                     |
 
 **Response `400 Bad Request`**
+
 ```json
 {
   "error": "Validation failed",
@@ -915,6 +967,7 @@ curl -s -X POST http://localhost:3000/api/tasks \
 ```
 
 **Response `429 Too Many Requests`** (rate limit)
+
 ```json
 {
   "error": "Too many requests",
@@ -923,6 +976,7 @@ curl -s -X POST http://localhost:3000/api/tasks \
 ```
 
 **Response `429 Too Many Requests`** (daily quota)
+
 ```json
 {
   "error": "Daily task limit reached (max 100 per 24 hours)",
@@ -931,8 +985,12 @@ curl -s -X POST http://localhost:3000/api/tasks \
 ```
 
 **Response `500 Internal Server Error`**
+
 ```json
-{ "error": "Internal server error during task decomposition", "code": "INTERNAL_ERROR" }
+{
+  "error": "Internal server error during task decomposition",
+  "code": "INTERNAL_ERROR"
+}
 ```
 
 **Rate Limit**: 60 req / 15 min per IP. Daily quota: 100 tasks per wallet per 24 h.
@@ -946,27 +1004,29 @@ Returns a paginated, filterable, sortable result set.
 
 **Request Headers**
 
-| Header | Required | Description |
-|---|---|---|
-| `walletpublickey` | Yes | Stellar G-address to list tasks for |
+| Header            | Required | Description                         |
+| ----------------- | -------- | ----------------------------------- |
+| `walletpublickey` | Yes      | Stellar G-address to list tasks for |
 
 **Query Parameters**
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `page` | `number` | `1` | Page number (1-indexed) |
-| `pageSize` | `number` | `10` | Items per page (1–100) |
-| `status` | `string` | — | Filter by status: `queued`, `running`, `completed`, `failed` |
-| `sort` | `string` | `createdAt:desc` | Sort order: `createdAt:desc` or `createdAt:asc` |
-| `q` | `string` | — | Substring search in prompt text |
+| Parameter  | Type     | Default          | Description                                                  |
+| ---------- | -------- | ---------------- | ------------------------------------------------------------ |
+| `page`     | `number` | `1`              | Page number (1-indexed)                                      |
+| `pageSize` | `number` | `10`             | Items per page (1–100)                                       |
+| `status`   | `string` | —                | Filter by status: `queued`, `running`, `completed`, `failed` |
+| `sort`     | `string` | `createdAt:desc` | Sort order: `createdAt:desc` or `createdAt:asc`              |
+| `q`        | `string` | —                | Substring search in prompt text                              |
 
 **Request**
+
 ```bash
 curl -s "http://localhost:3000/api/tasks?page=1&pageSize=5&status=completed" \
   -H "walletpublickey: GBZXN7PIRZGNMHGA728XZVOG2GUFIDLAZ6AF2I2MD2OCYTAF2K1K4AAA"
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "tasks": [
@@ -986,26 +1046,27 @@ curl -s "http://localhost:3000/api/tasks?page=1&pageSize=5&status=completed" \
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `tasks` | `array` | Task objects (see fields below) |
-| `total` | `number` | Total matching tasks across all pages |
-| `page` | `number` | Current page number |
-| `pageSize` | `number` | Requested page size |
+| Field      | Type     | Description                           |
+| ---------- | -------- | ------------------------------------- |
+| `tasks`    | `array`  | Task objects (see fields below)       |
+| `total`    | `number` | Total matching tasks across all pages |
+| `page`     | `number` | Current page number                   |
+| `pageSize` | `number` | Requested page size                   |
 
 **Task List Item Fields**
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | `string` | Unique task ID |
-| `prompt` | `string` | Original natural-language prompt |
-| `walletPublicKey` | `string` | Owner wallet address |
-| `status` | `string` | Current status |
-| `dagJson` | `string` | JSON-encoded DAG node array |
-| `createdAt` | `string` | ISO-8601 creation timestamp |
-| `updatedAt` | `string` | ISO-8601 last-update timestamp |
+| Field             | Type     | Description                      |
+| ----------------- | -------- | -------------------------------- |
+| `id`              | `string` | Unique task ID                   |
+| `prompt`          | `string` | Original natural-language prompt |
+| `walletPublicKey` | `string` | Owner wallet address             |
+| `status`          | `string` | Current status                   |
+| `dagJson`         | `string` | JSON-encoded DAG node array      |
+| `createdAt`       | `string` | ISO-8601 creation timestamp      |
+| `updatedAt`       | `string` | ISO-8601 last-update timestamp   |
 
 **Response `400 Bad Request`**
+
 ```json
 { "error": "Invalid query parameters", "code": "VALIDATION_ERROR" }
 ```
@@ -1017,17 +1078,19 @@ curl -s "http://localhost:3000/api/tasks?page=1&pageSize=5&status=completed" \
 Returns full task details including the DAG, per-node results, and execution
 status. The caller's `walletpublickey` header must match the task owner.
 
-| Path Parameter | Type | Description |
-|---|---|---|
-| `id` | `string` | Unique task identifier |
+| Path Parameter | Type     | Description            |
+| -------------- | -------- | ---------------------- |
+| `id`           | `string` | Unique task identifier |
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/api/tasks/task_ab12cd34ef56 \
   -H "walletpublickey: GBZXN7PIRZGNMHGA728XZVOG2GUFIDLAZ6AF2I2MD2OCYTAF2K1K4AAA"
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "id": "task_ab12cd34ef56",
@@ -1051,7 +1114,9 @@ curl -s http://localhost:3000/api/tasks/task_ab12cd34ef56 \
       "prompt": "Compile market-entry report",
       "dependsOn": ["node_research_1"],
       "status": "completed",
-      "result": { "reportUrl": "https://reports.ai-net.io/task_ab12cd34ef56.pdf" },
+      "result": {
+        "reportUrl": "https://reports.ai-net.io/task_ab12cd34ef56.pdf"
+      },
       "error": null
     }
   ],
@@ -1061,11 +1126,13 @@ curl -s http://localhost:3000/api/tasks/task_ab12cd34ef56 \
 ```
 
 **Response `403 Forbidden`**
+
 ```json
 { "error": "Access denied" }
 ```
 
 **Response `404 Not Found`**
+
 ```json
 { "error": "Task not found" }
 ```
@@ -1078,17 +1145,19 @@ Subscribes to real-time Server-Sent Events for a task's execution progress.
 The connection remains open until the task reaches a terminal state
 (`completed` or `failed`) or the client disconnects.
 
-| Path Parameter | Type | Description |
-|---|---|---|
-| `id` | `string` | Task identifier to stream |
+| Path Parameter | Type     | Description               |
+| -------------- | -------- | ------------------------- |
+| `id`           | `string` | Task identifier to stream |
 
 **Request**
+
 ```bash
 curl -N -H "Accept: text/event-stream" \
   "http://localhost:3000/api/tasks/task_ab12cd34ef56/stream"
 ```
 
 **Stream Response (`200 OK`, `text/event-stream`)**
+
 ```
 event: progress
 data: {"nodeId":"node_research_1","agentType":"research","status":"running","percentage":25}
@@ -1105,14 +1174,15 @@ data: {"taskId":"task_ab12cd34ef56","status":"completed","percentage":100}
 
 **Event Types**
 
-| Event | Description |
-|---|---|
-| `progress` | A DAG node changed status. `percentage` is approximate. |
-| `completed` | Task finished successfully. |
-| `failed` | Task ended with failure. Includes `error` field. |
-| `heartbeat` | Keep-alive ping (no data payload) |
+| Event       | Description                                             |
+| ----------- | ------------------------------------------------------- |
+| `progress`  | A DAG node changed status. `percentage` is approximate. |
+| `completed` | Task finished successfully.                             |
+| `failed`    | Task ended with failure. Includes `error` field.        |
+| `heartbeat` | Keep-alive ping (no data payload)                       |
 
 **Response `404 Not Found`** (if task does not exist, before SSE stream opens)
+
 ```json
 { "error": "Task not found" }
 ```
@@ -1129,11 +1199,13 @@ with a 60-second TTL.
 No authentication required.
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/api/stats
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "totalAgents": 12,
@@ -1151,16 +1223,17 @@ curl -s http://localhost:3000/api/stats
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `totalAgents` | `number` | Total registered agents |
-| `totalTasks` | `number` | Total tasks completed |
-| `uptimePercent` | `number` | Network uptime percentage (0–100) |
-| `totalXLMTransacted` | `number` | Total XLM transacted through the network |
-| `tasksLast24h` | `array` | Hourly task count time series for the last 24 h |
-| `xlmLast24h` | `array` | Hourly XLM volume time series for the last 24 h |
+| Field                | Type     | Description                                     |
+| -------------------- | -------- | ----------------------------------------------- |
+| `totalAgents`        | `number` | Total registered agents                         |
+| `totalTasks`         | `number` | Total tasks completed                           |
+| `uptimePercent`      | `number` | Network uptime percentage (0–100)               |
+| `totalXLMTransacted` | `number` | Total XLM transacted through the network        |
+| `tasksLast24h`       | `array`  | Hourly task count time series for the last 24 h |
+| `xlmLast24h`         | `array`  | Hourly XLM volume time series for the last 24 h |
 
 **Response `500 Internal Server Error`**
+
 ```json
 { "error": "Unable to load stats", "code": "STATS_LOAD_ERROR" }
 ```
@@ -1178,11 +1251,12 @@ against on-chain Soroban state and Horizon transactions.
 
 **Request Body**
 
-| Field | Type | Default | Description |
-|---|---|---|---|
+| Field         | Type     | Default    | Description                                               |
+| ------------- | -------- | ---------- | --------------------------------------------------------- |
 | `triggeredBy` | `string` | `"manual"` | Trigger source: `"manual"`, `"scheduled"`, or `"release"` |
 
 **Request**
+
 ```bash
 curl -s -X POST http://localhost:3000/api/reconciliation/run \
   -H "Content-Type: application/json" \
@@ -1190,6 +1264,7 @@ curl -s -X POST http://localhost:3000/api/reconciliation/run \
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "id": "recon_20260930_110712",
@@ -1206,19 +1281,20 @@ curl -s -X POST http://localhost:3000/api/reconciliation/run \
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | `string` | Reconciliation run identifier |
-| `triggeredBy` | `string` | How the run was initiated |
-| `startedAt` | `string` | ISO-8601 start timestamp |
-| `completedAt` | `string` | ISO-8601 completion timestamp |
-| `durationMs` | `number` | Total run duration in milliseconds |
-| `summary.totalChecked` | `number` | Payment records checked |
-| `summary.discrepancies` | `number` | Mismatches found |
-| `summary.resolved` | `number` | Automatically resolved discrepancies |
-| `summary.errors` | `number` | Errors during the run |
+| Field                   | Type     | Description                          |
+| ----------------------- | -------- | ------------------------------------ |
+| `id`                    | `string` | Reconciliation run identifier        |
+| `triggeredBy`           | `string` | How the run was initiated            |
+| `startedAt`             | `string` | ISO-8601 start timestamp             |
+| `completedAt`           | `string` | ISO-8601 completion timestamp        |
+| `durationMs`            | `number` | Total run duration in milliseconds   |
+| `summary.totalChecked`  | `number` | Payment records checked              |
+| `summary.discrepancies` | `number` | Mismatches found                     |
+| `summary.resolved`      | `number` | Automatically resolved discrepancies |
+| `summary.errors`        | `number` | Errors during the run                |
 
 **Response `500 Internal Server Error`**
+
 ```json
 { "error": "Reconciliation run failed", "code": "INTERNAL_ERROR" }
 ```
@@ -1230,6 +1306,7 @@ curl -s -X POST http://localhost:3000/api/reconciliation/run \
 Returns the latest completed reconciliation report.
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/api/reconciliation/report
 ```
@@ -1237,6 +1314,7 @@ curl -s http://localhost:3000/api/reconciliation/report
 **Response `200 OK`** — same schema as `POST /api/reconciliation/run`.
 
 **Response `404 Not Found`**
+
 ```json
 { "error": "Reconciliation Report not found" }
 ```
@@ -1255,12 +1333,14 @@ otherwise noted. Unauthenticated requests return `401 Unauthorized`.
 Returns the current read-only mode state.
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/api/admin/read-only \
   -H "X-Admin-API-Key: <admin_key>"
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "enabled": false,
@@ -1279,12 +1359,13 @@ endpoints return `503 Service Unavailable`.
 
 **Request Body**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `enabled` | `boolean` | Yes | `true` to enable read-only, `false` to disable |
-| `reason` | `string` | No | Optional reason for the audit log (max 500 chars) |
+| Field     | Type      | Required | Description                                       |
+| --------- | --------- | -------- | ------------------------------------------------- |
+| `enabled` | `boolean` | Yes      | `true` to enable read-only, `false` to disable    |
+| `reason`  | `string`  | No       | Optional reason for the audit log (max 500 chars) |
 
 **Request**
+
 ```bash
 curl -s -X PUT http://localhost:3000/api/admin/read-only \
   -H "X-Admin-API-Key: <admin_key>" \
@@ -1302,19 +1383,21 @@ Lists all agents visible to the admin, with optional status filter.
 
 **Query Parameters**
 
-| Parameter | Type | Description |
-|---|---|---|
-| `status` | `string` | Filter by `online` or `offline` |
+| Parameter | Type     | Description                     |
+| --------- | -------- | ------------------------------- |
+| `status`  | `string` | Filter by `online` or `offline` |
 
 **Request**
+
 ```bash
 curl -s "http://localhost:3000/api/admin/agents" \
   -H "X-Admin-API-Key: <admin_key>"
 ```
 
 **Response `200 OK`**
+
 ```json
-{ "agents": [ /* array of agent objects */ ] }
+{ "agents": [/* array of agent objects */] }
 ```
 
 ---
@@ -1323,22 +1406,25 @@ curl -s "http://localhost:3000/api/admin/agents" \
 
 Re-enables a previously disabled agent.
 
-| Path Parameter | Type | Description |
-|---|---|---|
-| `id` | `string` | Agent identifier |
+| Path Parameter | Type     | Description      |
+| -------------- | -------- | ---------------- |
+| `id`           | `string` | Agent identifier |
 
 **Request**
+
 ```bash
 curl -s -X POST http://localhost:3000/api/admin/agents/agent_research_01/enable \
   -H "X-Admin-API-Key: <admin_key>"
 ```
 
 **Response `200 OK`**
+
 ```json
-{ "enabled": true, "agent": { /* agent object */ } }
+{ "enabled": true, "agent": {/* agent object */} }
 ```
 
 **Response `404 Not Found`**
+
 ```json
 { "error": "AGENT_NOT_FOUND" }
 ```
@@ -1349,19 +1435,21 @@ curl -s -X POST http://localhost:3000/api/admin/agents/agent_research_01/enable 
 
 Disables an agent, preventing it from receiving tasks.
 
-| Path Parameter | Type | Description |
-|---|---|---|
-| `id` | `string` | Agent identifier |
+| Path Parameter | Type     | Description      |
+| -------------- | -------- | ---------------- |
+| `id`           | `string` | Agent identifier |
 
 **Request**
+
 ```bash
 curl -s -X POST http://localhost:3000/api/admin/agents/agent_research_01/disable \
   -H "X-Admin-API-Key: <admin_key>"
 ```
 
 **Response `200 OK`**
+
 ```json
-{ "enabled": false, "agent": { /* agent object */ } }
+{ "enabled": false, "agent": {/* agent object */} }
 ```
 
 ---
@@ -1372,6 +1460,7 @@ Admin-privileged reconciliation trigger. Accepts the same body as
 `POST /api/reconciliation/run` and returns the same report schema.
 
 **Request**
+
 ```bash
 curl -s -X POST http://localhost:3000/api/admin/reconciliation/run \
   -H "X-Admin-API-Key: <admin_key>" \
@@ -1386,12 +1475,14 @@ curl -s -X POST http://localhost:3000/api/admin/reconciliation/run \
 Runs SQLite `VACUUM` on all databases to reclaim storage space.
 
 **Request**
+
 ```bash
 curl -s -X POST http://localhost:3000/api/admin/maintenance/vacuum \
   -H "X-Admin-API-Key: <admin_key>"
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "results": [
@@ -1410,11 +1501,12 @@ Backs up all SQLite databases to a specified directory.
 
 **Request Body**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `directory` | `string` | No | Target backup directory path |
+| Field       | Type     | Required | Description                  |
+| ----------- | -------- | -------- | ---------------------------- |
+| `directory` | `string` | No       | Target backup directory path |
 
 **Request**
+
 ```bash
 curl -s -X POST http://localhost:3000/api/admin/maintenance/backup \
   -H "X-Admin-API-Key: <admin_key>" \
@@ -1423,10 +1515,15 @@ curl -s -X POST http://localhost:3000/api/admin/maintenance/backup \
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "results": [
-    { "db": "payments", "path": "/backups/2026-09-30/payments.db", "status": "ok" },
+    {
+      "db": "payments",
+      "path": "/backups/2026-09-30/payments.db",
+      "status": "ok"
+    },
     { "db": "agents", "path": "/backups/2026-09-30/agents.db", "status": "ok" },
     { "db": "tasks", "path": "/backups/2026-09-30/tasks.db", "status": "ok" }
   ]
@@ -1441,19 +1538,21 @@ Returns the admin operation audit log with pagination and optional CSV export.
 
 **Query Parameters**
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `limit` | `number` | `200` | Maximum entries to return (1–1000) |
-| `offset` | `number` | `0` | Entries to skip (for pagination) |
-| `format` | `string` | `json` | `json` or `csv` |
+| Parameter | Type     | Default | Description                        |
+| --------- | -------- | ------- | ---------------------------------- |
+| `limit`   | `number` | `200`   | Maximum entries to return (1–1000) |
+| `offset`  | `number` | `0`     | Entries to skip (for pagination)   |
+| `format`  | `string` | `json`  | `json` or `csv`                    |
 
 **Request**
+
 ```bash
 curl -s "http://localhost:3000/api/admin/audit-log?limit=50&offset=0" \
   -H "X-Admin-API-Key: <admin_key>"
 ```
 
 **Response `200 OK` (`json`)**
+
 ```json
 {
   "entries": [
@@ -1481,22 +1580,24 @@ Returns `text/csv; charset=utf-8` with columns: `at`, `actor`, `action`,
 Retrieves a distributed trace by trace ID or request ID. Both identifiers
 are accepted — request IDs are resolved to their correlation trace.
 
-| Path Parameter | Type | Description |
-|---|---|---|
-| `id` | `string` | `traceId` (correlation ID) or `requestId` |
+| Path Parameter | Type     | Description                               |
+| -------------- | -------- | ----------------------------------------- |
+| `id`           | `string` | `traceId` (correlation ID) or `requestId` |
 
 **Request**
+
 ```bash
 curl -s "http://localhost:3000/api/admin/traces/f47ac10b-58cc-4372-a567-0e02b2c3d479" \
   -H "X-Admin-API-Key: <admin_key>"
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "correlationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
   "requestedId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "spans": [ { "name": "POST /api/tasks", "durationMs": 42 } ],
+  "spans": [{ "name": "POST /api/tasks", "durationMs": 42 }],
   "startedAt": "2026-09-30T11:07:12.000Z",
   "endedAt": "2026-09-30T11:07:12.042Z",
   "totalDurationMs": 42
@@ -1504,11 +1605,13 @@ curl -s "http://localhost:3000/api/admin/traces/f47ac10b-58cc-4372-a567-0e02b2c3
 ```
 
 **Response `404 Not Found`**
+
 ```json
 { "error": "Trace not found", "id": "f47ac10b-..." }
 ```
 
 **Response `503 Service Unavailable`**
+
 ```json
 { "error": "ADMIN_API_KEY is not configured" }
 ```
@@ -1520,12 +1623,14 @@ curl -s "http://localhost:3000/api/admin/traces/f47ac10b-58cc-4372-a567-0e02b2c3
 Returns background job queue metrics and worker status.
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/api/admin/queue/status \
   -H "X-Admin-API-Key: <admin_key>"
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "status": "healthy",
@@ -1547,16 +1652,16 @@ curl -s http://localhost:3000/api/admin/queue/status \
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `status` | `string` | `"healthy"` or `"degraded"` |
-| `stats.queued` | `number` | Jobs waiting to run |
-| `stats.active` | `number` | Jobs currently executing |
-| `stats.completed` | `number` | Total jobs completed |
-| `stats.failed` | `number` | Total jobs failed (before DLQ) |
-| `stats.deadLetter` | `number` | Jobs in the dead-letter queue |
-| `worker.running` | `boolean` | Whether the background worker is active |
-| `worker.concurrency` | `number` | Maximum simultaneous workers |
+| Field                | Type      | Description                             |
+| -------------------- | --------- | --------------------------------------- |
+| `status`             | `string`  | `"healthy"` or `"degraded"`             |
+| `stats.queued`       | `number`  | Jobs waiting to run                     |
+| `stats.active`       | `number`  | Jobs currently executing                |
+| `stats.completed`    | `number`  | Total jobs completed                    |
+| `stats.failed`       | `number`  | Total jobs failed (before DLQ)          |
+| `stats.deadLetter`   | `number`  | Jobs in the dead-letter queue           |
+| `worker.running`     | `boolean` | Whether the background worker is active |
+| `worker.concurrency` | `number`  | Maximum simultaneous workers            |
 
 ---
 
@@ -1565,12 +1670,14 @@ curl -s http://localhost:3000/api/admin/queue/status \
 Lists all feature flags with their current state and source.
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/api/admin/flags \
   -H "X-Admin-API-Key: <admin_key>"
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "flags": {
@@ -1586,17 +1693,18 @@ curl -s http://localhost:3000/api/admin/flags \
 
 Sets a runtime override for a feature flag.
 
-| Path Parameter | Type | Description |
-|---|---|---|
-| `flag` | `string` | Feature flag name |
+| Path Parameter | Type     | Description       |
+| -------------- | -------- | ----------------- |
+| `flag`         | `string` | Feature flag name |
 
 **Request Body**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `enabled` | `boolean` | Yes | New flag value |
+| Field     | Type      | Required | Description    |
+| --------- | --------- | -------- | -------------- |
+| `enabled` | `boolean` | Yes      | New flag value |
 
 **Request**
+
 ```bash
 curl -s -X PUT http://localhost:3000/api/admin/flags/ENABLE_STREAMING \
   -H "X-Admin-API-Key: <admin_key>" \
@@ -1605,11 +1713,13 @@ curl -s -X PUT http://localhost:3000/api/admin/flags/ENABLE_STREAMING \
 ```
 
 **Response `200 OK`**
+
 ```json
 { "flag": "ENABLE_STREAMING", "enabled": false, "source": "runtime" }
 ```
 
 **Response `404 Not Found`**
+
 ```json
 { "error": "Feature flag 'UNKNOWN_FLAG' not found" }
 ```
@@ -1621,12 +1731,14 @@ curl -s -X PUT http://localhost:3000/api/admin/flags/ENABLE_STREAMING \
 Clears the runtime override for a flag, restoring the env/default value.
 
 **Request**
+
 ```bash
 curl -s -X DELETE http://localhost:3000/api/admin/flags/ENABLE_STREAMING \
   -H "X-Admin-API-Key: <admin_key>"
 ```
 
 **Response `200 OK`**
+
 ```json
 { "flag": "ENABLE_STREAMING", "enabled": true, "source": "env" }
 ```
@@ -1643,11 +1755,13 @@ Also accessible at `GET /api/metrics`.
 No authentication required (restrict at network/ingress level in production).
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/metrics
 ```
 
 **Response `200 OK` (`text/plain; version=0.0.4`)**
+
 ```
 # HELP http_requests_total Total number of HTTP requests
 # TYPE http_requests_total counter
@@ -1672,11 +1786,13 @@ Use this endpoint to detect when a version you depend on is nearing sunset.
 No authentication required.
 
 **Request**
+
 ```bash
 curl -s http://localhost:3000/api/versions
 ```
 
 **Response `200 OK`**
+
 ```json
 {
   "latestVersion": "2.0",
@@ -1724,29 +1840,29 @@ curl -s http://localhost:3000/api/versions
 
 ### Task Status Values
 
-| Value | Description |
-|---|---|
-| `queued` | Task accepted and waiting for a worker |
-| `running` | At least one DAG node is currently executing |
-| `completed` | All DAG nodes finished successfully |
-| `failed` | One or more nodes failed; execution stopped |
+| Value       | Description                                  |
+| ----------- | -------------------------------------------- |
+| `queued`    | Task accepted and waiting for a worker       |
+| `running`   | At least one DAG node is currently executing |
+| `completed` | All DAG nodes finished successfully          |
+| `failed`    | One or more nodes failed; execution stopped  |
 
 ### Agent Status Values
 
-| Value | Description |
-|---|---|
-| `online` | Agent is active (recent heartbeat received) |
+| Value     | Description                                         |
+| --------- | --------------------------------------------------- |
+| `online`  | Agent is active (recent heartbeat received)         |
 | `offline` | No heartbeat received within the configured timeout |
 
 ### Capability Tags
 
-| Tag | Description |
-|---|---|
-| `research` | Web research and data gathering |
-| `risk` | Risk analysis and regulatory review |
-| `coding` | Code generation and smart contract development |
-| `design` | UI/UX and visual design tasks |
-| `report` | Report compilation and document generation |
+| Tag        | Description                                    |
+| ---------- | ---------------------------------------------- |
+| `research` | Web research and data gathering                |
+| `risk`     | Risk analysis and regulatory review            |
+| `coding`   | Code generation and smart contract development |
+| `design`   | UI/UX and visual design tasks                  |
+| `report`   | Report compilation and document generation     |
 
 ### Stellar Address Format
 
@@ -1764,7 +1880,7 @@ Cursor-paginated responses include:
 ```json
 {
   "data": {
-    "items": [ /* results */ ],
+    "items": [/* results */],
     "pagination": {
       "limit": 10,
       "nextCursor": "eyJpZCI6ImFnZW50XzAxIn0=",
