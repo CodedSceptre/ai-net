@@ -200,6 +200,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       canary_image: ${{ steps.build.outputs.canary_image }}
+      canary_digest: ${{ steps.build.outputs.canary_digest }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -213,7 +214,18 @@ jobs:
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build and push canary image
+        id: build-push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ env.ECR_REGISTRY }}/${{ env.SERVICE_NAME }}:${{ inputs.image_tag }}-canary
+
+      - name: Capture image reference
         id: build
         run: |
           CANARY_TAG="${{ inputs.image_tag }}-canary"
@@ -227,6 +239,44 @@ jobs:
   deploy-canary:
     name: Deploy Canary (10% traffic)
     needs: build-canary
+          echo "canary_image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "canary_digest=${{ steps.build-push.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          echo "Pushed canary image: ${IMAGE}"
+
+  # ── 2. Verify image signature before any deployment ─────────────────────────
+  verify-signature:
+    name: Verify Cosign Signature
+    needs: build-canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Verify image signature
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          IMAGE_DIGEST="${{ env.ECR_REGISTRY }}/${{ env.SERVICE_NAME }}@${{ needs.build-canary.outputs.canary_digest }}"
+          cosign verify \
+            --certificate-identity-regexp '.*' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${IMAGE_DIGEST}"
+          echo "✅ Signature verified for ${IMAGE_DIGEST}"
+
+  # ── 3. Deploy canary task definition at 10% traffic ─────────────────────────
+  deploy-canary:
+    name: Deploy Canary (10% traffic)
+    needs: [build-canary, verify-signature]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
@@ -293,6 +343,7 @@ jobs:
           echo "ALB weights set: stable=90% canary=10%"
 
   # ── 3. Observe canary for 10 minutes, sampling error rate every 60 s ────────
+  # ── 4. Observe canary for 10 minutes ────────────────────────────────────────
   observe-canary:
     name: Observe Canary (10-min window)
     needs: deploy-canary
@@ -388,6 +439,7 @@ jobs:
           retention-days: 30
 
   # ── 4a. Manual approval gate (required before shifting traffic above 50%) ────
+  # ── 5a. Manual approval gate ────────────────────────────────────────────────
   approval-gate:
     name: Manual Approval Gate (> 50% traffic shift)
     needs: observe-canary
@@ -401,6 +453,7 @@ jobs:
         run: echo "Manual approval received — proceeding to promote canary to stable."
 
   # ── 4b. Promote: stable task def ← canary image, ALB → 100% stable ──────────
+  # ── 5b. Promote ─────────────────────────────────────────────────────────────
   promote:
     name: Promote Canary to Stable
     needs: [build-canary, observe-canary, approval-gate]
@@ -477,6 +530,12 @@ jobs:
           echo "   All traffic now routed to stable."
 
   # ── 4c. Rollback: canary → 0, ALB → 100% stable, Grafana annotation ─────────
+
+      - name: Promotion summary
+        run: |
+          echo "✅ Canary promoted — image: ${{ needs.build-canary.outputs.canary_image }}"
+
+  # ── 5c. Rollback ────────────────────────────────────────────────────────────
   rollback:
     name: Rollback Canary
     needs: observe-canary
@@ -535,3 +594,10 @@ jobs:
           echo "🔴 Canary rolled back."
           echo "   Image : ${{ inputs.image_tag }}-canary was rejected."
           echo "   All traffic restored to stable."
+                \"text\": \"Canary rollback: ${{ inputs.image_tag }}-canary exceeded ${{ env.ERROR_RATE_ROLLBACK_THRESHOLD }}% error threshold. Run: ${{ github.run_id }}\",
+                \"time\": $(date +%s)000
+              }"
+          fi
+
+      - name: Rollback summary
+        run: echo "🔴 Canary rolled back — all traffic restored to stable."

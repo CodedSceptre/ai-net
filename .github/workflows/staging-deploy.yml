@@ -361,3 +361,91 @@ jobs:
             --label "devops,staging" \
             --repo "${{ github.repository }}" \
           || echo "::warning::Could not create failure issue (label may not exist). Check workflow run for details."
+name: Staging Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag to deploy to staging (e.g. sha-abc1234)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+  ECS_CLUSTER: ${{ secrets.STAGING_ECS_CLUSTER }}
+  SERVICE_NAME: ai-net-backend
+
+jobs:
+  verify-and-deploy:
+    name: Verify Signature & Deploy to Staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Fail fast if the image cannot be verified — prevents unsigned or
+      # tampered images from ever reaching staging.
+      - name: Verify image signature (cosign keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          IMAGE="${{ env.ECR_REGISTRY }}/${{ env.SERVICE_NAME }}:${{ inputs.image_tag }}"
+          cosign verify \
+            --certificate-identity-regexp '.*' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${IMAGE}"
+          echo "✅ Signature verified for ${IMAGE}"
+
+      - name: Register staging task definition
+        id: register-td
+        run: |
+          IMAGE="${{ env.ECR_REGISTRY }}/${{ env.SERVICE_NAME }}:${{ inputs.image_tag }}"
+
+          CURRENT_TD=$(aws ecs describe-task-definition \
+            --task-definition "${{ env.SERVICE_NAME }}-staging" \
+            --query 'taskDefinition' --output json)
+
+          NEW_TD=$(echo "${CURRENT_TD}" | jq \
+            --arg image "${IMAGE}" \
+            '.containerDefinitions[0].image = $image |
+             del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)')
+
+          REGISTERED=$(aws ecs register-task-definition \
+            --cli-input-json "${NEW_TD}" \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "td_arn=${REGISTERED}" >> "$GITHUB_OUTPUT"
+          echo "Registered task definition: ${REGISTERED}"
+
+      - name: Deploy to staging ECS service
+        run: |
+          aws ecs update-service \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --service "${{ env.SERVICE_NAME }}-staging" \
+            --task-definition "${{ steps.register-td.outputs.td_arn }}" \
+            --force-new-deployment
+          aws ecs wait services-stable \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --services "${{ env.SERVICE_NAME }}-staging"
+          echo "✅ Staging deployment complete — image: ${{ inputs.image_tag }}"

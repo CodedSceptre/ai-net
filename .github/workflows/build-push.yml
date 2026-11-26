@@ -1,0 +1,151 @@
+name: Build, Push, Sign & Attest
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+  id-token: write       # required for keyless cosign OIDC signing
+  packages: write       # required if pushing to GHCR
+
+concurrency:
+  group: build-push-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+  BACKEND_IMAGE_NAME: ai-net-backend
+  FRONTEND_IMAGE_NAME: ai-net-frontend
+
+jobs:
+  build-sign-attest:
+    name: Build, Sign & Attest (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            context: ./backend
+            image_name: ai-net-backend
+          - service: frontend
+            context: ./frontend
+            image_name: ai-net-frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ── Compute image tags ──────────────────────────────────────────────────
+      - name: Compute image tags
+        id: tags
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          REGISTRY="${{ env.ECR_REGISTRY }}"
+          IMAGE="${REGISTRY}/${{ matrix.image_name }}"
+
+          # Always tag with short SHA
+          TAGS="${IMAGE}:sha-${SHORT_SHA}"
+
+          # Tag latest on default branch pushes
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            TAGS="${TAGS},${IMAGE}:latest"
+          fi
+
+          # Tag with semver on version tag pushes
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            TAGS="${TAGS},${IMAGE}:${VERSION}"
+          fi
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          # Primary image ref used for signing and attestation
+          echo "primary=${IMAGE}:sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Computed tags: ${TAGS}"
+
+      # ── Build and push ──────────────────────────────────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        id: docker-build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      # ── Install cosign ──────────────────────────────────────────────────────
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # ── Sign image (keyless OIDC via Fulcio/Rekor — no stored private key) ──
+      - name: Sign image with cosign (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          IMAGE_DIGEST="${{ env.ECR_REGISTRY }}/${{ matrix.image_name }}@${{ steps.docker-build.outputs.digest }}"
+          cosign sign --yes "${IMAGE_DIGEST}"
+          echo "Signed: ${IMAGE_DIGEST}"
+
+      # ── Generate SBOM with syft ─────────────────────────────────────────────
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Generate SBOM (SPDX JSON)
+        run: |
+          IMAGE_DIGEST="${{ env.ECR_REGISTRY }}/${{ matrix.image_name }}@${{ steps.docker-build.outputs.digest }}"
+          syft "${IMAGE_DIGEST}" -o spdx-json > sbom.spdx.json
+          echo "SBOM generated for ${IMAGE_DIGEST}"
+          # Verify it is valid JSON
+          jq empty sbom.spdx.json
+          echo "SBOM JSON is valid."
+
+      # ── Attach SBOM as OCI attestation ─────────────────────────────────────
+      - name: Attest SBOM with cosign
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          IMAGE_DIGEST="${{ env.ECR_REGISTRY }}/${{ matrix.image_name }}@${{ steps.docker-build.outputs.digest }}"
+          cosign attest --yes \
+            --predicate sbom.spdx.json \
+            --type spdxjson \
+            "${IMAGE_DIGEST}"
+          echo "SBOM attestation attached to ${IMAGE_DIGEST}"
+
+      # ── Upload SBOM as workflow artifact ────────────────────────────────────
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.service }}-${{ steps.tags.outputs.short_sha }}
+          path: sbom.spdx.json
+          retention-days: 90
+
+      - name: Build summary
+        run: |
+          echo "### ${{ matrix.service }} image summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image digest | \`${{ steps.docker-build.outputs.digest }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Tags | \`${{ steps.tags.outputs.tags }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Signed (keyless) | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| SBOM attached | ✅ SPDX JSON |" >> "$GITHUB_STEP_SUMMARY"
