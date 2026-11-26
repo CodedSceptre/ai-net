@@ -4,15 +4,17 @@ This document defines the Soroban event schema for **all** events emitted by the
 `task_store` contract, including task lifecycle transitions, coordinator/oracle
 configuration changes, and contract upgrades.
 
+> **See also:** [Payment Lifecycle](../../docs/PAYMENT_LIFECYCLE.md) — Mermaid sequence diagrams and explanatory content for how payment events (`payment_locked`, `payment_released`, `payment_refunded`) relate to the full escrow lifecycle.
+
 ## Event Categories
 
 The contract emits two categories of events, each with its own independent
 schema version:
 
-| Category | Version Constant | Current Version | Events |
-|---|---|---|---|
-| **Lifecycle** | `TASK_LIFECYCLE_EVENT_VERSION` | 1 | `TaskCreatedEvent`, `TaskUpdatedEvent`, `TaskFinalizedEvent` |
-| **Configuration** | `TASK_CONFIG_EVENT_VERSION` | 1 | `CoordinatorSetEvent`, `OracleManagerSetEvent`, `ContractUpgradedEvent` |
+| Category          | Version Constant               | Current Version | Events                                                                  |
+| ----------------- | ------------------------------ | --------------- | ----------------------------------------------------------------------- |
+| **Lifecycle**     | `TASK_LIFECYCLE_EVENT_VERSION` | 1               | `TaskCreatedEvent`, `TaskUpdatedEvent`, `TaskFinalizedEvent`            |
+| **Configuration** | `TASK_CONFIG_EVENT_VERSION`    | 1               | `CoordinatorSetEvent`, `OracleManagerSetEvent`, `ContractUpgradedEvent` |
 
 ## Event Topics
 
@@ -20,21 +22,21 @@ schema version:
 
 Emitted under topics `(task_meta, <transition>)`:
 
-| Topic 2 | Transition | Struct |
-|---|---|---|
-| `created` | Task stored | `TaskCreatedEvent` |
-| `updated` | Non-terminal status change (e.g. Pending → Running) | `TaskUpdatedEvent` |
-| `finalized` | Terminal status change (→ Completed or → Failed) | `TaskFinalizedEvent` |
+| Topic 2     | Transition                                          | Struct               |
+| ----------- | --------------------------------------------------- | -------------------- |
+| `created`   | Task stored                                         | `TaskCreatedEvent`   |
+| `updated`   | Non-terminal status change (e.g. Pending → Running) | `TaskUpdatedEvent`   |
+| `finalized` | Terminal status change (→ Completed or → Failed)    | `TaskFinalizedEvent` |
 
 ### Configuration events
 
 Emitted under topics `(task_str, <action>)`:
 
-| Topic 2 | Action | Struct |
-|---|---|---|
-| `coord_set` | Coordinator set or rotated | `CoordinatorSetEvent` |
-| `ora_set` | OracleManager set or cleared | `OracleManagerSetEvent` |
-| `upgraded` | Contract WASM upgraded | `ContractUpgradedEvent` |
+| Topic 2     | Action                       | Struct                  |
+| ----------- | ---------------------------- | ----------------------- |
+| `coord_set` | Coordinator set or rotated   | `CoordinatorSetEvent`   |
+| `ora_set`   | OracleManager set or cleared | `OracleManagerSetEvent` |
+| `upgraded`  | Contract WASM upgraded       | `ContractUpgradedEvent` |
 
 ---
 
@@ -48,10 +50,10 @@ accordingly.
 
 ### Version bump rules
 
-| Change type | Version bump | Example |
-|---|---|---|
-| **Additive** (new optional field appended) | Minor (e.g. v1 → v2) | Adding `price_pair` to `TaskCreatedEvent` |
-| **Breaking** (field renamed, removed, or semantics changed) | Major (e.g. v2 → v3) | Renaming `task_id` to `task_hash` |
+| Change type                                                 | Version bump         | Example                                   |
+| ----------------------------------------------------------- | -------------------- | ----------------------------------------- |
+| **Additive** (new optional field appended)                  | Minor (e.g. v1 → v2) | Adding `price_pair` to `TaskCreatedEvent` |
+| **Breaking** (field renamed, removed, or semantics changed) | Major (e.g. v2 → v3) | Renaming `task_id` to `task_hash`         |
 
 ### Backward compatibility
 
@@ -173,14 +175,14 @@ pub struct ContractUpgradedEvent {
 
 ## Status transition → event map
 
-| Transition | Event |
-|---|---|
-| `store_task_metadata` | `TaskCreatedEvent` |
-| `Pending` → `Running` | `TaskUpdatedEvent` |
+| Transition              | Event                |
+| ----------------------- | -------------------- |
+| `store_task_metadata`   | `TaskCreatedEvent`   |
+| `Pending` → `Running`   | `TaskUpdatedEvent`   |
 | `Running` → `Completed` | `TaskFinalizedEvent` |
-| `Running` → `Failed` | `TaskFinalizedEvent` |
-| `Pending` → `Failed` | `TaskFinalizedEvent` |
-| Any invalid transition | *(no event)* |
+| `Running` → `Failed`    | `TaskFinalizedEvent` |
+| `Pending` → `Failed`    | `TaskFinalizedEvent` |
+| Any invalid transition  | _(no event)_         |
 
 **Lifecycle invariant**: Each successful state transition emits exactly one
 event, and rejected calls emit no event at all.
@@ -246,16 +248,16 @@ import type {
   CoordinatorSetEvent,
   OracleManagerSetEvent,
   ContractUpgradedEvent,
-} from './taskStoreEvents';
+} from "./taskStoreEvents";
 
 // Lifecycle events
-if (topics[0] === 'task_meta' && topics[1] === 'created') {
+if (topics[0] === "task_meta" && topics[1] === "created") {
   const event = scValToNative(data) as TaskCreatedEvent;
   console.log(event.version, event.task_id);
 }
 
 // Configuration events
-if (topics[0] === 'task_str' && topics[1] === 'coord_set') {
+if (topics[0] === "task_str" && topics[1] === "coord_set") {
   const event = scValToNative(data) as CoordinatorSetEvent;
   console.log(event.version, event.coordinator);
 }
@@ -275,11 +277,11 @@ mainnet.
 
 ### Prerequisites
 
-| Dependency | Purpose |
-|---|---|
+| Dependency                   | Purpose                          |
+| ---------------------------- | -------------------------------- |
 | `@stellar/stellar-sdk` >= 12 | XDR decoding, Horizon SSE client |
-| Node.js >= 20 | TypeScript runtime |
-| `stellar-sdk` (Python) >= 11 | Python consumer example |
+| Node.js >= 20                | TypeScript runtime               |
+| `stellar-sdk` (Python) >= 11 | Python consumer example          |
 
 ---
 
@@ -312,13 +314,13 @@ export interface TaskLifecycleEventBase {
 export interface TaskCreatedEvent extends TaskLifecycleEventBase {
   prompt_hash: Bytes32Hex;
   assigned_agents: string[]; // Stellar G... addresses
-  created_at: number;        // u64 ledger close time (unix seconds)
-  expires_at: number;         // u64 ledger close time
+  created_at: number; // u64 ledger close time (unix seconds)
+  expires_at: number; // u64 ledger close time
 }
 
 /** Emitted when `update_task_status` succeeds with a non-terminal transition. */
 export interface TaskUpdatedEvent extends TaskLifecycleEventBase {
-  agent: string;       // Stellar G... address
+  agent: string; // Stellar G... address
   old_status: TaskStatus;
   new_status: TaskStatus;
   updated_at: number; // u64 ledger close time
@@ -329,7 +331,7 @@ export interface TaskFinalizedEvent extends TaskLifecycleEventBase {
   agent: string;
   old_status: TaskStatus;
   final_status: TaskStatus; // always "Completed" or "Failed"
-  finalized_at: number;     // u64 ledger close time
+  finalized_at: number; // u64 ledger close time
 }
 
 /** Discriminated union for type-narrowed event handling. */
@@ -374,8 +376,10 @@ interface TaskRecord {
 }
 
 // ── Config ──────────────────────────────────────────────────────────────────
-const HORIZON_URL = process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
-const RPC_URL = process.env.SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org";
+const HORIZON_URL =
+  process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
+const RPC_URL =
+  process.env.SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org";
 const CONTRACT_ID = process.env.CONTRACT_ID!;
 
 if (!CONTRACT_ID) {
@@ -388,7 +392,11 @@ const taskStore = new Map<string, TaskRecord>();
 
 /** Decode a Soroban contract event into a typed payload. */
 function decodeTaskStoreEvent(event: xdr.ContractEvent): TaskRecord | null {
-  const topics = event.body().v0().topics().map((t) => scValToNative(t));
+  const topics = event
+    .body()
+    .v0()
+    .topics()
+    .map((t) => scValToNative(t));
   // Filter: topic[0] must be "task_meta"
   if (topics[0] !== "task_meta") return null;
 
@@ -398,9 +406,11 @@ function decodeTaskStoreEvent(event: xdr.ContractEvent): TaskRecord | null {
   return {
     taskId: data.task_id,
     status:
-      stage === "created" ? "Pending" :
-      stage === "updated" ? data.new_status :
-      data.final_status,
+      stage === "created"
+        ? "Pending"
+        : stage === "updated"
+          ? data.new_status
+          : data.final_status,
     agent: data.agent,
     createdAt: data.created_at,
     updatedAt: data.updated_at,
@@ -438,7 +448,9 @@ async function startTracking(startLedger?: number): Promise<void> {
 
       for (const event of response.events) {
         try {
-          const decoded = decodeTaskStoreEvent(event as unknown as xdr.ContractEvent);
+          const decoded = decodeTaskStoreEvent(
+            event as unknown as xdr.ContractEvent,
+          );
           if (!decoded) continue;
 
           taskStore.set(decoded.taskId, decoded);
@@ -759,8 +771,12 @@ const CHECKPOINT_PATH = process.env.CHECKPOINT_FILE ?? ".event-checkpoint.json";
 export function loadCheckpoint(): Checkpoint | null {
   if (!existsSync(CHECKPOINT_PATH)) return null;
   try {
-    const data = JSON.parse(readFileSync(CHECKPOINT_PATH, "utf8")) as Checkpoint;
-    console.log(`Loaded checkpoint: ledger ${data.lastLedger} (updated ${data.lastUpdated})`);
+    const data = JSON.parse(
+      readFileSync(CHECKPOINT_PATH, "utf8"),
+    ) as Checkpoint;
+    console.log(
+      `Loaded checkpoint: ledger ${data.lastLedger} (updated ${data.lastUpdated})`,
+    );
     return data;
   } catch {
     console.warn("Checkpoint file corrupt — starting fresh.");
@@ -873,21 +889,21 @@ and the Soroban RPC API reference.
 
 #### Horizon rate limits
 
-| Tier | Requests per minute |
-|---|---|
-| Anonymous (no API key) | 100 req/min (3,600/hr) |
-| Authenticated (API key in `X-API-Key` header) | 3,000 req/min |
+| Tier                                          | Requests per minute    |
+| --------------------------------------------- | ---------------------- |
+| Anonymous (no API key)                        | 100 req/min (3,600/hr) |
+| Authenticated (API key in `X-API-Key` header) | 3,000 req/min          |
 
 When the limit is exceeded, Horizon returns HTTP **429** with a
 `Retry-After` header indicating when to retry.
 
 #### Recommended polling intervals
 
-| Use case | Poll interval | Batch size |
-|---|---|---|
-| Real-time dashboard (low latency) | 3-5 seconds | 1-10 ledgers |
-| Batch indexer (throughput) | 5-10 seconds | 100-200 ledgers |
-| Historical backfill | 1-2 seconds | 200 ledgers (max) |
+| Use case                          | Poll interval | Batch size        |
+| --------------------------------- | ------------- | ----------------- |
+| Real-time dashboard (low latency) | 3-5 seconds   | 1-10 ledgers      |
+| Batch indexer (throughput)        | 5-10 seconds  | 100-200 ledgers   |
+| Historical backfill               | 1-2 seconds   | 200 ledgers (max) |
 
 #### Best practices
 
