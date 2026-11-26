@@ -1,7 +1,17 @@
 import { metricsService } from './metrics';
 import { CircuitOpenError } from './venice/errors';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger({ module: 'VeniceCircuitBreaker' });
 
 export type VeniceCircuitState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+
+export interface CircuitBreakerStatus {
+  state: VeniceCircuitState;
+  failureCount: number;
+  lastFailureAt: number | null;
+  nextAttemptAt: number | null;
+}
 
 export interface VeniceCircuitBreakerOptions {
   failureThreshold?: number;
@@ -39,6 +49,25 @@ export class VeniceCircuitBreaker {
   getFailureCount(): number {
     this.pruneFailures();
     return this.failures.length;
+  }
+
+  /**
+   * Returns a snapshot of the breaker's current state for health checks and
+   * observability endpoints.
+   *
+   * - `lastFailureAt`: Unix ms timestamp of the most recent failure, or null.
+   * - `nextAttemptAt`: when the next probe will be allowed (openedAt +
+   *   openDurationMs) while OPEN; null in every other state.
+   */
+  getStatus(): CircuitBreakerStatus {
+    this.evaluateState();
+    this.pruneFailures();
+    return {
+      state: this.state,
+      failureCount: this.failures.length,
+      lastFailureAt: this.failures.length > 0 ? this.failures[this.failures.length - 1]! : null,
+      nextAttemptAt: this.state === 'OPEN' ? this.openedAt + this.openDurationMs : null,
+    };
   }
 
   assertClosed(): void {
@@ -89,8 +118,26 @@ export class VeniceCircuitBreaker {
 
   private setState(state: VeniceCircuitState): void {
     if (this.state === state) return;
+    const previousState = this.state;
     this.state = state;
+    log.info(
+      {
+        state,
+        previousState,
+        failureCount: this.failures.length,
+        reason: this.getTransitionReason(previousState, state),
+      },
+      `circuit breaker transition: ${previousState} → ${state}`,
+    );
     this.publishState();
+  }
+
+  private getTransitionReason(from: VeniceCircuitState, to: VeniceCircuitState): string {
+    if (from === 'CLOSED' && to === 'OPEN') return 'failure_threshold_reached';
+    if (from === 'OPEN' && to === 'HALF_OPEN') return 'recovery_window_elapsed';
+    if (from === 'HALF_OPEN' && to === 'CLOSED') return 'probe_succeeded';
+    if (from === 'HALF_OPEN' && to === 'OPEN') return 'probe_failed';
+    return 'unknown';
   }
 
   private publishState(): void {
