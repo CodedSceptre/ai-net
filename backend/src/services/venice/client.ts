@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '../../utils/logger.js';
 import { VeniceCircuitBreaker } from '../veniceCircuitBreaker.js';
+import { recordVeniceCall } from '../../utils/metrics.js';
 import { CircuitOpenError, TokenBudgetExceededError } from './errors.js';
 import { VeniceResponseCache, buildCacheKey } from './cache.js';
 import { RequestDeduplicator } from './dedup.js';
@@ -351,10 +352,16 @@ export class VeniceClient implements VeniceClientLike {
         }
 
         this.breaker.recordSuccess();
+        recordVeniceCall('success');
         this.logRequest(requestId, agentType, model, promptForLogging, Date.now() - start, 'ok', retries, provider.name);
         return content;
       } catch (err) {
-        if (err instanceof CircuitOpenError || err instanceof TokenBudgetExceededError) {
+        if (err instanceof CircuitOpenError) {
+          recordVeniceCall('circuit_open');
+          throw err;
+        }
+        if (err instanceof TokenBudgetExceededError) {
+          recordVeniceCall('error');
           throw err;
         }
         if (options?.signal?.aborted) throw options.signal.reason ?? err;
@@ -374,6 +381,8 @@ export class VeniceClient implements VeniceClientLike {
         }
         // Last provider failed — record failure for circuit breaker
         this.breaker.recordFailure();
+        const isTimeout = lastError?.message?.toLowerCase().includes('timeout') || lastError?.name === 'AbortError';
+        recordVeniceCall(isTimeout ? 'timeout' : 'error');
         this.logRequest(requestId, agentType, model, promptForLogging, Date.now() - start, 'error', retries, provider.name);
         // If we have stale cache fallback enabled, the caller (createCompletion) will handle it
         throw lastError;

@@ -9,6 +9,7 @@
 
 import { Router, Request, Response, NextFunction } from "express";
 import { metricsService, MetricsService } from "../../services/metrics";
+import { register } from "../../utils/metrics";
 import { emptyBodySchema } from "../../schemas/common";
 import { validate } from "../middleware/validate";
 
@@ -32,15 +33,23 @@ export function createMetricsRouter(options: MetricsRouterOptions = {}): Router 
    *       200:
    *         description: Prometheus metric families
    *         content:
-   *           text/plain:
+   *           text/plain; version=0.0.4:
    *             schema:
    *               type: string
    */
   router.get("/", async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const output = await service.exportPrometheusMetrics();
-      res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
-      res.status(200).send(output);
+      const promMetrics = await register.metrics();
+      let serviceMetrics = "";
+      try {
+        serviceMetrics = await service.exportPrometheusMetrics();
+      } catch {
+        // service metrics optional fallback
+      }
+
+      const combined = [serviceMetrics, promMetrics].filter(Boolean).join("\n");
+      res.setHeader("Content-Type", "text/plain; version=0.0.4");
+      res.status(200).send(combined);
     } catch (err) {
       next(err);
     }

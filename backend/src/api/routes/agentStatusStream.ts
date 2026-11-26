@@ -41,6 +41,7 @@ import { randomUUID } from 'crypto';
 import { eventBus as defaultEventBus } from '../../coordinator/eventBus';
 import { getConfig } from '../../config';
 import { createLogger } from '../../utils/logger';
+import { incrementWebSocketConnections, decrementWebSocketConnections } from '../../utils/metrics';
 
 const logger = createLogger({ module: 'ws-agent-status' });
 
@@ -173,6 +174,7 @@ export function attachAgentStatusStream(
 
   // ── Per-connection setup ───────────────────────────────────────────────────
   wss.on('connection', (ws: WebSocket, _req: IncomingMessage, clientIp: string) => {
+    incrementWebSocketConnections();
     logger.debug('agent-status client connected');
 
     let heartbeat: NodeJS.Timeout | undefined;
@@ -222,7 +224,11 @@ export function attachAgentStatusStream(
       }
     });
 
+    let cleanedUp = false;
     const cleanup = (): void => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      decrementWebSocketConnections();
       if (heartbeat) clearInterval(heartbeat);
       if (pongTimer) clearTimeout(pongTimer);
       const remaining = (clientConnections.get(clientIp) ?? 1) - 1;

@@ -25,6 +25,7 @@ import {
   childSpanContext,
 } from '../services/traceContext';
 import { metricsService } from '../services/metrics';
+import { recordTaskExecution, recordDagExecution } from '../utils/metrics';
 
 const DEFAULT_CONCURRENCY = 3;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -230,6 +231,7 @@ export class Coordinator {
       : null;
 
     updateTaskIfPresent(taskId, { status: 'running' });
+    const dagStartTime = Date.now();
 
     await new Promise<void>(resolve => {
       const finishIfSettled = (): void => {
@@ -246,6 +248,13 @@ export class Coordinator {
           taskId,
           timestamp: now(),
         });
+
+        // Record metrics
+        const durationMs = Math.max(0, Date.now() - dagStartTime);
+        const hasTimeout = dag.some(n => n.error?.toLowerCase().includes('timeout'));
+        const outcome = status === 'completed' ? 'completed' : (hasTimeout ? 'timeout' : 'failed');
+        recordTaskExecution(outcome);
+        recordDagExecution(durationMs);
 
         // Record task failure metric with reason
         if (status === 'failed') {

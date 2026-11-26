@@ -23,7 +23,8 @@ import { getTaskDb } from "../db/tasks";
 import { createPaymentReleaseFn, type StellarReleasePaymentFn } from "../payment";
 import { getGlobalJobQueue, JobWorker, type JobQueue } from "../queue";
 import { createHeartbeatService, type HeartbeatServiceOptions } from "../services/heartbeat";
-import { metricsMiddleware, metricsService } from "../services/metrics";
+import { metricsMiddleware } from "./middleware/metricsMiddleware";
+import { metricsService } from "../services/metrics";
 import type { EventStore } from "../events/eventStore";
 import { createEventStore } from "../events/eventStore";
 import {
