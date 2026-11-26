@@ -15,3 +15,13 @@ export class TokenBudgetExceededError extends Error {
     this.name = 'TokenBudgetExceededError';
   }
 }
+
+export class VeniceTimeoutError extends Error {
+  readonly code = 'venice_timeout';
+  readonly statusCode = 504;
+
+  constructor(timeoutMs: number) {
+    super(`Venice AI request timed out after ${timeoutMs}ms`);
+    this.name = 'VeniceTimeoutError';
+  }
+}
