@@ -1,0 +1,49 @@
+name: Infra Cost
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  infracost:
+    name: Infracost PR comment
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+
+      - name: Set up Infracost
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Generate cost estimate for base (main)
+        run: |
+          git fetch origin main --depth=1
+          git stash
+          git checkout FETCH_HEAD -- infra/ 2>/dev/null || true
+          infracost breakdown \
+            --path infra/ \
+            --format json \
+            --out-file /tmp/infracost-base.json || true
+          git checkout - -- infra/ 2>/dev/null || git stash pop
+
+      - name: Generate cost estimate for PR branch
+        run: |
+          infracost breakdown \
+            --path infra/ \
+            --format json \
+            --out-file /tmp/infracost-pr.json || true
+
+      - name: Post cost delta comment on PR
+        uses: infracost/actions/comment@v3
+        with:
+          path: /tmp/infracost-pr.json
+          compare-to: /tmp/infracost-base.json
+          behavior: update
