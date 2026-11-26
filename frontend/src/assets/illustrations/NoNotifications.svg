@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 160" fill="none" aria-hidden="true">
+  <!-- Background circle -->
+  <circle cx="100" cy="80" r="60" fill="var(--accent-surface, rgba(99,102,241,0.12))"/>
+  <!-- Bell body -->
+  <path d="M100 42 C83 42 72 55 72 70 L72 90 L62 100 L138 100 L128 90 L128 70 C128 55 117 42 100 42 Z" fill="var(--surface-raised, #1a1f2e)" stroke="var(--border-primary, #2a3040)" stroke-width="1.5"/>
+  <!-- Bell clapper -->
+  <path d="M92 100 Q100 110 108 100" stroke="var(--accent, #a78bfa)" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  <!-- Silence lines -->
+  <line x1="118" y1="52" x2="128" y2="44" stroke="var(--border-strong, #475569)" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="123" y1="58" x2="135" y2="55" stroke="var(--border-strong, #475569)" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="82" y1="52" x2="72" y2="44" stroke="var(--border-strong, #475569)" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="77" y1="58" x2="65" y2="55" stroke="var(--border-strong, #475569)" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- Z indicators (all quiet) -->
+  <text x="136" y="78" font-size="10" fill="var(--text-muted, #94a3b8)" font-family="monospace" opacity="0.6">z</text>
+  <text x="142" y="68" font-size="8" fill="var(--text-muted, #94a3b8)" font-family="monospace" opacity="0.4">z</text>
+</svg>
