@@ -1,0 +1,103 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  padding: 1rem;
+}
+
+.modal {
+  background: var(--surface-panel, #0f172a);
+  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.1));
+  border-radius: var(--radius-xl, 1rem);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: 300px;
+  width: 100%;
+  animation: fadeIn 0.15s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.title {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--text-primary, #f1f5f9);
+  margin: 0;
+}
+
+.closeBtn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted, #94a3b8);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 0.25rem;
+  border-radius: var(--radius-sm, 0.25rem);
+  transition: color 0.2s, background 0.2s;
+}
+
+.closeBtn:hover {
+  color: var(--text-primary, #f1f5f9);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.qrWrapper {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-lg, 0.75rem);
+  padding: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.keyLabel {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary, #94a3b8);
+  margin: 0;
+  align-self: flex-start;
+}
+
+.keyValue {
+  font-family: monospace;
+  font-size: 0.6875rem;
+  color: var(--text-primary, #f1f5f9);
+  word-break: break-all;
+  margin: 0;
+  align-self: flex-start;
+}
+
+.hint {
+  font-size: 0.75rem;
+  color: var(--text-muted, #64748b);
+  text-align: center;
+  margin: 0;
+  line-height: 1.4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal {
+    animation: none;
+  }
+}
