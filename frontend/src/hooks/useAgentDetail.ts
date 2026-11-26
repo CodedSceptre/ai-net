@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import useSWR from 'swr';
 import { getAgent, getAgentReputation } from '../services/api';
 import type { AgentRecord } from '../types/api';
 import type { AgentReputation } from '../types/agent';
@@ -76,10 +76,29 @@ export function useAgentDetail(agentId: string): AgentDetailResult {
       mounted = false;
     };
   }, [agentId, fetchKey]);
+  const path = agentId ? `/api/agents/${encodeURIComponent(agentId)}` : null;
+  const agentQuery = useSWR(path, () => getAgent(agentId));
+  const reputationQuery = useSWR(path ? `${path}/reputation` : null, () => getAgentReputation(agentId));
+  const historyQuery = useSWR(path ? `${path}/reputation/history` : null, async () => {
+    const { getAgentReputationHistory } = await import('../services/api');
+    return getAgentReputationHistory(agentId);
+  });
 
+  const agent = agentQuery.data ?? null;
+  const reputation = reputationQuery.data ?? null;
+  const reputationHistory = historyQuery.data ?? [];
+  const reputationHistoryLoading = historyQuery.isLoading;
+  const agentLoading = agentQuery.isLoading;
+  const reputationLoading = reputationQuery.isLoading;
+  const requestError = agent ? null : agentQuery.error;
+  const notFound = requestError?.statusCode === 404 ||
+    (requestError instanceof Error && requestError.message.includes('404'));
+  const error = notFound || !requestError ? null :
+    requestError instanceof Error ? requestError.message : 'Failed to load agent';
   const loading = agentLoading && reputationLoading;
-
-  const refetch = () => setFetchKey((k) => k + 1);
+  const refetch = () => {
+    void Promise.allSettled([agentQuery.mutate(), reputationQuery.mutate(), historyQuery.mutate()]);
+  };
 
   return {
     agent,

@@ -1,3 +1,4 @@
+import { mutate } from 'swr';
 import { NetworkStats, TaskResponse, AgentRecord } from '../types/api';
 import { progressStart, progressDone, progressError } from '../context/RouteProgressContext';
 
@@ -22,17 +23,17 @@ const notifyToast = (message: string, type: 'success' | 'error' | 'warning' | 'i
 
 const getAuthHeader = (): Record<string, string> => {
   const pubKey = localStorage.getItem('wallet_pubkey') || localStorage.getItem('walletAddress');
-  return pubKey ? { 'Authorization': `Bearer ${pubKey}` } : {};
+  return pubKey ? { 'Authorization': `Bearer ${pubKey}`, walletpublickey: pubKey } : {};
 };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, quiet = false): Promise<T> {
   const baseDelay = 1000;
   const maxRetries = 3;
   let retryCount = 0;
   
   const fullUrl = `${BASE_URL}${path}`;
 
-  progressStart();
+  if (!quiet) progressStart();
   try {
   while (true) {
     let response: Response;
@@ -48,11 +49,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         headers,
       });
     } catch (err: unknown) {
-      progressError();
+      if (!quiet) progressError();
       throw err;
     }
 
-    if (response.status === 503 && retryCount < maxRetries) {
+    if (!quiet && response.status === 503 && retryCount < maxRetries) {
       const waitTime = baseDelay * Math.pow(2, retryCount);
       retryCount++;
       notifyToast('Service is temporarily unavailable. Retrying...', 'warning', 4000);
@@ -76,19 +77,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
           message = errorText || message;
         } catch {}
       }
-      progressError();
+      if (!quiet) progressError();
       throw new ApiError(response.status, message, path);
     }
 
+    if (init?.method === 'POST' || init?.method === 'DELETE') {
+      invalidateAfterMutation(path, init.method);
+    }
+
     if (response.status === 204) {
-      progressDone();
+      if (!quiet) progressDone();
       return {} as T;
     }
 
     const contentType = response.headers?.get('content-type');
     const isJson = (contentType && contentType.includes('application/json')) || (typeof response.json === 'function' && typeof response.text !== 'function');
 
-    progressDone();
+    if (!quiet) progressDone();
     if (isJson && typeof response.json === 'function') {
       return response.json() as Promise<T>;
     }
@@ -102,14 +107,33 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   } catch (err) {
     // Ensure counter is balanced for any unexpected throw path
-    progressDone();
+    if (!quiet) progressDone();
     throw err;
   }
 }
 
+function invalidateAfterMutation(path: string, method: 'POST' | 'DELETE') {
+  const agentsChanged = path === '/api/agents/register' || (method === 'DELETE' && path.startsWith('/api/agents/'));
+  const tasksChanged = path === '/api/tasks' || (method === 'DELETE' && path.startsWith('/api/tasks/'));
+  const paymentsChanged = (tasksChanged && method === 'DELETE') || path.startsWith('/api/payments/');
+  if (!agentsChanged && !tasksChanged && !paymentsChanged) return;
+
+  void mutate((key: unknown) => {
+    const url = Array.isArray(key) ? key[0] : key;
+    if (typeof url !== 'string') return false;
+    const resource = url.split('?')[0];
+    return (
+      (agentsChanged && (resource === '/api/agents' || resource.startsWith('/api/agents/'))) ||
+      (tasksChanged && (resource === '/api/tasks' || resource.startsWith('/api/tasks/'))) ||
+      (paymentsChanged && resource === '/api/payments') ||
+      ((tasksChanged || agentsChanged) && resource === '/api/stats/agents')
+    );
+  }).catch(() => undefined);
+}
+
 export const apiClient = {
-  get: <T>(path: string, init?: Omit<RequestInit, 'method'>) =>
-    request<T>(path, { ...init, method: 'GET' }),
+  get: <T>(path: string, init?: Omit<RequestInit, 'method'>, quiet = false) =>
+    request<T>(path, { ...init, method: 'GET' }, quiet),
     
   post: <T>(path: string, body?: unknown, init?: Omit<RequestInit, 'method' | 'body'>) =>
     request<T>(path, {
@@ -123,7 +147,7 @@ export const apiClient = {
 };
 
 export const getStats = async (): Promise<NetworkStats> => {
-  return apiClient.get<NetworkStats>('/api/stats');
+  return apiClient.get<NetworkStats>('/api/stats/agents', undefined, true);
 };
 
 export const getRecentTasks = async (walletAddress: string): Promise<TaskResponse[]> => {
@@ -131,19 +155,20 @@ export const getRecentTasks = async (walletAddress: string): Promise<TaskRespons
 };
 
 export const getAgents = async (): Promise<AgentRecord[]> => {
-  return apiClient.get<AgentRecord[]>('/api/agents');
+  return apiClient.get<AgentRecord[]>('/api/agents', undefined, true);
 };
 
 export const getAgent = async (id: string): Promise<AgentRecord> => {
-  return apiClient.get<AgentRecord>(`/api/agents/${id}`);
+  return apiClient.get<AgentRecord>(`/api/agents/${encodeURIComponent(id)}`, undefined, true);
 };
 
 export const getAgentReputation = async (id: string): Promise<import('../types/agent').AgentReputation> => {
-  return apiClient.get<import('../types/agent').AgentReputation>(`/api/agents/${id}/reputation`);
+  return apiClient.get<import('../types/agent').AgentReputation>(`/api/agents/${encodeURIComponent(id)}/reputation`, undefined, true);
 };
 
 export const getAgentReputationHistory = async (
   id: string,
 ): Promise<import('../types/agent').ReputationHistory[]> => {
   return apiClient.get<import('../types/agent').ReputationHistory[]>(`/api/agents/${encodeURIComponent(id)}/reputation-history`);
+  return apiClient.get<import('../types/agent').ReputationHistory[]>(`/api/agents/${encodeURIComponent(id)}/reputation/history`, undefined, true);
 };

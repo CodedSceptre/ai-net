@@ -46,6 +46,7 @@
     "reactflow": "11.11.4",
     "recharts": "2.13.3",
     "remark-gfm": "^4.0.1",
+    "swr": "^2.4.0",
     "zod": "3.25.76"
   },
   "devDependencies": {

@@ -8,7 +8,7 @@ export function createStatsRouter(db: DbClient) {
   const router = Router();
   const logger = createLogger({ module: "stats" });
   const cache = new StatsCache({
-    ttlMs: 60_000,
+    ttlMs: 30_000,
     computeStats: () => getStats(db),
   });
 
@@ -53,7 +53,7 @@ export function createStatsRouter(db: DbClient) {
    *             schema:
    *               $ref: '#/components/schemas/InternalServerError'
    */
-  router.get('/', async (req: Request, res: Response, next: NextFunction) => {
+  router.get(['/', '/agents'], async (req: Request, res: Response, next: NextFunction) => {
     try {
       const stats = await cache.get();
       return res.status(200).json(stats);

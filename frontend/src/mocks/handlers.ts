@@ -83,7 +83,7 @@ export const handlers = [
   // dev server (no `/api/stats` backend proxy in dev mode), leaving the
   // dashboard stuck on an error toast instead of its real layout — which is
   // both a poor dev experience and unusable as a visual-regression baseline.
-  http.get('/api/stats', () => {
+  http.get('/api/stats/:section?', () => {
     return HttpResponse.json({
       totalAgents: 12,
       totalTasks: 48,
@@ -92,8 +92,8 @@ export const handlers = [
     })
   }),
 
-  http.get('/api/wallets/:address/tasks', () => {
-    return HttpResponse.json([
+  http.get('/api/tasks', () => {
+    return HttpResponse.json({ tasks: [
       {
         taskId: 'mock-task-recent-1',
         prompt: 'Summarize on-chain agent reputation trends.',
@@ -121,7 +121,7 @@ export const handlers = [
         createdAt: '2026-08-19T11:40:00.000Z',
         updatedAt: '2026-08-19T11:41:00.000Z',
       },
-    ])
+    ] })
   }),
 
   http.post('/api/tasks/estimate', async ({ request }) => {

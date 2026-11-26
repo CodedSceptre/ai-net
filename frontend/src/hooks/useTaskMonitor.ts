@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
-import type { TaskResponse, DAGEvent, PaymentEvent } from '../types/api';
-import { apiClient } from '../services/api';
+import { useEffect, useCallback, useRef } from 'react';
+import type { DAGEvent, PaymentEvent } from '../types/api';
+import { useTask } from './useTasks';
+import { useWallet } from '../context/WalletContext';
 import { useTaskWebSocket } from './useTaskWebSocket';
 import { useNodeState } from './useNodeState';
 import { useLiveTaskPayments } from './useLiveTaskPayments';
@@ -18,9 +19,10 @@ export const getAmountForAgent = (agentType?: string): string => {
 };
 
 export const useTaskMonitor = (taskId: string | undefined) => {
-  const [task, setTask] = useState<TaskResponse | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<Error | null>(null);
+  const { publicKey } = useWallet();
+  const { data, isLoading: loading, error: requestError, mutate } = useTask(taskId, publicKey);
+  const task = data ?? null;
+  const error = task ? null : requestError ?? null;
 
   // Initialize sub-hooks
   const nodeState = useNodeState(taskId || '');
@@ -39,12 +41,11 @@ export const useTaskMonitor = (taskId: string | undefined) => {
     outputState.updateOutputFromEvent(event);
     
     // Update task state for global events
-    if (event.type === 'task_completed') {
-      setTask(prev => prev ? { ...prev, status: 'completed', updatedAt: event.timestamp } : null);
-    } else if (event.type === 'task_failed') {
-      setTask(prev => prev ? { ...prev, status: 'failed', updatedAt: event.timestamp } : null);
+    if (event.type === 'task_completed' || event.type === 'task_failed') {
+      const status = event.type === 'task_completed' ? 'completed' : 'failed';
+      void mutate(previous => previous && { ...previous, status, updatedAt: event.timestamp }, false);
     }
-  }, [nodeState, paymentState, outputState]);
+  }, [nodeState, paymentState, outputState, mutate]);
 
   // WebSocket connection
   const { isConnected, status: wsStatus } = useTaskWebSocket({
@@ -52,59 +53,34 @@ export const useTaskMonitor = (taskId: string | undefined) => {
     onMessage: handleWebSocketMessage,
   });
 
-  const fetchTask = async (id: string) => {
-    try {
-      setLoading(true);
-      const data = await apiClient.get<TaskResponse>(`/api/tasks/${id}`);
-      setTask(data);
-      if (data.dag) {
-        // Initialize all sub-hooks with fetched data
-        nodeState.initializeNodes(data.dag);
-        
-        // Populate initial outputs and payment events from completed nodes
-        const initialPayments: PaymentEvent[] = [];
-        const completedNodes = data.dag.filter(node => node.status === 'completed');
-
-        data.dag.forEach(node => {
-          if (node.status === 'completed') {
-            const txHash = (node.result as any)?.txHash || 'mock-hash';
-            initialPayments.push({
-              amount: getAmountForAgent(node.agentType),
-              direction: 'out',
-              counterparty: node.agentType || 'agent',
-              memo: `Payment released for ${node.nodeId}`,
-              timestamp: data.updatedAt || new Date().toISOString(),
-              txHash,
-            });
-          } else if (node.status === 'running') {
-            initialPayments.push({
-              amount: getAmountForAgent(node.agentType),
-              direction: 'out',
-              counterparty: node.agentType || 'agent',
-              memo: `Payment locked for ${node.nodeId}`,
-              timestamp: data.updatedAt || new Date().toISOString(),
-              txHash: '',
-            });
-          }
-        });
-        
-        outputState.initializeOutputs(completedNodes);
-        paymentState.initializePayments(initialPayments);
-      }
-      setError(null);
-    } catch (err: any) {
-      console.error('Failed to fetch task details:', err);
-      setError(err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const dag = task?.dag;
+  const updatedAt = task?.updatedAt;
+  const initializedDag = useRef<typeof dag>(undefined);
+  const { initializeNodes } = nodeState;
+  const { initializeOutputs } = outputState;
+  const { initializePayments } = paymentState;
 
   useEffect(() => {
-    if (!taskId) return;
-    
-    fetchTask(taskId);
-  }, [taskId]);
+    if (initializedDag.current === dag) return;
+    initializedDag.current = dag;
+    if (!dag) return;
+    initializeNodes(dag);
+    initializeOutputs(dag.filter(node => node.status === 'completed'));
+    const initialPayments: PaymentEvent[] = dag.flatMap(node => {
+      if (node.status !== 'completed' && node.status !== 'running') return [];
+      const completed = node.status === 'completed';
+      const result = node.result as { txHash?: string } | undefined;
+      return [{
+        amount: getAmountForAgent(node.agentType),
+        direction: 'out',
+        counterparty: node.agentType || 'agent',
+        memo: `Payment ${completed ? 'released' : 'locked'} for ${node.nodeId}`,
+        timestamp: updatedAt || new Date().toISOString(),
+        txHash: completed ? result?.txHash || 'mock-hash' : '',
+      }];
+    });
+    initializePayments(initialPayments);
+  }, [dag, updatedAt, initializeNodes, initializeOutputs, initializePayments]);
 
   return {
     task,
@@ -116,6 +92,6 @@ export const useTaskMonitor = (taskId: string | undefined) => {
     outputs: outputState.outputs,
     finalResult: outputState.finalResult,
     isConnected,
-    refetch: () => taskId && fetchTask(taskId),
+    refetch: () => taskId ? mutate().catch(() => undefined) : undefined,
   };
 };

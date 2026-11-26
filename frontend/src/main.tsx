@@ -1,5 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import { SWRConfig } from 'swr'
 import App from './App'
 import { NotificationProvider } from './context/NotificationContext'
 import { i18nReady } from './i18n'
@@ -40,9 +41,11 @@ async function prepareApp() {
 prepareApp().then(() => {
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-      <NotificationProvider>
-        <App />
-      </NotificationProvider>
+      <SWRConfig value={{ dedupingInterval: 5_000, revalidateOnFocus: true, errorRetryCount: 3 }}>
+        <NotificationProvider>
+          <App />
+        </NotificationProvider>
+      </SWRConfig>
     </React.StrictMode>,
   )
 })

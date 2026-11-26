@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import type { TaskResponse, NodeStatus } from '../types/api';
-import { apiClient } from '../services/api';
+import { useWallet } from '../context/WalletContext';
+import { useTasks } from './useTasks';
 import { mergePendingTasks } from '../services/optimisticTasks';
 
 // ─── Filter types ────────────────────────────────────────────────────────────
@@ -228,7 +229,7 @@ export interface UseTaskHistoryResult {
 /**
  * Fetches and manages the task history for the connected wallet.
  *
- * Loads tasks from `GET /api/wallets/<address>/tasks` using cursor-based
+ * Loads wallet-scoped tasks from `GET /api/tasks` using offset
  * pagination. Client-side filtering (status, agent type, date range, search)
  * and a zoom window are applied to the full fetched list without additional
  * network requests. Comparison mode lets the caller select up to two tasks for
@@ -245,97 +246,14 @@ export function useTaskHistory(
   updateFilters: (next: Partial<TaskHistoryFilters>) => void,
   resetFilters: () => void
 ): UseTaskHistoryResult {
-  const [serverTasks, setServerTasks] = useState<TaskResponse[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedIds, setSelectedIds] = useState<[string | null, string | null]>([
-    null,
-    null,
-  ]);
-  // Cursor state for incremental loading
-  const [, setNextCursor] = useState<string | null>(null);
-  const [, setHasNextPage] = useState(false);
-
-  // Show recently-submitted tasks immediately, before the API list catches up.
-  // Pending entries expire after ~60s and server records always win on dedupe.
-  const allTasks = useMemo(() => mergePendingTasks(serverTasks), [serverTasks]);
-
-  const fetchTasks = useCallback(async (cursor?: string | null) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const walletAddress =
-        localStorage.getItem('wallet_pubkey') ||
-        localStorage.getItem('walletAddress') ||
-        '';
-
-      if (!walletAddress) {
-        setServerTasks([]);
-        return;
-      }
-
-      // Build cursor-based query params
-      const qs = new URLSearchParams({ limit: '50' });
-      if (cursor) qs.set('cursor', cursor);
-      if (filters.status && filters.status !== 'all') qs.set('status', filters.status);
-
-      const url = `/api/wallets/${walletAddress}/tasks?${qs.toString()}`;
-
-      // Try v2 cursor envelope first, fall back to flat array
-      let fetchedTasks: TaskResponse[] = [];
-      let newCursor: string | null = null;
-      let morePages = false;
-
-      try {
-        type V2Envelope = { data: { items: TaskResponse[]; pagination: { nextCursor: string | null; hasNextPage: boolean } } };
-        const envelope = await apiClient.get<V2Envelope>(url);
-        if (envelope?.data?.items) {
-          fetchedTasks = envelope.data.items;
-          newCursor = envelope.data.pagination.nextCursor ?? null;
-          morePages = envelope.data.pagination.hasNextPage;
-        } else {
-          // Flat array response from v1 / wallet endpoint
-          fetchedTasks = Array.isArray(envelope) ? (envelope as unknown as TaskResponse[]) : [];
-        }
-      } catch {
-        // Fallback: fetch without cursor
-        const fallback = await apiClient.get<TaskResponse[]>(
-          `/api/wallets/${walletAddress}/tasks?limit=200`
-        );
-        fetchedTasks = Array.isArray(fallback) ? fallback : [];
-      }
-
-      setServerTasks((prev) => (cursor ? [...prev, ...fetchedTasks] : fetchedTasks));
-      setNextCursor(newCursor);
-      setHasNextPage(morePages);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load task history');
-    } finally {
-      setLoading(false);
-    }
-  }, [filters.status]);
-
-  useEffect(() => {
-    // Reset and fetch from the start whenever filters change
-    setServerTasks([]);
-    setNextCursor(null);
-    setHasNextPage(false);
-    fetchTasks(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.status]);
-
-  // Initial load (non-status filters are applied client-side)
-  useEffect(() => {
-    fetchTasks(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const refetch = useCallback(() => {
-    setServerTasks([]);
-    setNextCursor(null);
-    setHasNextPage(false);
-    fetchTasks(null);
-  }, [fetchTasks]);
+  const { publicKey } = useWallet();
+  const params = new URLSearchParams({ pageSize: '50' });
+  if (filters.status !== 'all') params.set('status', filters.status);
+  const { data, isLoading: loading, error: requestError, mutate } = useTasks(publicKey, params);
+  const error = !data && requestError ? requestError.message : null;
+  const [selectedIds, setSelectedIds] = useState<[string | null, string | null]>([null, null]);
+  const allTasks = useMemo(() => mergePendingTasks(data ?? []), [data]);
+  const refetch = useCallback(() => { void mutate().catch(() => undefined); }, [mutate]);
 
   // Derive filtered + zoomed list
   const filteredTasks = useMemo(() => {
