@@ -20,6 +20,7 @@ concurrency:
 permissions:
   contents: read
   issues: write
+  pull-requests: read
 
 jobs:
   changes:
@@ -65,9 +66,13 @@ jobs:
               - '.github/workflows/ci.yml'
 
   backend:
-    name: backend
+    name: backend (${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 14
     defaults:
       run:
         working-directory: backend
@@ -76,19 +81,31 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
+        id: node
         with:
-          node-version: 24
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
+      - name: Cache installed dependencies
+        id: dependencies
+        uses: actions/cache@v4
+        with:
+          path: backend/node_modules
+          key: ${{ runner.os }}-${{ runner.arch }}-backend-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('backend/package-lock.json') }}
+
       - name: Install dependencies
+        if: steps.dependencies.outputs.cache-hit != 'true'
         run: npm ci
 
       - name: Lint check
         run: npm run lint
 
-      - name: Type-check and build
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Build
         run: npm run build
 
       - name: Unit tests & coverage
@@ -98,7 +115,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: test-results-backend-unit-${{ github.run_id }}-${{ github.run_attempt }}
+          name: test-results-backend-unit-node-${{ matrix.node }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: backend/test-results-unit.json
           if-no-files-found: warn
           retention-days: 30
@@ -107,7 +124,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: backend-coverage
+          name: backend-coverage-node-${{ matrix.node }}
           path: backend/coverage/
           if-no-files-found: warn
           retention-days: 14
@@ -145,8 +162,38 @@ jobs:
 
   frontend:
     name: frontend
+  backend-summary:
+    name: Backend Node.js matrix summary
+    needs: backend
+    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 2
+    permissions:
+      actions: read
+    steps:
+      - name: Write matrix results
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              ...context.repo,
+              run_id: context.runId,
+              filter: 'latest',
+            });
+            const labels = { success: 'Pass', failure: 'Fail', timed_out: 'Fail', cancelled: 'Cancelled', skipped: 'Skipped' };
+            const rows = [18, 20, 22].map(version => {
+              const job = jobs.find(job => job.name === `backend (${version})`);
+              return [String(version), labels[job?.conclusion] ?? 'Unavailable'];
+            });
+            await core.summary
+              .addHeading('Backend Node.js compatibility')
+              .addTable([[{ data: 'Node.js', header: true }, { data: 'Result', header: true }], ...rows])
+              .write();
+
+  frontend:
+    name: frontend (20)
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
     defaults:
       run:
         working-directory: frontend
@@ -155,13 +202,22 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
+        id: node
         with:
-          node-version: 24
+          node-version: '20'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - name: Cache installed dependencies
+        id: dependencies
+        uses: actions/cache@v4
+        with:
+          path: frontend/node_modules
+          key: ${{ runner.os }}-${{ runner.arch }}-frontend-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('frontend/package-lock.json') }}
+
       - name: Install dependencies
+        if: steps.dependencies.outputs.cache-hit != 'true'
         run: npm ci
 
       - name: Lint check
@@ -193,9 +249,8 @@ jobs:
 
   frontend-accessibility:
     name: frontend-accessibility (axe-core WCAG AA)
-    needs: [frontend]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 14
     container:
       image: mcr.microsoft.com/playwright:v1.61.0-jammy
     env:
@@ -237,6 +292,11 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    timeout-minutes: 14
+    # Pinned to the @playwright/test version resolved in package-lock.json.
+    # Visual baselines are pixel-tied to this image's fonts/rendering stack —
+    # bump this tag in lockstep whenever @playwright/test is upgraded, and
+    # regenerate baselines from the same image (see docs/visual-regression-testing.md).
     container:
       image: mcr.microsoft.com/playwright:v1.61.0-noble
     env:
@@ -324,12 +384,8 @@ jobs:
 
   contracts:
     name: smart-contracts
-    # Run after the lightweight Node jobs so that at most one Rust compilation
-    # is active at a time, preventing the runner (or a local dev laptop) from
-    # being overwhelmed by concurrent cargo builds.
-    needs: [backend, frontend]
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 14
     env:
       # ── Rust resource limits ──────────────────────────────────────────
       # Run only 1 cargo job at a time (one crate compiled in parallel max).
@@ -410,11 +466,11 @@ jobs:
   # Required, decoupled from heavy, with auto-retry (max 3 attempts).
   e2e-backend-smoke:
     name: e2e-backend-smoke (registry/list/create)
-    needs: [backend, changes]
+    needs: changes
     # On PRs run only when backend paths changed; always run on push/main & dispatch
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     defaults:
       run:
         working-directory: backend
@@ -435,7 +491,7 @@ jobs:
       - name: Run backend smoke E2E (with auto-retry)
         uses: nick-fields/retry@v4
         with:
-          timeout_minutes: 12
+          timeout_minutes: 3
           max_attempts: 3
           retry_wait_seconds: 10
           command: cd backend && npx jest --config ../tests/e2e/jest.config.js --runInBand --forceExit --testPathPattern="scenario-a-registration" --json --outputFile=../test-results-backend-smoke.json
@@ -462,10 +518,10 @@ jobs:
   # removal cascades. Required but decoupled from smoke; retries handle flakes.
   e2e-backend-heavy:
     name: e2e-backend-heavy (WS/lifecycle)
-    needs: [backend, changes]
+    needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 12
     defaults:
       run:
         working-directory: backend
@@ -513,10 +569,10 @@ jobs:
   # Required, decoupled from heavy, with retries=2 (config) + outer retry.
   e2e-frontend-smoke:
     name: e2e-frontend-smoke (registry/list/create)
-    needs: [frontend, changes]
+    needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 12
     defaults:
       run:
         working-directory: frontend
@@ -564,10 +620,10 @@ jobs:
   # Required but decoupled from smoke; flaky WS tests get 2 retries in config + outer retry.
   e2e-frontend-heavy:
     name: e2e-frontend-heavy (WS/lifecycle)
-    needs: [frontend, changes]
+    needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 12
     defaults:
       run:
         working-directory: frontend
