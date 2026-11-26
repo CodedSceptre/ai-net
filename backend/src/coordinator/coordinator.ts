@@ -822,8 +822,9 @@ export function createTaskJobHandler(
     // Reset any failed nodes from a previous attempt so retry executes them
     let hasReset = false;
     for (const node of task.dag) {
-      if (node.status === "failed") {
+      if (node.status === "failed" || node.status === "interrupted") {
         node.status = "pending";
+        delete node.interruptedAt;
         node.error = undefined;
         hasReset = true;
       }

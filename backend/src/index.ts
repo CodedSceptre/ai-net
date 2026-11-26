@@ -1,3 +1,6 @@
+import type { Server } from "node:http";
+import { beginShutdown, getDrainCounts, waitForDrain } from "./api/middleware/shutdownMiddleware";
+import { interruptRunningNodes } from "./coordinator";
 /**
  * ai-net backend server entry point.
  *
@@ -67,6 +70,7 @@ async function main() {
     // ── Graceful shutdown ──────────────────────────────────────────────────────
     setupGracefulShutdown(httpServer, close, config, {
       cleanupService,
+      taskResultStorage,
       reconciliationService,
       globalAgentRegistry,
     });
@@ -79,34 +83,14 @@ async function main() {
 
 export interface GracefulShutdownExtras {
   cleanupService?: { stop(): void };
+  taskResultStorage?: { stopCleanup(): void };
   reconciliationService?: { stop(): void };
   globalAgentRegistry?: { shutdown(): void };
 }
 
-/**
- * SIGTERM/SIGINT handler: stop accepting new work, drain in-flight jobs and
- * the WebSocket stream, flush the event store, close every database
- * connection, then exit 0 — or force-exit 1 if any of that takes longer
- * than `SHUTDOWN_TIMEOUT_MS` (env) or `config.GRACEFUL_SHUTDOWN_TIMEOUT` seconds.
- *
- * In-flight tasks are drained (via `closeApp`, which awaits the job
- * worker's stop()) rather than force-failed: anything still running when
- * the drain window elapses stays "active" in the job store and is resumed
- * by the next `JobWorker.start()` (`recoverIncompleteJobs()` resets it to
- * "pending" for retry) — see `docs/e2e-testing.md` and
- * `tests/shutdown.test.ts` for the restart-mid-stream scenario.
- *
- * Shutdown order:
- *  1. closeApp()            — stop HTTP/WS, drain job worker
- *  2. stopAgentSync()       — stop background registry sync
- *  3. extras (cleanup, reconciliation, globalAgentRegistry)
- *  4. markAllOffline()      — mark agents offline in the DB
- *  5. eventBus.store.close() — flush event store
- *  6. closeDb / closeAgentDb / closeTaskDb / closeJobDb — close all databases
- *  7. process.exit(0)
- */
+/** Stop intake, drain active work, then checkpoint and close persistent stores. */
 export function setupGracefulShutdown(
-  httpServer: any,
+  httpServer: Server,
   closeApp: (callback?: () => void) => void,
   config: { GRACEFUL_SHUTDOWN_TIMEOUT?: number },
   extras: GracefulShutdownExtras = {},
@@ -124,28 +108,37 @@ export function setupGracefulShutdown(
     if (isShuttingDown) return;
     isShuttingDown = true;
 
+    beginShutdown();
     logger.info({ signal }, "starting graceful shutdown sequence");
 
-    const forcedTimeout = setTimeout(() => {
-      logger.error({ signal, timeoutMs }, "force-killing timed out shutdown");
-      process.exit(1);
-    }, timeoutMs);
-
+    let timer: NodeJS.Timeout | undefined;
     try {
-      // Phase 1: close HTTP/WS server and drain in-flight job worker
-      logger.info("closing http/ws server");
-      await new Promise<void>((resolve) => {
-        closeApp(() => {
-          logger.info("http/ws server closed");
-          resolve();
-        });
+      const httpClosed = new Promise<void>((resolve) => {
+        if (httpServer.listening) httpServer.close(() => resolve());
+        else resolve();
       });
+      const appClosed = new Promise<void>((resolve) => closeApp(resolve));
 
-      // Phase 2: stop background services
-      logger.info("stopping agent sync and background services");
       stopAgentSync();
       extras.cleanupService?.stop();
+      extras.taskResultStorage?.stopCleanup();
       extras.reconciliationService?.stop();
+
+      const timedOut = await Promise.race([
+        Promise.all([httpClosed, appClosed, waitForDrain()]).then(() => false),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(true), timeoutMs);
+        }),
+      ]);
+      if (timedOut) {
+        logger.warn({ signal, timeoutMs, ...getDrainCounts() }, "shutdown drain timed out");
+        httpServer.closeAllConnections?.();
+        try {
+          interruptRunningNodes();
+        } catch (err) {
+          logger.error({ err }, "failed to mark running DAG nodes interrupted");
+        }
+      }
       extras.globalAgentRegistry?.shutdown();
 
       // Phase 3: mark online agents offline so stale capacity is not advertised
@@ -167,19 +160,21 @@ export function setupGracefulShutdown(
 
       // Phase 5: close all database connections
       logger.info("closing database connections");
-      closeDb();
-      closeAgentDb();
-      closeTaskDb();
+      await Promise.allSettled([closeDb(), closeAgentDb(), closeTaskDb()]).then((results) => {
+        for (const result of results) {
+          if (result.status === "rejected") logger.error({ err: result.reason }, "failed to close database pool");
+        }
+      });
       closeJobDb();
       closeAuthDb();
 
       logger.info({ signal }, "graceful shutdown complete");
-      clearTimeout(forcedTimeout);
-      process.exit(0);
+      process.exit(timedOut ? 1 : 0);
     } catch (error) {
       logger.error({ err: error }, "error during graceful shutdown");
-      clearTimeout(forcedTimeout);
       process.exit(1);
+    } finally {
+      clearTimeout(timer);
     }
   };
 

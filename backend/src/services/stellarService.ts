@@ -1,4 +1,5 @@
 import { createHorizonServer } from "./horizonClient";
+import { trackStellarTransaction } from "../api/middleware/shutdownMiddleware";
 import {
   BASE_FEE,
   Asset,
@@ -119,6 +120,10 @@ export class StellarService {
   }
 
   async submitTransaction(xdr: string): Promise<{ hash: string; success: boolean }> {
+    return trackStellarTransaction(() => this.submitSignedTransaction(xdr));
+  }
+
+  private async submitSignedTransaction(xdr: string): Promise<{ hash: string; success: boolean }> {
     const plan = this.plans.get(xdr);
     let transaction: Transaction;
     try {

@@ -454,7 +454,11 @@ export function createPool(options: PoolOptions): SqlitePool {
     }
 
     try {
-      writer.close();
+      try {
+        writer.pragma("wal_checkpoint(FULL)");
+      } finally {
+        writer.close();
+      }
     } catch {
       // Best effort.
     }

@@ -1,4 +1,5 @@
 import { observePayment, observePaymentFailure } from "../services/dashboardMetrics";
+import { assertStellarTransactionAllowed, trackStellarTransaction } from "../api/middleware/shutdownMiddleware";
 import {
   Keypair,
   Server,
@@ -167,51 +168,68 @@ export class PaymentService {
     amountXLM: number,
     correlationId?: string
   ): Promise<string> {
-    const traceId = correlationId ?? currentTraceId();
-    const span = traceId
-      ? tracingService.startSpan(traceId, 'payment', 'lock', { taskId, nodeId, amountXLM })
-      : null;
+    return trackStellarTransaction(async () => {
+      const traceId = correlationId ?? currentTraceId();
+      const span = traceId
+        ? tracingService.startSpan(traceId, 'payment', 'lock', { taskId, nodeId, amountXLM })
+        : null;
 
-    try {
-      const balanceId = await this.withSequenceRetry(
-        coordinatorKeypair.publicKey(),
-        async () => {
-          const amountStroops = xlmToStroops(amountXLM);
-          const amountStr = stroopsToXlm(amountStroops);
+      try {
+        const balanceId = await this.withSequenceRetry(
+          coordinatorKeypair.publicKey(),
+          async () => {
+            const amountStroops = xlmToStroops(amountXLM);
+            const amountStr = stroopsToXlm(amountStroops);
 
-          /**
-           * Inner helper: load account, build, sign, and submit a lock tx.
-           * Extracted so we can retry once on tx_bad_seq with a freshly loaded
-           * account (and therefore a fresh sequence number).
-           */
-          const buildAndSubmit = async (): Promise<string> => {
-            const account = await withRetry(() =>
-              this.server.loadAccount(coordinatorKeypair.publicKey())
-            );
+            /**
+             * Inner helper: load account, build, sign, and submit a lock tx.
+             * Extracted so we can retry once on tx_bad_seq with a freshly loaded
+             * account (and therefore a fresh sequence number).
+             */
+            const buildAndSubmit = async (): Promise<string> => {
+              const account = await withRetry(() =>
+                this.server.loadAccount(coordinatorKeypair.publicKey())
+              );
 
-            const tx = new TransactionBuilder(account, {
-              fee: BASE_FEE,
-              networkPassphrase: this.networkPassphrase,
-            })
-              .addOperation(
-                Operation.createClaimableBalance({
-                  asset: Asset.native(),
-                  amount: amountStr,
-                  claimants: [
-                    new Claimant(agentPublicKey, Claimant.predicateUnconditional()),
-                    new Claimant(coordinatorKeypair.publicKey(), Claimant.predicateUnconditional()),
-                  ],
-                })
-              )
-              .setTimeout(30)
-              .build();
+              const tx = new TransactionBuilder(account, {
+                fee: BASE_FEE,
+                networkPassphrase: this.networkPassphrase,
+              })
+                .addOperation(
+                  Operation.createClaimableBalance({
+                    asset: Asset.native(),
+                    amount: amountStr,
+                    claimants: [
+                      new Claimant(agentPublicKey, Claimant.predicateUnconditional()),
+                      new Claimant(coordinatorKeypair.publicKey(), Claimant.predicateUnconditional()),
+                    ],
+                  })
+                )
+                .setTimeout(30)
+                .build();
 
-            // Derive balance ID before signing — deterministic from the operation
-            const bid = tx.getClaimableBalanceId(0);
-            tx.sign(coordinatorKeypair);
-            await withRetry(() => this.server.submitTransaction(tx));
+              // Derive balance ID before signing — deterministic from the operation
+              const bid = tx.getClaimableBalanceId(0);
+              tx.sign(coordinatorKeypair);
+              assertStellarTransactionAllowed();
+              await withRetry(() => this.server.submitTransaction(tx));
+              return bid;
+            };
+
+            const bid = await buildAndSubmit();
+
+            this.db.insert({
+              taskId,
+              nodeId,
+              balanceId: bid,
+              status: "locked",
+              amountStroops,
+              txHash: null,
+            });
+
             return bid;
-          };
+          },
+        );
 
           const bid = await buildAndSubmit();
 
@@ -236,6 +254,13 @@ export class PaymentService {
       if (span) tracingService.endSpan(span.spanId, 'failed', { error: String(err) });
       throw err;
     }
+        if (span) tracingService.endSpan(span.spanId, 'completed', { balanceId });
+        return balanceId;
+      } catch (err) {
+        if (span) tracingService.endSpan(span.spanId, 'failed', { error: String(err) });
+        throw err;
+      }
+    });
   }
 
   /**
@@ -262,36 +287,40 @@ export class PaymentService {
     const startedAt = process.hrtime.bigint();
     const record = this.db.findByKey(taskId, nodeId);
     if (!record) throw new Error(`No payment record for task=${taskId} node=${nodeId}`);
+    return trackStellarTransaction(async () => {
+      const record = this.db.findByKey(taskId, nodeId);
+      if (!record) throw new Error(`No payment record for task=${taskId} node=${nodeId}`);
 
-    // Idempotency: return existing hash without a second Stellar tx
-    if (record.status === "released" && record.txHash) {
-      return record.txHash;
-    }
+      // Idempotency: return existing hash without a second Stellar tx
+      if (record.status === "released" && record.txHash) {
+        return record.txHash;
+      }
 
-    const traceId = correlationId ?? currentTraceId();
-    const span = traceId
-      ? tracingService.startSpan(traceId, 'payment', 'release', { taskId, nodeId })
-      : null;
+      const traceId = correlationId ?? currentTraceId();
+      const span = traceId
+        ? tracingService.startSpan(traceId, 'payment', 'release', { taskId, nodeId })
+        : null;
 
-    try {
-      const txHash = await this.withSequenceRetry(
-        coordinatorKeypair.publicKey(),
-        async () => {
-          const account = await withRetry(() => this.server.loadAccount(coordinatorKeypair.publicKey()));
-          const tx = new TransactionBuilder(account, {
-            fee: BASE_FEE,
-            networkPassphrase: this.networkPassphrase,
-          })
-            .addOperation(Operation.claimClaimableBalance({ balanceId: record.balanceId }))
-            .setTimeout(30)
-            .build();
-          tx.sign(coordinatorKeypair);
-          const result = await withRetry(() => this.server.submitTransaction(tx));
-          return (result as unknown as { hash: string }).hash;
-        },
-      );
+      try {
+        const txHash = await this.withSequenceRetry(
+          coordinatorKeypair.publicKey(),
+          async () => {
+            const account = await withRetry(() => this.server.loadAccount(coordinatorKeypair.publicKey()));
+            const tx = new TransactionBuilder(account, {
+              fee: BASE_FEE,
+              networkPassphrase: this.networkPassphrase,
+            })
+              .addOperation(Operation.claimClaimableBalance({ balanceId: record.balanceId }))
+              .setTimeout(30)
+              .build();
+            tx.sign(coordinatorKeypair);
+            assertStellarTransactionAllowed();
+            const result = await withRetry(() => this.server.submitTransaction(tx));
+            return (result as unknown as { hash: string }).hash;
+          },
+        );
 
-      this.db.updateStatus(taskId, nodeId, "released", txHash);
+        this.db.updateStatus(taskId, nodeId, "released", txHash);
 
       observePayment("released", record.amountStroops, Number(process.hrtime.bigint() - startedAt) / 1e9);
 
@@ -308,6 +337,19 @@ export class PaymentService {
       if (span) tracingService.endSpan(span.spanId, 'failed', { error: String(err) });
       throw err;
     }
+        this.hooks.reconciliationHook?.({
+          ...record,
+          status: "released",
+          txHash,
+        });
+
+        if (span) tracingService.endSpan(span.spanId, 'completed', { txHash });
+        return txHash;
+      } catch (err) {
+        if (span) tracingService.endSpan(span.spanId, 'failed', { error: String(err) });
+        throw err;
+      }
+    });
   }
 
   /**
@@ -331,12 +373,13 @@ export class PaymentService {
     nodeId: string,
     coordinatorKeypair: Keypair
   ): Promise<string> {
-    const record = this.db.findByKey(taskId, nodeId);
-    if (!record) throw new Error(`No payment record for task=${taskId} node=${nodeId}`);
+    return trackStellarTransaction(async () => {
+      const record = this.db.findByKey(taskId, nodeId);
+      if (!record) throw new Error(`No payment record for task=${taskId} node=${nodeId}`);
 
-    if (record.status === "released") {
-      throw new PaymentAlreadyReleasedError(taskId, nodeId);
-    }
+      if (record.status === "released") {
+        throw new PaymentAlreadyReleasedError(taskId, nodeId);
+      }
 
     try {
       const txHash = await this.withSequenceRetry(
@@ -351,6 +394,7 @@ export class PaymentService {
             .setTimeout(30)
             .build();
           tx.sign(coordinatorKeypair);
+          assertStellarTransactionAllowed();
           const result = await withRetry(() => this.server.submitTransaction(tx));
           return (result as unknown as { hash: string }).hash;
         },
@@ -363,6 +407,8 @@ export class PaymentService {
       observePaymentFailure();
       throw error;
     }
+      return txHash;
+    });
   }
 
   /**

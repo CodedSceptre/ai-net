@@ -1,3 +1,4 @@
+import { createTaskDb, getTaskDb } from "../db/tasks";
 import type { DAGNode } from "../types/task";
 
 /**
@@ -67,3 +68,7 @@ export function decompose(taskId: string, prompt: string): DAGNode[] {
 
 export { TaskRegistry, taskRegistry } from "./taskRegistry";
 export { AgentMatcher, agentMatcher } from "./matcher";
+
+export function interruptRunningNodes(): void {
+  createTaskDb(getTaskDb()).interruptRunningNodes();
+}
