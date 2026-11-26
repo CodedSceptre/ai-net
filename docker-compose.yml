@@ -35,6 +35,33 @@ services:
     image: node:20-alpine
     container_name: ai-net-contract-deployer
     working_dir: /workspace
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: ai-net-jaeger
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: ai-net-backend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - DATABASE_URL=sqlite:///app/data/ai_net.db
+      - SOROBAN_RPC_URL=http://stellar-standalone:8000/soroban/rpc
+      - STELLAR_HORIZON_URL=http://stellar-standalone:8000
+      - VENICE_API_KEY=${VENICE_API_KEY:-mock_local_key}
+      - SKIP_STELLAR_ACCOUNT_VERIFY=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+      - OTEL_SERVICE_NAME=ai-net-backend
+      - OTEL_TRACES_SAMPLER=always_on
     volumes:
       - .:/workspace
     environment:
@@ -88,6 +115,7 @@ services:
         condition: service_healthy
       contract-deployer:
         condition: service_completed_successfully
+      jaeger:
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/health').then(() => process.exit(0)).catch(() => process.exit(1))\" || exit 1"]
       interval: 10s
