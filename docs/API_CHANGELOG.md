@@ -1,6 +1,6 @@
 # API Changelog
 
-This document tracks all changes to the ai-net REST API across releases, along with the versioning policy, deprecation schedule, and migration examples for breaking changes.
+This document tracks all changes to the ai-net REST API across releases, along with the versioning policy, deprecation schedule, header negotiation guide, and migration examples for breaking changes.
 
 > For general migration guidance, runtime event schema changes, and SDK upgrade walkthroughs, see also [MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md).
 > For the full endpoint reference, see [API_REFERENCE.md](./API_REFERENCE.md).
@@ -42,9 +42,11 @@ The following are **not** breaking changes and do not require a new version:
 
 ### Deprecation Timeline
 
-1. **Announcement** — A deprecation notice is published in this changelog and on the `Deprecation` and `Sunset` HTTP response headers at least **30 days** before the new version ships.
-2. **Dual support window** — Both the old and new versions run in parallel for **90 days** after the new version launches.
-3. **Sunset** — After 90 days, the deprecated version returns `410 Gone` with a `Sunset` header pointing to the migration guide URL.
+1. **Announcement** — A deprecation notice is published in this changelog and on the `Deprecation` and `Sunset` HTTP response headers at least **6 months** before the new version ships. This advance-announcement window gives consumers time to plan the migration before the new version even exists.
+2. **Dual support window** — Both the old and new versions run in parallel for **90 days** after the new version launches. During this period requests to the deprecated version succeed but carry `Deprecation: true` and `Sunset: <date>` response headers.
+3. **Sunset** — After the 90-day concurrent support window ends, the deprecated version returns `410 Gone` with a `Sunset` header pointing to the migration guide URL.
+
+> **Summary of timelines:** 6 months advance notice → new version ships → 90-day dual-support window → sunset.
 
 Consumers should check response headers on every request:
 
@@ -63,6 +65,68 @@ https://api.testnet.ai-net.epta-node.io/api/v1/agents
 ```
 
 When v2 ships, your v1 URLs continue to work until the sunset date. Update your base URL to adopt the new version on your own schedule within the deprecation window.
+
+---
+
+## Version Negotiation via API-Version Header
+
+In addition to URL-path versioning, the server supports **header-based version negotiation** for clients that share a single base URL across versions.
+
+### Request Header: `API-Version`
+
+Clients specify the desired API version using the `API-Version` request header:
+
+```http
+API-Version: 2.0
+```
+
+Accepted values: `1.0`, `1.1`, `2.0`
+
+If the header is omitted the server defaults to `1.0` for backward compatibility. This default is intentional: existing clients that pre-date the header requirement continue to work without changes.
+
+### Response Headers
+
+The server always echoes the **negotiated** version back so clients can confirm which version was actually applied:
+
+| Response Header | Description |
+|---|---|
+| `X-API-Version` | The API version the server applied to this request (e.g. `1.0`, `2.0`) |
+| `Deprecation` | `true` when the negotiated version is older than the current major version |
+| `Sunset` | ISO-8601 date after which the deprecated version will return `410 Gone` |
+
+`Deprecation` and `Sunset` are only present when the negotiated version is deprecated (i.e. its major version is less than the current latest major version). Clients should log a warning whenever they observe `Deprecation: true`.
+
+### Error: Unsupported Version
+
+Requesting a version that is not in the supported set returns `400 Bad Request`:
+
+```json
+{
+  "error": {
+    "message": "Unsupported API version: \"3.0\". Supported versions: 1.0, 1.1, 2.0",
+    "code": "UNSUPPORTED_API_VERSION",
+    "supportedVersions": ["1.0", "1.1", "2.0"]
+  }
+}
+```
+
+### curl Example
+
+```bash
+# Negotiate version 2.0 explicitly
+curl -s http://localhost:3000/api/agents \
+  -H "API-Version: 2.0"
+
+# Inspect version response headers
+curl -sI http://localhost:3000/api/agents \
+  -H "API-Version: 1.0"
+# HTTP/1.1 200 OK
+# X-API-Version: 1.0
+# Deprecation: true
+# Sunset: 2026-12-01
+```
+
+> **Header vs. URL path:** Both mechanisms are supported simultaneously. When you use the `API-Version` header with a versioned URL path (`/api/v2/…`), the URL path takes precedence for routing. Use the header approach when you want to test a different version against a shared base URL, or when your HTTP client library makes dynamic path construction inconvenient.
 
 ---
 
@@ -221,6 +285,211 @@ Initial stable release of the ai-net REST API.
 | `POST` | `/api/v1/agents` | Register agent |
 | `POST` | `/api/v1/tasks` | Submit task |
 | `GET` | `/api/v1/tasks/{id}` | Task status and output |
+
+---
+
+### v0.3.0 — 2026-03-01 *(pre-stable)*
+
+This release completed the DAG execution model and introduced the v2 node schema. It is a **breaking change** from the flat node structure used in v0.1–v0.2.
+
+#### Changed
+
+- **Breaking** — DAG node schema changed from a flat, implicit structure (v1) to an explicit typed structure (v2). The new schema aligns with the canonical `DAGNode` interface in the codebase.
+
+  **Before (v0.1–v0.2 flat schema):**
+  ```typescript
+  interface DAGNodeV1 {
+    id: string;           // was "id", not "nodeId"
+    agentType: string;
+    dependsOn: string[];  // was "dependsOn", not "dependencies"
+    state: string;        // was "state" (e.g. "PENDING", "DONE", "ERROR")
+    output?: unknown;     // was "output", not "result"
+  }
+  ```
+
+  **After (v0.3+ canonical schema):**
+  ```typescript
+  interface DAGNode {
+    nodeId: string;         // renamed from "id"
+    type: string;           // renamed from "agentType"
+    dependencies: string[]; // renamed from "dependsOn"
+    status: NodeStatus;     // renamed from "state"; values also changed (see below)
+    result?: unknown;       // renamed from "output"
+    error?: string;
+    prompt?: string;
+    description?: string;
+  }
+
+  // NodeStatus values (node-level, used during DAG execution)
+  type NodeStatus = "pending" | "running" | "completed" | "failed";
+  ```
+
+  The `status` field values changed from uppercase (`"PENDING"`, `"RUNNING"`, `"DONE"`, `"ERROR"`) to lowercase (`"pending"`, `"running"`, `"completed"`, `"failed"`). Note that `"DONE"` became `"completed"` and `"ERROR"` became `"failed"`.
+
+  **Migration:**
+  ```typescript
+  // Before — accessing a node result
+  const node = task.dag.find(n => n.id === targetId);
+  if (node?.state === 'DONE') {
+    console.log(node.output);
+  }
+
+  // After — using the canonical DAGNode schema
+  const node = task.dag.find(n => n.nodeId === targetId);
+  if (node?.status === 'completed') {
+    console.log(node.result);
+  }
+
+  // Compatibility shim — if you must handle both schemas during migration:
+  function getNodeResult(node: DAGNodeV1 | DAGNode): unknown {
+    // v2 nodes have "nodeId"; v1 nodes have "id"
+    if ('nodeId' in node) {
+      return (node as DAGNode).result;
+    }
+    return (node as DAGNodeV1).output;
+  }
+
+  function isNodeComplete(node: DAGNodeV1 | DAGNode): boolean {
+    if ('nodeId' in node) {
+      return (node as DAGNode).status === 'completed';
+    }
+    // v1 used uppercase "DONE"
+    return (node as DAGNodeV1).state === 'DONE';
+  }
+  ```
+
+  Consumers reading the `dagJson` field from `GET /api/v1/tasks` or inspecting the `dag` array from `GET /api/v1/tasks/{id}` must update their field references and status comparisons before upgrading.
+
+---
+
+### v0.2.0 — 2026-02-01 *(pre-stable)*
+
+#### Changed
+
+- **Breaking** — Task status enum values renamed. The old uppercase status names used by the queue system were replaced with lowercase string literals to align with the canonical `TaskStatus` type.
+
+  **Old values (v0.1):** `"QUEUED"`, `"RUNNING"`, `"DONE"`, `"CANCELLED"`, `"ERROR"`
+
+  **New values (v0.2+):**
+
+  | Old | New |
+  |---|---|
+  | `"QUEUED"` | `"queued"` |
+  | `"RUNNING"` | `"running"` |
+  | `"DONE"` | `"completed"` |
+  | `"CANCELLED"` | `"cancelled"` |
+  | `"ERROR"` | `"failed"` |
+
+  The canonical `TaskStatus` type is: `"queued" | "running" | "completed" | "cancelled" | "failed"`.
+
+  This change affects every field named `status` on task objects returned by `GET /api/v1/tasks` and `GET /api/v1/tasks/{id}`, and every SSE event payload from `GET /api/v1/tasks/{id}/stream`.
+
+  **Before (v0.1):**
+  ```typescript
+  // Old TaskStatus type
+  type TaskStatus = "QUEUED" | "RUNNING" | "DONE" | "CANCELLED" | "ERROR";
+
+  function isTerminal(status: TaskStatus): boolean {
+    return status === "DONE" || status === "CANCELLED" || status === "ERROR";
+  }
+  ```
+
+  **After (v0.2+):**
+  ```typescript
+  // Current TaskStatus type
+  type TaskStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
+
+  function isTerminal(status: TaskStatus): boolean {
+    return status === "completed" || status === "cancelled" || status === "failed";
+  }
+  ```
+
+  **Compatibility shim** — if you are consuming both old and new task records during the transition period, normalize before comparing:
+
+  ```typescript
+  const STATUS_MAP: Record<string, TaskStatus> = {
+    QUEUED: "queued",
+    RUNNING: "running",
+    DONE: "completed",
+    CANCELLED: "cancelled",
+    ERROR: "failed",
+  };
+
+  function normalizeStatus(raw: string): TaskStatus {
+    return (STATUS_MAP[raw] ?? raw) as TaskStatus;
+  }
+  ```
+
+---
+
+### v0.1.0 — 2026-01-01 *(initial beta)*
+
+#### Added
+
+- Initial beta release of the ai-net REST API.
+- `GET /health` — basic process liveness.
+- `GET /api/v1/agents` — flat agent listing (no pagination).
+- `POST /api/v1/agents` — agent registration.
+- `POST /api/v1/tasks` — task submission.
+- `GET /api/v1/tasks/{id}` — task status polling.
+
+#### Security
+
+- **Breaking** — Authentication scheme migrated from a custom `X-Wallet-Key` request header to the standard `Authorization: Bearer <token>` scheme. The custom header was removed entirely; requests using it now return `401 Unauthorized`.
+
+  This change was necessary to align with industry-standard JWT handling, enable proxy-level authentication, and support the token refresh flow introduced in this release.
+
+  **Before (original beta — custom header):**
+  ```bash
+  curl -s http://localhost:3000/api/v1/tasks \
+    -H "X-Wallet-Key: GBZXN7PIRZGNMHGA728XZVOG2GUFIDLAZ6AF2I2MD2OCYTAF2K1K4AAA"
+  ```
+
+  ```typescript
+  // Before — attaching auth in a TypeScript HTTP client
+  const response = await fetch('/api/v1/tasks', {
+    headers: {
+      'X-Wallet-Key': walletPublicKey,
+    },
+  });
+  ```
+
+  **After (v0.1.0+ — standard Bearer token):**
+  ```bash
+  # Step 1: obtain a token
+  curl -s -X POST http://localhost:3000/api/auth/token \
+    -H "Content-Type: application/json" \
+    -d '{
+      "walletPublicKey": "GBZXN7PIRZGNMHGA728XZVOG2GUFIDLAZ6AF2I2MD2OCYTAF2K1K4AAA",
+      "deviceId": "device-uuid-1234"
+    }'
+
+  # Step 2: use the returned accessToken
+  curl -s http://localhost:3000/api/v1/tasks \
+    -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  ```
+
+  ```typescript
+  // After — TypeScript client using Bearer token
+  async function getToken(walletPublicKey: string, deviceId: string): Promise<string> {
+    const res = await fetch('/api/auth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ walletPublicKey, deviceId }),
+    });
+    const { accessToken } = await res.json();
+    return accessToken;
+  }
+
+  const token = await getToken(walletPublicKey, deviceId);
+  const response = await fetch('/api/v1/tasks', {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+    },
+  });
+  ```
+
+  Tokens expire after 15 minutes. Use `POST /api/auth/refresh` to rotate them without re-authenticating.
 
 ---
 
