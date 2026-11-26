@@ -238,3 +238,7 @@ docker pull ghcr.io/<owner>/ai-net/backend:staging
 # Or a specific commit
 docker pull ghcr.io/<owner>/ai-net/backend:sha-<full-commit-sha>
 ```
+
+## Troubleshooting
+
+See the [troubleshooting FAQ](FAQ.md) for common developer and operator errors.
