@@ -35,9 +35,7 @@ mod errors;
 
 pub use errors::Error;
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, Vec};
 
 // ─── Scoring constants ────────────────────────────────────────────────────────
 
@@ -59,6 +57,12 @@ const TTL_THRESHOLD: u32 = 50_000;
 const TTL_EXTEND_TO: u32 = 241_920;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PenaltyReason {
+    SLABreach,
+}
 
 /// Per-agent reputation record.
 #[contracttype]
@@ -152,13 +156,11 @@ fn save_score(env: &Env, score: &ReputationScore) {
     env.storage()
         .persistent()
         .set(&DataKey::Reputation(score.agent_id.clone()), score);
-    env.storage()
-        .persistent()
-        .extend_ttl(
-            &DataKey::Reputation(score.agent_id.clone()),
-            TTL_THRESHOLD,
-            TTL_EXTEND_TO,
-        );
+    env.storage().persistent().extend_ttl(
+        &DataKey::Reputation(score.agent_id.clone()),
+        TTL_THRESHOLD,
+        TTL_EXTEND_TO,
+    );
 }
 
 /// Apply compound time-decay for `weeks_elapsed` weeks:
@@ -276,6 +278,29 @@ impl ReputationContract {
     }
 
     // ── Core operations ───────────────────────────────────────────────────────
+
+    pub fn apply_penalty(
+        env: Env,
+        caller: Address,
+        agent_id: Symbol,
+        reason: PenaltyReason,
+    ) -> Result<(), Error> {
+        require_initialized(&env)?;
+        if !is_authorized_caller(&env, &caller) {
+            return Err(Error::Unauthorized);
+        }
+        caller.require_auth();
+        let mut rep = load_or_create_score(&env, &agent_id);
+        rep.score = rep.score.saturating_sub(FAILURE_POINTS).max(0);
+        rep.failed_tasks = rep.failed_tasks.saturating_add(1);
+        rep.last_activity = env.ledger().timestamp();
+        save_score(&env, &rep);
+        env.events().publish(
+            (symbol_short!("reputat"), symbol_short!("penalty")),
+            (agent_id, reason, rep.score),
+        );
+        Ok(())
+    }
 
     /// Record a task outcome for an agent.
     ///

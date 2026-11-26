@@ -24,6 +24,38 @@ pub enum TaskStatus {
     Running = 1,
     Completed = 2,
     Failed = 3,
+    Verified = 4,
+    SLAViolated = 5,
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SlaStatus {
+    Ok,
+    Violated,
+}
+
+#[contracttype]
+#[derive(Clone, Copy)]
+pub enum PenaltyReason {
+    SLABreach,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SlaSettlement {
+    pub escrow_task: Symbol,
+    pub escrow_node: Symbol,
+    pub agent: Address,
+    pub agent_id: Symbol,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SlaViolatedEvent {
+    pub task_id: BytesN<32>,
+    pub agent_id: Symbol,
+    pub deadline: u64,
 }
 
 /// Stored state for a single task.
@@ -41,6 +73,8 @@ pub struct TaskMetadata {
     pub compressed_dag: Bytes,
     pub status: TaskStatus,
     pub created_at: u64,
+    /// Zero for tasks without an SLA.
+    pub sla_deadline: u64,
     pub expires_at: u64,
     /// Oracle-quoted price in stroops, stamped at creation time.
     /// `None` if no OracleManager is configured.
@@ -81,6 +115,9 @@ pub enum DataKey {
     ReputationContract,
     /// Recorded weighted task assignment result.
     TaskAssignment(BytesN<32>),
+    TaskCreator(BytesN<32>),
+    SlaSettlement(BytesN<32>),
+    PaymentEscrow,
 }
 
 /// Emitted exactly once per successful `store_task_metadata` call, under
@@ -188,4 +225,10 @@ pub enum Error {
     TaskNotCompleted = 18,
     /// Candidates list for assignment cannot be empty.
     EmptyCandidates = 19,
+    TaskAlreadyResolved = 20,
+    InvalidSlaDeadline = 21,
+    SlaAlreadySet = 22,
+    SlaNotViolated = 23,
+    SlaSettlementMissing = 24,
+    SlaContractsNotConfigured = 25,
 }

@@ -1571,7 +1571,9 @@ name = "task-store"
 version = "0.1.0"
 dependencies = [
  "oracle-manager",
+ "payment_escrow",
  "price-oracle",
+ "reputation",
  "soroban-sdk",
 ]
 

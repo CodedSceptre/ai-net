@@ -34,15 +34,15 @@
 mod types;
 
 pub use types::{
-    CoordinatorSetEvent, DataKey, Error, OracleManagerSetEvent, TaskAssignedEvent,
-    TaskAssignmentRecord, TaskCreatedEvent, TaskFinalizedEvent, TaskMetadata, TaskStatus,
-    TaskUpdatedEvent, DEFAULT_TTL_DAYS, LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES, MAX_TTL_DAYS,
-    TASK_LIFECYCLE_EVENT_VERSION,
+    CoordinatorSetEvent, DataKey, Error, OracleManagerSetEvent, PenaltyReason, SlaSettlement,
+    SlaStatus, SlaViolatedEvent, TaskAssignedEvent, TaskAssignmentRecord, TaskCreatedEvent,
+    TaskFinalizedEvent, TaskMetadata, TaskStatus, TaskUpdatedEvent, DEFAULT_TTL_DAYS,
+    LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES, MAX_TTL_DAYS, TASK_LIFECYCLE_EVENT_VERSION,
 };
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
-    Val, Vec,
+    contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, IntoVal, Map, String,
+    Symbol, TryIntoVal, Val, Vec,
 };
 
 const SECONDS_PER_DAY: u64 = 86_400;
@@ -58,17 +58,41 @@ fn is_expired(env: &Env, metadata: &TaskMetadata) -> bool {
 
 fn read_metadata(env: &Env, task_id: &BytesN<32>) -> Result<TaskMetadata, Error> {
     let key = DataKey::Task(task_id.clone());
-    let metadata: TaskMetadata = env
+    let mut fields: Map<Symbol, Val> = env
         .storage()
         .persistent()
         .get(&key)
         .ok_or(Error::NotFound)?;
+    let deadline = Symbol::new(env, "sla_deadline");
+    if !fields.contains_key(deadline.clone()) {
+        fields.set(deadline, 0u64.into_val(env));
+    }
+    let value: Val = fields.into_val(env);
+    let metadata = value.try_into_val(env).map_err(|_| Error::NotFound)?;
 
     if is_expired(env, &metadata) {
         return Err(Error::Expired);
     }
 
     Ok(metadata)
+}
+
+fn sla_resolved(status: TaskStatus) -> bool {
+    matches!(
+        status,
+        TaskStatus::Completed | TaskStatus::Verified | TaskStatus::SLAViolated
+    )
+}
+
+fn sla_status(env: &Env, task: &TaskMetadata) -> SlaStatus {
+    if task.sla_deadline != 0
+        && env.ledger().timestamp() > task.sla_deadline
+        && !matches!(task.status, TaskStatus::Completed | TaskStatus::Verified)
+    {
+        SlaStatus::Violated
+    } else {
+        SlaStatus::Ok
+    }
 }
 
 fn has_duplicate_agents(agents: &Vec<Address>) -> bool {
@@ -293,8 +317,14 @@ impl TaskStoreContract {
     pub fn set_reputation_contract(env: Env, contract: Option<Address>) -> Result<(), Error> {
         require_admin(&env)?;
         match &contract {
-            Some(addr) => env.storage().instance().set(&DataKey::ReputationContract, addr),
-            None => env.storage().instance().remove(&DataKey::ReputationContract),
+            Some(addr) => env
+                .storage()
+                .instance()
+                .set(&DataKey::ReputationContract, addr),
+            None => env
+                .storage()
+                .instance()
+                .remove(&DataKey::ReputationContract),
         }
         Ok(())
     }
@@ -369,7 +399,10 @@ impl TaskStoreContract {
         env.storage().persistent().set(&key, &metadata);
 
         env.events().publish(
-            (symbol_short!("task_meta"), Symbol::new(&env, "task_assigned")),
+            (
+                symbol_short!("task_meta"),
+                Symbol::new(&env, "task_assigned"),
+            ),
             TaskAssignedEvent {
                 version: TASK_LIFECYCLE_EVENT_VERSION,
                 task_id: task_id.clone(),
@@ -403,7 +436,10 @@ impl TaskStoreContract {
     }
 
     /// Read the budget and reserve price for a task.
-    pub fn get_task_budget(env: Env, task_id: BytesN<32>) -> Result<(Option<i128>, Option<i128>), Error> {
+    pub fn get_task_budget(
+        env: Env,
+        task_id: BytesN<32>,
+    ) -> Result<(Option<i128>, Option<i128>), Error> {
         let metadata = read_metadata(&env, &task_id)?;
         Ok((metadata.max_budget, metadata.reserve_price))
     }
@@ -557,6 +593,7 @@ impl TaskStoreContract {
             compressed_dag,
             status: TaskStatus::Pending,
             created_at,
+            sla_deadline: 0,
             expires_at,
             quoted_price_stroops,
             price_pair: resolved_pair,
@@ -566,6 +603,11 @@ impl TaskStoreContract {
 
         env.storage().persistent().set(&key, &metadata);
         let ledgers = ttl_ledgers(retention_days);
+        let creator_key = DataKey::TaskCreator(task_id.clone());
+        env.storage().persistent().set(&creator_key, &submitter);
+        env.storage()
+            .persistent()
+            .extend_ttl(&creator_key, ledgers.saturating_sub(1), ledgers);
         env.storage()
             .persistent()
             .extend_ttl(&key, ledgers.saturating_sub(1), ledgers);
@@ -583,6 +625,127 @@ impl TaskStoreContract {
             },
         );
 
+        Ok(())
+    }
+
+    pub fn set_payment_escrow(env: Env, escrow: Address) -> Result<(), Error> {
+        require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::PaymentEscrow, &escrow);
+        Ok(())
+    }
+
+    /// Set the deadline once while the task is pending.
+    pub fn set_sla(env: Env, task_id: BytesN<32>, deadline_timestamp: u64) -> Result<(), Error> {
+        let mut task = read_metadata(&env, &task_id)?;
+        let creator: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TaskCreator(task_id.clone()))
+            .ok_or(Error::Unauthorized)?;
+        creator.require_auth();
+        if task.sla_deadline != 0 {
+            return Err(Error::SlaAlreadySet);
+        }
+        if task.status != TaskStatus::Pending
+            || deadline_timestamp <= env.ledger().timestamp()
+            || deadline_timestamp >= task.expires_at.saturating_sub(1)
+        {
+            return Err(Error::InvalidSlaDeadline);
+        }
+        task.sla_deadline = deadline_timestamp;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Task(task_id), &task);
+        Ok(())
+    }
+
+    /// Bind the escrow and reputation identifiers managed by the coordinator.
+    pub fn bind_sla_settlement(
+        env: Env,
+        task_id: BytesN<32>,
+        settlement: SlaSettlement,
+    ) -> Result<(), Error> {
+        require_coordinator(&env)?;
+        let task = read_metadata(&env, &task_id)?;
+        if sla_resolved(task.status) {
+            return Err(Error::TaskAlreadyResolved);
+        }
+        if !task.assigned_agents.contains(&settlement.agent) {
+            return Err(Error::NotAssignedAgent);
+        }
+        let key = DataKey::SlaSettlement(task_id);
+        if env.storage().persistent().has(&key) {
+            return Err(Error::AlreadyExists);
+        }
+        env.storage().persistent().set(&key, &settlement);
+        let ledgers = ttl_ledgers(MAX_TTL_DAYS);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ledgers.saturating_sub(1), ledgers);
+        Ok(())
+    }
+
+    pub fn check_sla(env: Env, task_id: BytesN<32>) -> Result<SlaStatus, Error> {
+        Ok(sla_status(&env, &read_metadata(&env, &task_id)?))
+    }
+
+    pub fn enforce_sla(env: Env, task_id: BytesN<32>) -> Result<(), Error> {
+        let mut task = read_metadata(&env, &task_id)?;
+        if sla_resolved(task.status) {
+            return Err(Error::TaskAlreadyResolved);
+        }
+        if sla_status(&env, &task) != SlaStatus::Violated {
+            return Err(Error::SlaNotViolated);
+        }
+        let instance = env.storage().instance();
+        let escrow: Address = instance
+            .get(&DataKey::PaymentEscrow)
+            .ok_or(Error::SlaContractsNotConfigured)?;
+        let reputation: Address = instance
+            .get(&DataKey::ReputationContract)
+            .ok_or(Error::SlaContractsNotConfigured)?;
+        let storage = env.storage().persistent();
+        let settlement: SlaSettlement = storage
+            .get(&DataKey::SlaSettlement(task_id.clone()))
+            .ok_or(Error::SlaSettlementMissing)?;
+        let creator: Address = storage
+            .get(&DataKey::TaskCreator(task_id.clone()))
+            .ok_or(Error::SlaSettlementMissing)?;
+
+        // A failed cross-contract invocation rolls back the status and any refund.
+        task.status = TaskStatus::SLAViolated;
+        storage.set(&DataKey::Task(task_id.clone()), &task);
+        env.invoke_contract::<()>(
+            &escrow,
+            &symbol_short!("refund"),
+            soroban_sdk::vec![
+                &env,
+                settlement.escrow_task.into_val(&env),
+                settlement.escrow_node.into_val(&env),
+                creator.into_val(&env),
+                settlement.agent.into_val(&env)
+            ],
+        );
+        env.invoke_contract::<()>(
+            &reputation,
+            &Symbol::new(&env, "apply_penalty"),
+            soroban_sdk::vec![
+                &env,
+                env.current_contract_address().into_val(&env),
+                settlement.agent_id.into_val(&env),
+                PenaltyReason::SLABreach.into_val(&env)
+            ],
+        );
+        env.events().publish(
+            (Symbol::new(&env, "SLAViolated"),),
+            SlaViolatedEvent {
+                task_id,
+                agent_id: settlement.agent_id,
+                deadline: task.sla_deadline,
+            },
+        );
         Ok(())
     }
 
@@ -699,6 +862,118 @@ mod test {
             &dag,
             &ttl_days,
             &None,
+        );
+    }
+
+    #[test]
+    fn sla_allows_on_time_completion_and_rejects_resolved_tasks() {
+        let f = fixture();
+        store(&f, 0);
+        let deadline = f.env.ledger().timestamp() + 10;
+        f.client.set_sla(&f.task_id, &deadline);
+        f.env.ledger().set_timestamp(deadline);
+        assert_eq!(f.client.check_sla(&f.task_id), SlaStatus::Ok);
+        assert_eq!(
+            f.client.try_enforce_sla(&f.task_id),
+            Err(Ok(Error::SlaNotViolated))
+        );
+        f.client
+            .update_task_status(&f.task_id, &f.agent, &TaskStatus::Running);
+        f.client
+            .update_task_status(&f.task_id, &f.agent, &TaskStatus::Completed);
+        f.env.ledger().set_timestamp(deadline + 1);
+        assert_eq!(f.client.check_sla(&f.task_id), SlaStatus::Ok);
+        assert_eq!(
+            f.client.try_enforce_sla(&f.task_id),
+            Err(Ok(Error::TaskAlreadyResolved))
+        );
+    }
+
+    #[test]
+    fn missed_sla_refunds_and_penalizes_without_caller_authorization() {
+        use payment_escrow::{EscrowStatus, PaymentEscrowContract, PaymentEscrowContractClient};
+        use reputation::{
+            ReputationContract, ReputationContractClient, FAILURE_POINTS, INITIAL_SCORE,
+        };
+        use soroban_sdk::{token, TryFromVal};
+
+        let f = fixture();
+        store(&f, 0);
+        let admin = Address::generate(&f.env);
+        f.client.initialize(&admin);
+        f.client.set_coordinator(&admin);
+        let escrow_id = f.env.register(PaymentEscrowContract, ());
+        let escrow = PaymentEscrowContractClient::new(&f.env, &escrow_id);
+        escrow.initialize(&admin);
+        let asset = f
+            .env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token = token::Client::new(&f.env, &asset);
+        token::StellarAssetClient::new(&f.env, &asset).mint(&f.submitter, &100);
+        f.client.set_payment_escrow(&escrow_id);
+        escrow.configure_sla_refunds(&f.client.address, &asset);
+
+        let rep_id = f.env.register(ReputationContract, ());
+        let rep = ReputationContractClient::new(&f.env, &rep_id);
+        rep.initialize(&admin);
+        rep.add_authorized_caller(&f.client.address);
+        f.client.set_reputation_contract(&Some(rep_id));
+
+        let settlement = SlaSettlement {
+            escrow_task: symbol_short!("task"),
+            escrow_node: symbol_short!("node"),
+            agent: f.agent.clone(),
+            agent_id: symbol_short!("agent"),
+        };
+        let deadline = f.env.ledger().timestamp() + 10;
+        f.client.set_sla(&f.task_id, &deadline);
+        f.client.bind_sla_settlement(&f.task_id, &settlement);
+        escrow.lock_funds(
+            &settlement.escrow_task,
+            &settlement.escrow_node,
+            &f.submitter,
+            &f.agent,
+            &100,
+        );
+        assert_eq!(token.balance(&f.submitter), 0);
+        f.env.ledger().set_timestamp(deadline + 1);
+        assert_eq!(f.client.check_sla(&f.task_id), SlaStatus::Violated);
+        f.env.mock_auths(&[]);
+        f.client.enforce_sla(&f.task_id);
+
+        assert_eq!(token.balance(&f.submitter), 100);
+        assert_eq!(
+            escrow
+                .get_escrow(&settlement.escrow_task, &settlement.escrow_node)
+                .status,
+            EscrowStatus::Refunded
+        );
+        assert_eq!(
+            rep.get_score(&settlement.agent_id),
+            INITIAL_SCORE - FAILURE_POINTS
+        );
+        assert_eq!(
+            f.client.get_task_status(&f.task_id),
+            TaskStatus::SLAViolated
+        );
+        let (contract, topics, data) = f.env.events().all().last().unwrap();
+        assert_eq!(contract, f.client.address);
+        assert_eq!(
+            topics,
+            soroban_sdk::vec![&f.env, Symbol::new(&f.env, "SLAViolated").into_val(&f.env)]
+        );
+        assert_eq!(
+            SlaViolatedEvent::try_from_val(&f.env, &data).unwrap(),
+            SlaViolatedEvent {
+                task_id: f.task_id.clone(),
+                agent_id: settlement.agent_id,
+                deadline,
+            }
+        );
+        assert_eq!(
+            f.client.try_enforce_sla(&f.task_id),
+            Err(Ok(Error::TaskAlreadyResolved))
         );
     }
 
