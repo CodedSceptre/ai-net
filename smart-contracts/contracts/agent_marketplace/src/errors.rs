@@ -18,6 +18,13 @@ pub enum Error {
     SlaViolation = 10,
     NotOwner = 11,
     ServiceNotAvailable = 12,
+    InvalidAuctionDuration = 13,
+    AuctionTokenNotConfigured = 14,
+    BidTooLow = 15,
+    AuctionExpired = 16,
+    AuctionNotExpired = 17,
+    AuctionAlreadyFinalized = 18,
+    AuctionIdExhausted = 19,
 }
 
 impl Error {
@@ -35,6 +42,13 @@ impl Error {
             10 => Some(Error::SlaViolation),
             11 => Some(Error::NotOwner),
             12 => Some(Error::ServiceNotAvailable),
+            13 => Some(Error::InvalidAuctionDuration),
+            14 => Some(Error::AuctionTokenNotConfigured),
+            15 => Some(Error::BidTooLow),
+            16 => Some(Error::AuctionExpired),
+            17 => Some(Error::AuctionNotExpired),
+            18 => Some(Error::AuctionAlreadyFinalized),
+            19 => Some(Error::AuctionIdExhausted),
             _ => None,
         }
     }

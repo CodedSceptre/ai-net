@@ -1,4 +1,6 @@
 #![no_std]
+// Soroban generates client methods for the existing listing entry point.
+#![allow(clippy::too_many_arguments)]
 
 //! # Agent Marketplace Contract
 //!
@@ -12,7 +14,8 @@ pub use errors::Error;
 pub use types::*;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, IntoVal, Symbol, Vec,
+    contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, IntoVal,
+    String, Symbol, Vec,
 };
 
 #[contracttype]
@@ -28,6 +31,13 @@ pub enum DataKey {
     OracleManager,
     /// Default listing validity duration in ledgers.
     ListingDurationLedgers,
+    AgentCapabilities(Symbol),
+    AgentOwner(Symbol),
+    AgentReputation(Symbol),
+    AllAgentIds,
+    AuctionToken,
+    AuctionCounter,
+    Auction(Bytes),
 }
 
 #[contract]
@@ -99,16 +109,13 @@ impl AgentMarketplaceContract {
     ///
     /// Returns `None` if no oracle is configured or the price is unavailable.
     pub fn get_xlm_price(env: Env) -> Option<i128> {
-        let oracle: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::OracleManager)?;
+        let oracle: Address = env.storage().instance().get(&DataKey::OracleManager)?;
 
         let fn_name = soroban_sdk::Symbol::new(&env, "resolve_price");
         let pair = soroban_sdk::Symbol::new(&env, "XLM_USD");
         let args = soroban_sdk::vec![&env, pair.into_val(&env)];
 
-        use soroban_sdk::{InvokeError, Val, TryIntoVal, Map};
+        use soroban_sdk::{InvokeError, Map, TryIntoVal, Val};
 
         let result: Result<Result<Val, _>, Result<InvokeError, InvokeError>> =
             env.try_invoke_contract(&oracle, &fn_name, args);
@@ -118,9 +125,8 @@ impl AgentMarketplaceContract {
                 let map: Result<Map<soroban_sdk::Symbol, Val>, _> = val.try_into_val(&env);
                 if let Ok(m) = map {
                     let price_key = soroban_sdk::Symbol::new(&env, "price");
-                    let price: Option<i128> = m
-                        .get(price_key)
-                        .and_then(|v| v.try_into_val(&env).ok());
+                    let price: Option<i128> =
+                        m.get(price_key).and_then(|v| v.try_into_val(&env).ok());
                     return price;
                 }
                 None
@@ -303,11 +309,7 @@ impl AgentMarketplaceContract {
         let mut results = Vec::new(&env);
         for id in ids.iter() {
             let key = DataKey::ServiceListing(id);
-            if let Some(mut listing) = env
-                .storage()
-                .persistent()
-                .get::<_, ServiceListing>(&key)
-            {
+            if let Some(mut listing) = env.storage().persistent().get::<_, ServiceListing>(&key) {
                 if current_ledger > listing.expiry_ledger.saturating_add(GRACE_PERIOD_LEDGERS) {
                     env.storage().persistent().remove(&key);
                     continue;
@@ -358,11 +360,7 @@ impl AgentMarketplaceContract {
         // If an oracle manager is configured, fetch a fresh XLM/USD price.
         // A stale or unavailable price blocks new bookings to prevent pricing
         // at an outdated exchange rate.
-        if env
-            .storage()
-            .instance()
-            .has(&DataKey::OracleManager)
-        {
+        if env.storage().instance().has(&DataKey::OracleManager) {
             // get_xlm_price does a cross-contract call; None means stale/unavailable.
             let oracle_price = Self::get_xlm_price(env.clone());
             if oracle_price.is_none() {
@@ -410,6 +408,177 @@ impl AgentMarketplaceContract {
         Ok(())
     }
 
+    /// Set the Stellar asset contract used for auction payments. The asset is
+    /// fixed once configured so all outstanding bids settle in the same token.
+    pub fn set_auction_token(env: Env, token: Address) -> Result<(), Error> {
+        require_admin(&env)?;
+        let storage = env.storage().instance();
+        if storage.has(&DataKey::AuctionToken) {
+            return Err(Error::AlreadyExists);
+        }
+        storage.set(&DataKey::AuctionToken, &token);
+        Ok(())
+    }
+
+    pub fn create_auction(
+        env: Env,
+        agent_id: Address,
+        capability: String,
+        start_price: i128,
+        duration_ledgers: u32,
+    ) -> Result<Bytes, Error> {
+        require_not_paused(&env)?;
+        agent_id.require_auth();
+        if start_price <= 0 {
+            return Err(Error::InvalidPrice);
+        }
+        let settlement_buffer = 17_280;
+        let duration_with_buffer = duration_ledgers
+            .checked_add(settlement_buffer)
+            .filter(|duration| duration_ledgers > 0 && *duration <= env.storage().max_ttl())
+            .ok_or(Error::InvalidAuctionDuration)?;
+        let expires_at_ledger = env
+            .ledger()
+            .sequence()
+            .checked_add(duration_ledgers)
+            .ok_or(Error::InvalidAuctionDuration)?;
+        Self::auction_token(&env)?;
+
+        let instance = env.storage().instance();
+        let counter: u64 = instance.get(&DataKey::AuctionCounter).unwrap_or(0);
+        let next = counter.checked_add(1).ok_or(Error::AuctionIdExhausted)?;
+        let auction_id = Bytes::from_slice(&env, &next.to_be_bytes());
+        let listing = AuctionListing {
+            agent_id,
+            capability,
+            start_price,
+            current_highest_bid: 0,
+            current_highest_bidder: None,
+            expires_at_ledger,
+            finalized: false,
+        };
+        let storage = env.storage().persistent();
+        let key = DataKey::Auction(auction_id.clone());
+        storage.set(&key, &listing);
+        storage.extend_ttl(&key, duration_with_buffer, duration_with_buffer);
+        instance.set(&DataKey::AuctionCounter, &next);
+        env.events().publish(
+            (symbol_short!("market"), symbol_short!("auc_new")),
+            AuctionCreated {
+                auction_id: auction_id.clone(),
+                listing,
+            },
+        );
+        Ok(auction_id)
+    }
+
+    pub fn place_bid(
+        env: Env,
+        auction_id: Bytes,
+        bidder: Address,
+        bid_amount: i128,
+    ) -> Result<(), Error> {
+        require_not_paused(&env)?;
+        bidder.require_auth();
+        let mut listing =
+            Self::get_auction(env.clone(), auction_id.clone()).ok_or(Error::NotFound)?;
+        if listing.finalized {
+            return Err(Error::AuctionAlreadyFinalized);
+        }
+        if env.ledger().sequence() >= listing.expires_at_ledger {
+            return Err(Error::AuctionExpired);
+        }
+        let previous_amount = listing.current_highest_bid;
+        // Round the 5% increment up to a whole token unit without multiplying
+        // the bid by 105, which could overflow.
+        let min_increment = previous_amount / 20 + i128::from(previous_amount % 20 != 0);
+        if bid_amount < listing.start_price
+            || bid_amount < previous_amount
+            || bid_amount - previous_amount < min_increment
+        {
+            return Err(Error::BidTooLow);
+        }
+
+        let previous_bidder = listing.current_highest_bidder.replace(bidder.clone());
+        listing.current_highest_bid = bid_amount;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Auction(auction_id.clone()), &listing);
+
+        let token_address = Self::auction_token(&env)?;
+        let token = token::Client::new(&env, &token_address);
+        let escrow = env.current_contract_address();
+        token.transfer(&bidder, &escrow, &bid_amount);
+        if let Some(previous_bidder) = previous_bidder {
+            token.transfer(&escrow, &previous_bidder, &previous_amount);
+        }
+        env.events().publish(
+            (symbol_short!("market"), symbol_short!("auc_bid")),
+            BidPlaced {
+                auction_id,
+                bidder,
+                bid_amount,
+            },
+        );
+        Ok(())
+    }
+
+    /// Anyone may settle the auction once its ledger deadline has passed.
+    pub fn finalize_auction(env: Env, auction_id: Bytes) -> Result<(), Error> {
+        let mut listing =
+            Self::get_auction(env.clone(), auction_id.clone()).ok_or(Error::NotFound)?;
+        if listing.finalized {
+            return Err(Error::AuctionAlreadyFinalized);
+        }
+        if env.ledger().sequence() < listing.expires_at_ledger {
+            return Err(Error::AuctionNotExpired);
+        }
+
+        let slot_holder = listing
+            .current_highest_bidder
+            .clone()
+            .unwrap_or_else(|| listing.agent_id.clone());
+        listing.finalized = true;
+        let storage = env.storage().persistent();
+        storage.set(&DataKey::Auction(auction_id.clone()), &listing);
+        if listing.current_highest_bidder.is_some() {
+            let token_address = Self::auction_token(&env)?;
+            token::Client::new(&env, &token_address).transfer(
+                &env.current_contract_address(),
+                &listing.agent_id,
+                &listing.current_highest_bid,
+            );
+        }
+        env.events().publish(
+            (symbol_short!("market"), symbol_short!("auc_final")),
+            AuctionFinalized {
+                auction_id,
+                slot_holder,
+                winning_bid: listing.current_highest_bid,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn get_auction(env: Env, auction_id: Bytes) -> Option<AuctionListing> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Auction(auction_id))
+    }
+
+    pub fn get_auction_slot_holder(env: Env, auction_id: Bytes) -> Option<Address> {
+        Self::get_auction(env, auction_id)
+            .filter(|listing| listing.finalized)
+            .map(|listing| listing.current_highest_bidder.unwrap_or(listing.agent_id))
+    }
+
+    fn auction_token(env: &Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::AuctionToken)
+            .ok_or(Error::AuctionTokenNotConfigured)
+    }
+
     /// Complete a booking and release escrow payment to the agent owner.
     pub fn complete_booking(env: Env, booking_id: Symbol) -> Result<(), Error> {
         let booking_key = DataKey::Booking(booking_id.clone());
@@ -437,9 +606,7 @@ impl AgentMarketplaceContract {
         listing.owner.require_auth();
 
         booking.completed = true;
-        env.storage()
-            .persistent()
-            .set(&booking_key, &booking);
+        env.storage().persistent().set(&booking_key, &booking);
 
         env.events().publish(
             (symbol_short!("market"), symbol_short!("svc_comp")),
@@ -471,9 +638,7 @@ impl AgentMarketplaceContract {
         booking.client.require_auth();
 
         booking.cancelled = true;
-        env.storage()
-            .persistent()
-            .set(&booking_key, &booking);
+        env.storage().persistent().set(&booking_key, &booking);
 
         env.events().publish(
             (symbol_short!("market"), symbol_short!("svc_canc")),
@@ -487,12 +652,8 @@ impl AgentMarketplaceContract {
     }
 
     /// Rate a completed booking (1-5 stars).
-    pub fn rate_booking(
-        env: Env,
-        booking_id: Symbol,
-        rating: u32,
-    ) -> Result<(), Error> {
-        if rating < 1 || rating > 5 {
+    pub fn rate_booking(env: Env, booking_id: Symbol, rating: u32) -> Result<(), Error> {
+        if !(1..=5).contains(&rating) {
             return Err(Error::InvalidPrice);
         }
 
@@ -513,27 +674,23 @@ impl AgentMarketplaceContract {
         booking.client.require_auth();
 
         booking.rating = rating;
-        env.storage()
-            .persistent()
-            .set(&booking_key, &booking);
+        env.storage().persistent().set(&booking_key, &booking);
 
         // Update agent rating aggregate
         let rating_key = DataKey::AgentRating(booking.agent_id.clone());
-        let mut agent_rating: AgentRating = env
-            .storage()
-            .persistent()
-            .get(&rating_key)
-            .unwrap_or(AgentRating {
-                agent_id: booking.agent_id.clone(),
-                total_ratings: 0,
-                rating_sum: 0,
-            });
+        let mut agent_rating: AgentRating =
+            env.storage()
+                .persistent()
+                .get(&rating_key)
+                .unwrap_or(AgentRating {
+                    agent_id: booking.agent_id.clone(),
+                    total_ratings: 0,
+                    rating_sum: 0,
+                });
 
         agent_rating.total_ratings += 1;
         agent_rating.rating_sum += rating as u64;
-        env.storage()
-            .persistent()
-            .set(&rating_key, &agent_rating);
+        env.storage().persistent().set(&rating_key, &agent_rating);
 
         Ok(())
     }
@@ -601,7 +758,9 @@ impl AgentMarketplaceContract {
 
         env.storage().persistent().set(&cap_key, &capabilities);
         env.storage().persistent().set(&owner_key, &owner);
-        env.storage().persistent().set(&rep_key, &initial_reputation);
+        env.storage()
+            .persistent()
+            .set(&rep_key, &initial_reputation);
 
         let mut all_agents: Vec<Symbol> = env
             .storage()
@@ -618,18 +777,16 @@ impl AgentMarketplaceContract {
         }
         if !found {
             all_agents.push_back(agent_id);
-            env.storage().persistent().set(&DataKey::AllAgentIds, &all_agents);
+            env.storage()
+                .persistent()
+                .set(&DataKey::AllAgentIds, &all_agents);
         }
 
         Ok(())
     }
 
     /// Update an agent's reputation score (Issue #419).
-    pub fn update_agent_reputation(
-        env: Env,
-        agent_id: Symbol,
-        score: u32,
-    ) -> Result<(), Error> {
+    pub fn update_agent_reputation(env: Env, agent_id: Symbol, score: u32) -> Result<(), Error> {
         let owner: Address = env
             .storage()
             .persistent()
