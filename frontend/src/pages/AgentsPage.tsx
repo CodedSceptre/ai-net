@@ -22,7 +22,8 @@ import { useTranslation } from 'react-i18next'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { LayoutGrid, List, Plus } from 'lucide-react'
 
-import { useAgentRegistry } from '../hooks/useAgentRegistry'
+import { useInfiniteAgents } from '../hooks/useInfiniteAgents'
+import { AgentCardSkeleton as AgentCardSkeletonCompact } from '../components/agents/AgentCardSkeleton'
 import { AgentTable } from '../components/agents/AgentTable'
 import { AgentFilterBar } from '../components/agents/AgentFilterBar'
 import { AgentDetailModal } from '../components/agents/AgentDetailModal'
@@ -42,12 +43,13 @@ import {
   type AgentFilters,
   type SortKey,
 } from '../utils/agentRegistry'
+import { fuzzyMatch } from '../utils/fuzzy'
 import styles from './AgentsPage.module.css'
 import cardStyles from './AgentsCardPage.module.css'
 
 const TABLE_COLUMNS = 6
 const SKELETON_ROWS = 5
-const SKELETON_CARDS = 8
+const SKELETON_CARDS = 6
 
 type ViewMode = 'card' | 'table'
 type MobileSheet = 'filters' | 'sort' | 'compare' | null
@@ -157,7 +159,64 @@ export function AgentsPageSkeleton() {
 function AgentsPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { agents, loading, error, refetch, getSuggestions } = useAgentRegistry()
+  const { agents, isLoading: loading, isError, hasMore, sentinelRef, retry } = useInfiniteAgents()
+  const error = isError ? 'Failed to load agents' : null
+  const refetch = retry
+
+  const getSuggestions = useCallback((query: string) => {
+    const q = query.trim()
+    if (!q) return []
+
+    const suggestions = []
+
+    for (const agent of agents) {
+      const match = fuzzyMatch(q, agent.name)
+      if (match) {
+        suggestions.push({
+          id: `agent-${agent.id}`,
+          label: agent.name,
+          type: 'agent' as const,
+          score: match.score + 10,
+          indices: match.indices,
+          agent,
+          value: agent.name,
+        })
+      }
+    }
+
+    const capabilities = allCapabilities(agents)
+    for (const cap of capabilities) {
+      const match = fuzzyMatch(q, cap)
+      if (match) {
+        suggestions.push({
+          id: `cap-${cap}`,
+          label: cap,
+          type: 'capability' as const,
+          score: match.score,
+          indices: match.indices,
+          value: cap,
+        })
+      }
+    }
+
+    const knownTypes = ['research', 'risk', 'coding', 'design', 'report']
+    for (const agentType of knownTypes) {
+      const match = fuzzyMatch(q, agentType)
+      if (match) {
+        suggestions.push({
+          id: `type-${agentType}`,
+          label: `${agentType.charAt(0).toUpperCase() + agentType.slice(1)} Agent`,
+          type: 'type' as const,
+          score: match.score - 2,
+          indices: match.indices,
+          value: agentType,
+        })
+      }
+    }
+
+    suggestions.sort((a, b) => b.score - a.score)
+    return suggestions.slice(0, 10)
+  }, [agents])
   const [searchParams, setSearchParams] = useSearchParams()
   const [selected, setSelected] = useState<AgentRecord | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('card')
@@ -416,29 +475,58 @@ function AgentsPage() {
                       data-testid="agents-empty"
                     />
                   ) : (
-                    <div
-                      className={cardStyles.cardGrid}
-                      role="list"
-                      aria-label={t('nav.agentRegistry', { defaultValue: 'Agent Registry' })}
-                    >
-                      {visibleAgents.map((agent) => (
-                        <div
-                          key={agent.id}
-                          role="listitem"
-                          data-testid={`agent-row-${agent.id}`}
-                          onTouchStart={(event) => handleCardTouchStart(event, agent.id)}
-                          onTouchEnd={(event) => handleCardTouchEnd(event, agent)}
-                          onTouchCancel={() => { touchStart.current = null }}
-                        >
-                          <AgentRegistryCard
-                            agent={agent}
-                            onHire={handleHire}
-                            onCompare={toggleCompare}
-                            isSelectedForComparison={compareAgents.some((item) => item.id === agent.id)}
-                          />
+                    <>
+                      <div
+                        className={cardStyles.cardGrid}
+                        role="list"
+                        aria-label={t('nav.agentRegistry', { defaultValue: 'Agent Registry' })}
+                      >
+                        {visibleAgents.map((agent) => (
+                          <div
+                            key={agent.id}
+                            role="listitem"
+                            data-testid={`agent-row-${agent.id}`}
+                            onTouchStart={(event) => handleCardTouchStart(event, agent.id)}
+                            onTouchEnd={(event) => handleCardTouchEnd(event, agent)}
+                            onTouchCancel={() => { touchStart.current = null }}
+                          >
+                            <AgentRegistryCard
+                              agent={agent}
+                              onHire={handleHire}
+                              onCompare={toggleCompare}
+                              isSelectedForComparison={compareAgents.some((item) => item.id === agent.id)}
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Infinite scroll sentinel */}
+                      {hasMore && <div ref={sentinelRef} style={{ height: 1 }} aria-hidden="true" />}
+
+                      {/* Mid-scroll loading skeletons */}
+                      {loading && agents.length > 0 && (
+                        <div className={cardStyles.cardGrid} aria-label="Loading more agents" aria-busy="true">
+                          <AgentCardSkeletonCompact compact />
+                          <AgentCardSkeletonCompact compact />
+                          <AgentCardSkeletonCompact compact />
                         </div>
-                      ))}
-                    </div>
+                      )}
+
+                      {/* End of list */}
+                      {!hasMore && agents.length > 0 && (
+                        <p style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px 0', fontSize: '0.875rem' }}>
+                          You&#39;ve seen all agents
+                        </p>
+                      )}
+
+                      {/* Inline error state */}
+                      {isError && agents.length > 0 && (
+                        <div style={{ textAlign: 'center', padding: '16px' }} role="alert">
+                          <p style={{ color: 'var(--status-danger)', marginBottom: 8 }}>Failed to load more agents.</p>
+                          <button type="button" onClick={retry}>Retry</button>
+                        </div>
+                      )}
+                    </>
                   )}
                 </>
               )}
