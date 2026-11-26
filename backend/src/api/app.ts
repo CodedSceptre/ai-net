@@ -1,3 +1,4 @@
+import { buildReceiptData } from "../services/receiptService";
 /**
  * Express application factory.
  *
@@ -19,7 +20,7 @@ import {
 import { httpDispatch } from "../coordinator/dispatch";
 import { eventBus } from "../coordinator/eventBus";
 import { getTask } from "../coordinator/taskStore";
-import { getTaskDb } from "../db/tasks";
+import { createTaskDb, getTaskDb } from "../db/tasks";
 import { createPaymentReleaseFn, type StellarReleasePaymentFn } from "../payment";
 import { getGlobalJobQueue, JobWorker, type JobQueue } from "../queue";
 import { createHeartbeatService, type HeartbeatServiceOptions } from "../services/heartbeat";
@@ -226,6 +227,34 @@ export function createApp(opts: AppOptions = {}): {
   // ── Task routes ────────────────────────────────────────────────────────────
   const v1TasksRouter = createV1TasksRouter(dispatch, releasePayment, jobQueue);
   const v2TasksRouter = createV2TasksRouter(dispatch, releasePayment, jobQueue);
+
+  app.get("/api/tasks/:id/payments", authedLimiter.middleware, optionalAuthMiddleware, (req, res, next) => {
+    try {
+      const db = createTaskDb(getTaskDb());
+      const task = db.findById(req.params.id);
+      if (!task) {
+        res.status(404).json({ error: "Task not found" });
+        return;
+      }
+      if ((req.user?.sub ?? req.get("walletpublickey")) !== task.walletPublicKey) {
+        res.status(403).json({ error: "Access denied" });
+        return;
+      }
+      const receipt = buildReceiptData(task.id, { taskDb: db });
+      res.setHeader("Cache-Control", "private, no-store");
+      res.json({
+        taskId: receipt.taskId,
+        completionTimestamp: task.status === "completed" ? receipt.completionTimestamp : null,
+        prompt: receipt.prompt.slice(0, 240),
+        payments: receipt.payments.map((payment) => ({
+          ...payment,
+          capability: task.dag.find((node) => node.nodeId === payment.nodeId)?.type ?? null,
+        })),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   app.use("/api/tasks", authedLimiter.middleware, optionalAuthMiddleware, (req, res, next) => {
     const apiVersion = (res.locals.apiVersion as string) || "1.0";

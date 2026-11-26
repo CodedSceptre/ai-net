@@ -45,6 +45,7 @@ const WalletPage = lazy(() => import("./pages/WalletPage"));
 const AgentsPage = lazy(() => import("./pages/AgentsPage"));
 const NewTaskPage = lazy(() => import("./pages/tasks/NewTaskPage"));
 const TaskHistoryPage = lazy(() => import("./pages/tasks/TaskHistoryPage"));
+const PaymentReceiptPage = lazy(() => import("./pages/tasks/PaymentReceiptPage"));
 const TaskDetailPage = lazy(() => import("./pages/TaskDetailPage"));
 const RendererDemoPage = lazy(() => import("./pages/RendererDemoPage"));
 
@@ -223,6 +224,16 @@ const RoutedContent: React.FC = () => {
                         <RouteErrorBoundary label="Task History">
                           <ProtectedRoute>
                             <TaskHistoryPage />
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/tasks/:id/receipt"
+                      element={
+                        <RouteErrorBoundary label="Payment Receipt">
+                          <ProtectedRoute>
+                            <PaymentReceiptPage />
                           </ProtectedRoute>
                         </RouteErrorBoundary>
                       }

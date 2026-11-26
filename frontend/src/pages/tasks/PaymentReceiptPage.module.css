@@ -1,0 +1,65 @@
+.tableWrapper {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.table th,
+.table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+@media print {
+  :global(.app-shell):has(.receipt),
+  :global(.main-content):has(.receipt) {
+    display: block;
+    margin: 0;
+    padding: 0;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  :global(.app-shell):has(.receipt) :global(.top-nav),
+  :global(.app-shell):has(.receipt) :global(.sidebar),
+  :global(.app-shell):has(.receipt) :global(.mobile-drawer),
+  :global(.app-shell):has(.receipt) :global(.drawer-backdrop),
+  :global(.app-shell):has(.receipt) :global(.skip-to-content),
+  :global(.main-content):has(.receipt) nav,
+  :global(.main-content):has(.receipt) footer,
+  .receipt :global(.receipt-action) {
+    display: none !important;
+  }
+
+  .receipt {
+    color: black;
+    background: white;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .receipt a,
+  .receipt span {
+    color: inherit !important;
+  }
+
+  .tableWrapper {
+    overflow: visible;
+  }
+
+  .table th,
+  .table td {
+    padding: 0.35rem;
+    border-bottom-color: #ccc;
+    overflow-wrap: anywhere;
+  }
+
+  .table tr {
+    break-inside: avoid;
+  }
+}

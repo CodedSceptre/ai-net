@@ -3,7 +3,7 @@ import type { TaskResponse, DAGEvent, PaymentEvent } from '../types/api';
 import { apiClient } from '../services/api';
 import { useTaskWebSocket } from './useTaskWebSocket';
 import { useNodeState } from './useNodeState';
-import { useTaskPayments } from './useTaskPayments';
+import { useLiveTaskPayments } from './useLiveTaskPayments';
 import { useTaskOutputs } from './useTaskOutputs';
 
 // Helper to determine payment amount based on agent type or node ID
@@ -24,7 +24,7 @@ export const useTaskMonitor = (taskId: string | undefined) => {
 
   // Initialize sub-hooks
   const nodeState = useNodeState(taskId || '');
-  const paymentState = useTaskPayments(taskId || '');
+  const paymentState = useLiveTaskPayments(taskId || '');
   const outputState = useTaskOutputs(taskId || '');
 
   // Handle WebSocket events
