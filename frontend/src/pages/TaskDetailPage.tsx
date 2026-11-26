@@ -3,6 +3,7 @@ import { useTranslation, Trans } from "react-i18next";
 import { useParams } from "react-router-dom";
 
 import { useTaskMonitor } from "../hooks/useTaskMonitor";
+import { useTaskStream } from "../hooks/useTaskStream";
 import { DAGVisualization } from "../components/tasks/DAGVisualization";
 import { TaskDetailTimeline } from "../components/dashboard/TaskDetailTimeline";
 import { PaymentTimeline } from "../components/dashboard/PaymentTimeline";
@@ -83,6 +84,14 @@ const TaskDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const { task, loading, error, wsStatus, nodes, payments, outputs, refetch } =
     useTaskMonitor(id);
+
+  // Secondary stream hook for live status updates
+  useTaskStream({
+    taskId: id,
+    onNodeUpdate: () => {
+      // live status updates alongside useTaskMonitor
+    },
+  });
 
   // Check if any node is failed
   const failedNode = useMemo(() => {
