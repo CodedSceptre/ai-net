@@ -66,3 +66,4 @@ export function decompose(taskId: string, prompt: string): DAGNode[] {
 }
 
 export { TaskRegistry, taskRegistry } from "./taskRegistry";
+export { AgentMatcher, agentMatcher } from "./matcher";
