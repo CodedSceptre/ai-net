@@ -1,0 +1,83 @@
+name: Update Manifests
+
+# Triggered after CI passes on main.
+# Updates the image.tag in both Helm values files to the new commit SHA,
+# then commits and pushes the change. ArgoCD detects the values file change
+# and starts a new sync automatically — no manual trigger required.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  update-image-tags:
+    name: Bump image tags to new commit SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Only run when CI succeeded
+    if: github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Use the SHA from the CI run that just passed
+          ref: ${{ github.event.workflow_run.head_sha }}
+          # Need a token with write access to push the manifest commit
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set image tag
+        id: tag
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          SHORT_SHA="${SHA:0:7}"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Install yq
+        run: |
+          YQ_VERSION="v4.44.1"
+          curl -sSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" \
+            -o /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+
+      - name: Update backend image tag
+        run: |
+          yq e -i '.image.tag = "${{ steps.tag.outputs.tag }}"' \
+            infra/k8s/helm/charts/backend/values.yaml
+          echo "Backend values.yaml updated:"
+          grep "tag:" infra/k8s/helm/charts/backend/values.yaml
+
+      - name: Update frontend image tag
+        run: |
+          yq e -i '.image.tag = "${{ steps.tag.outputs.tag }}"' \
+            infra/k8s/helm/charts/frontend/values.yaml
+          echo "Frontend values.yaml updated:"
+          grep "tag:" infra/k8s/helm/charts/frontend/values.yaml
+
+      - name: Commit and push updated manifests
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            infra/k8s/helm/charts/backend/values.yaml \
+            infra/k8s/helm/charts/frontend/values.yaml
+
+          # Only commit if there are actual changes
+          if git diff --cached --quiet; then
+            echo "No manifest changes to commit (tag already up to date)."
+            exit 0
+          fi
+
+          git commit -m "chore(gitops): update image tags to ${{ steps.tag.outputs.tag }} [skip ci]"
+          git push origin main
+
+          echo "::notice::Manifests updated to ${{ steps.tag.outputs.tag }} — ArgoCD will sync automatically."

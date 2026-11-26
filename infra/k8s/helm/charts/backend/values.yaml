@@ -1,0 +1,58 @@
+# Backend Helm chart values
+# The image.tag field is updated automatically by .github/workflows/update-manifests.yml
+# on every successful CI run on main.
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/codedSceptre/ai-net/backend
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 3000
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+  hosts:
+    - host: api.ai-net.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 3000
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 3000
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 3
+
+env:
+  NODE_ENV: production
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70

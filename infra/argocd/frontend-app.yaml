@@ -1,0 +1,43 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ai-net-frontend
+  namespace: argocd
+  annotations:
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: deployments
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: deployments
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: deployments
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/CodedSceptre/ai-net.git
+    targetRevision: main
+    path: infra/k8s/helm/charts/frontend
+    helm:
+      valueFiles:
+        - values.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ai-net
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
