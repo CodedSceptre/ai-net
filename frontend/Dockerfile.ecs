@@ -1,0 +1,16 @@
+FROM node:20-alpine@sha256:2a63a5947ffbaee54a75f2bd47cd0fff0fdb9d0dff5d21f1861facd88fe0d4a6 AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+COPY frontend/package*.json ./frontend/
+COPY frontend/ ./frontend/
+
+RUN npm ci --workspace=frontend --include-workspace-root --ignore-scripts
+WORKDIR /app/frontend
+RUN npm run build
+
+FROM nginxinc/nginx-unprivileged:1.28-alpine
+COPY --from=builder /app/frontend/dist /usr/share/nginx/html
+COPY frontend/nginx.ecs.conf /etc/nginx/conf.d/default.conf
+EXPOSE 8080

@@ -20,8 +20,8 @@ resource "aws_route53_record" "frontend" {
   type    = "A"
 
   alias {
-    name                   = var.cloudfront_domain
-    zone_id                = var.cloudfront_zone_id
+    name                   = var.frontend_dns_name
+    zone_id                = var.frontend_zone_id
     evaluate_target_health = false
   }
 }
@@ -33,8 +33,8 @@ resource "aws_route53_record" "frontend_www" {
   type    = "A"
 
   alias {
-    name                   = var.cloudfront_domain
-    zone_id                = var.cloudfront_zone_id
+    name                   = var.frontend_dns_name
+    zone_id                = var.frontend_zone_id
     evaluate_target_health = false
   }
 }

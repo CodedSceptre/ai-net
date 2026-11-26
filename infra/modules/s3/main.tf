@@ -32,6 +32,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "task_results" {
   bucket = aws_s3_bucket.task_results.id
 
   rule {
+    filter {}
     id     = "expire-old-results"
     status = "Enabled"
     expiration { days = 90 }
@@ -73,6 +74,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "redis_backups" {
   bucket = aws_s3_bucket.redis_backups.id
 
   rule {
+    filter {}
     id     = "expire-old-backups"
     status = "Enabled"
     expiration { days = 30 }
@@ -108,6 +110,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "database_backups" {
   bucket = aws_s3_bucket.database_backups.id
 
   rule {
+    filter {}
     id     = "expire-verified-database-backups"
     status = "Enabled"
     expiration { days = 90 }
@@ -141,6 +144,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "backup_verification" {
   bucket = aws_s3_bucket.backup_verification.id
 
   rule {
+    filter {}
     id     = "expire-verification-fixtures"
     status = "Enabled"
     expiration { days = 90 }
@@ -178,3 +182,24 @@ resource "aws_s3_bucket_public_access_block" "frontend" {
 }
 
 data "aws_caller_identity" "current" {}
+
+resource "aws_s3_bucket" "log_archive" {
+  bucket_prefix = "ai-net-${var.environment}-logs-"
+}
+
+resource "aws_s3_bucket_public_access_block" "log_archive" {
+  bucket                  = aws_s3_bucket.log_archive.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "log_archive" {
+  bucket = aws_s3_bucket.log_archive.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
