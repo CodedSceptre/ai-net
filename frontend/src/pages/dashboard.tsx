@@ -17,6 +17,38 @@ import {
 } from "../components/common/Skeleton";
 import styles from "./dashboard.module.css";
 import type { NetworkStats } from "../types/api";
+import React from 'react';
+import { useTranslation } from 'react-i18next';
+import { Navigate } from 'react-router-dom';
+import { useWallet } from '../hooks/useWallet';
+import { useNetworkStats } from '../hooks/useNetworkStats';
+import { DashboardLayout } from '../components/dashboard/DashboardLayout';
+import { KpiCard } from '../components/dashboard/KpiCard';
+import { NetworkHealthBadge } from '../components/dashboard/NetworkHealthBadge';
+import { RecentTasksTable } from '../components/dashboard/RecentTasksTable';
+import { useToast } from '../hooks/useToast';
+import { Skeleton, SkeletonAvatar, SkeletonCard, SkeletonTable } from '../components/common/Skeleton';
+import { GlossaryHelp } from '../components/common/HelpIcon';
+import { WelcomeModal } from '../components/onboarding/WelcomeModal';
+import styles from './dashboard.module.css';
+import type { TimePoint, NetworkStats } from '../types/api';
+
+// Extract y-values from a TimePoint[] series.
+const toSeries = (points: TimePoint[] | undefined): number[] => {
+  if (points && points.length > 0) {
+    return points.map((p) => p.value);
+  }
+  return [];
+};
+
+const syntheticSeries = (value: number, length = 7): number[] => {
+  const base = Math.max(value, 1);
+  return Array.from({ length }, (_, i) => {
+    const wave = Math.sin(i / 2) * base * 0.12;
+    const drift = (i / (length - 1)) * base * 0.3;
+    return Math.max(0, Math.round(drift + wave + 1));
+  });
+};
 
 /**
  * Context-aware skeleton that mirrors the dashboard layout so there is no
@@ -61,6 +93,18 @@ export const DashboardPage: React.FC = () => {
   const { data, loading, error } = useNetworkStats();
   const { showToast } = useToast();
   const { t, i18n } = useTranslation();
+  const [recentTaskCount, setRecentTaskCount] = React.useState<number | null>(null);
+  const [firstDashboardVisit] = React.useState(() => {
+    try {
+      return localStorage.getItem('ai-net:dashboard-visited') !== 'true'
+        && localStorage.getItem('onboarding_dismissed') !== 'true'
+        && localStorage.getItem('onboarding_completed') !== 'true';
+    } catch { return false; }
+  });
+
+  React.useEffect(() => {
+    try { localStorage.setItem('ai-net:dashboard-visited', 'true'); } catch { /* Storage is optional. */ }
+  }, []);
 
   React.useEffect(() => {
     if (error) {
@@ -107,7 +151,13 @@ export const DashboardPage: React.FC = () => {
       <section className={styles.recentTasks}>
         <h2 className={styles.heading}>{t("page.dashboard.recentTasks")}</h2>
         <RecentTasksTable walletAddress={address ?? ""} loading={loading} />
+        <h2 className={styles.heading}>{t('page.dashboard.recentTasks')}</h2>
+        <RecentTasksTable walletAddress={address ?? ''} loading={loading} onTasksLoaded={setRecentTaskCount} />
       </section>
+      <WelcomeModal
+        open={firstDashboardVisit && recentTaskCount === 0}
+        onDismiss={() => setRecentTaskCount(null)}
+      />
     </DashboardLayout>
   );
 };
