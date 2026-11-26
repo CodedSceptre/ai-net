@@ -12,6 +12,7 @@ import type { WsConnectionState } from '../../hooks/useAgentStatusSocket'
 import './TopNav.css'
 import useTheme from '../../hooks/useTheme'
 import { Sun, Moon, Wallet } from 'lucide-react'
+import LanguageSwitcher from './LanguageSwitcher'
 
 // ── WS status indicator ────────────────────────────────────────────────────
 
@@ -191,6 +192,8 @@ const TopNav: React.FC<TopNavProps> = ({
         >
           {effectiveTheme === 'dark' ? <Moon size={16} /> : <Sun size={16} />}
         </button>
+
+        <LanguageSwitcher />
 
         <div
           className="language-switcher"

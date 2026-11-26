@@ -106,7 +106,7 @@ const TaskDetailPage: React.FC = () => {
             icon: <RefreshCw size={16} />,
           }}
           secondaryAction={{
-            label: "Contact Support",
+            label: t("contactSupport", { defaultValue: "Contact Support" }),
             to: "mailto:support@ai-net.io",
           }}
           variant="card"

@@ -513,7 +513,7 @@ function AgentsPage() {
             </button>
             <div className={styles.sheetHeader}>
               <h2 id="agent-sheet-title">{sheetTitle}</h2>
-              <button type="button" className={styles.sheetClose} onClick={() => setMobileSheet(null)} aria-label="Close panel">
+              <button type="button" className={styles.sheetClose} onClick={() => setMobileSheet(null)} aria-label={t('close', { defaultValue: 'Close panel' })}>
                 <X size={20} aria-hidden="true" />
               </button>
             </div>

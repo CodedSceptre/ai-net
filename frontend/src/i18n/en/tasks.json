@@ -1,0 +1,24 @@
+{
+  "monitoring": "Task Monitoring",
+  "taskId": "Task ID: {{id}}",
+  "status": "Status",
+  "sync": "Sync",
+  "dagTitle": "Execution DAG",
+  "dagHint": "Click nodes to inspect step output & payments",
+  "failedTitle": "Task Execution Failed",
+  "failedBody": "Step <0>{{node}}</0> encountered an unrecoverable error: {{error}}",
+  "completedTitle": "Task Completed Successfully",
+  "completedBody": "All DAG pipeline nodes executed and settled on the Stellar ledger.",
+  "unknownError": "Unknown error occurred",
+  "errorTitle": "Failed to load task details",
+  "contactSupport": "Contact Support",
+  "ws": {
+    "connected": "Live Updates",
+    "connecting": "Reconnecting...",
+    "disconnected": "Offline"
+  },
+  "wsStatus": "WS: {{status}}",
+  "a11y": {
+    "loadingTaskDetails": "Loading task details"
+  }
+}

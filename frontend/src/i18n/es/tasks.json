@@ -1,0 +1,24 @@
+{
+  "monitoring": "Supervisión de Tareas",
+  "taskId": "ID de Tarea: {{id}}",
+  "status": "Estado",
+  "sync": "Sincronizar",
+  "dagTitle": "DAG de Ejecución",
+  "dagHint": "Haga clic en los nodos para inspeccionar salidas y pagos",
+  "failedTitle": "Fallo en la Ejecución de la Tarea",
+  "failedBody": "El paso <0>{{node}}</0> encontró un error irrecuperable: {{error}}",
+  "completedTitle": "Tarea Completada con Éxito",
+  "completedBody": "Todos los nodos de la canalización DAG se ejecutaron y liquidaron en el libro mayor de Stellar.",
+  "unknownError": "Ocurrió un error desconocido",
+  "errorTitle": "Error al cargar los detalles de la tarea",
+  "contactSupport": "Contactar Soporte",
+  "ws": {
+    "connected": "Actualizaciones en Vivo",
+    "connecting": "Reconectando...",
+    "disconnected": "Desconectado"
+  },
+  "wsStatus": "WS: {{status}}",
+  "a11y": {
+    "loadingTaskDetails": "Cargando detalles de la tarea"
+  }
+}

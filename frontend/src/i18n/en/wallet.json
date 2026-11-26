@@ -1,0 +1,22 @@
+{
+  "title": "Wallet Management",
+  "balance": "Total Balance",
+  "availableBalance": "Available Balance",
+  "reserve": "Minimum Reserve: {{amount}} XLM",
+  "publicKey": "Public Key",
+  "copyAddress": "Public key copied to clipboard",
+  "viewExplorer": "View on Stellar Expert",
+  "sendXLM": "Send XLM",
+  "receive": "Receive XLM",
+  "scanQR": "Scan QR code to receive payments",
+  "transactions": "Transaction History",
+  "connectWallet": "Connect Wallet",
+  "connectFreighter": "Connect with Freighter",
+  "connectSecret": "Connect with Secret Key",
+  "secretKeyPlaceholder": "Enter S... secret key (Testnet only)",
+  "disconnectConfirmTitle": "Disconnect Wallet?",
+  "disconnectConfirmBody": "Are you sure you want to disconnect this wallet session? You will need to reconnect to sign transactions.",
+  "a11y": {
+    "loadingWallet": "Loading wallet details"
+  }
+}

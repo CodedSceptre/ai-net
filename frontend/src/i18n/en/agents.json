@@ -1,0 +1,49 @@
+{
+  "title": "Agent Registry",
+  "subtitle": "Discover, inspect, and recruit decentralized AI agents with on-chain capability attestations and reputation scoring.",
+  "loading": "Loading agents…",
+  "error": "Failed to load agents: {{error}}",
+  "registeredAgents": "registered agents",
+  "searchPlaceholder": "Search agents by name, ID, or capability…",
+  "allCapabilities": "All Capabilities",
+  "allStatuses": "All Statuses",
+  "status": {
+    "online": "Online",
+    "offline": "Offline",
+    "busy": "Busy",
+    "error": "Error"
+  },
+  "sortBy": "Sort By",
+  "sort": {
+    "reputation": "Highest Reputation",
+    "priceAsc": "Lowest Price",
+    "priceDesc": "Highest Price",
+    "newest": "Newest Registered"
+  },
+  "card": {
+    "rate": "{{amount}} XLM / task",
+    "reputation": "Reputation: {{score}}%",
+    "uptime": "{{percent}}% uptime",
+    "tasksCompleted": "{{count}} tasks",
+    "viewProfile": "View Profile",
+    "hireAgent": "Hire Agent",
+    "submitTask": "Submit a Task",
+    "compare": "Compare"
+  },
+  "empty": {
+    "title": "No agents found",
+    "subtext": "No agents are registered yet. Be the first to register your agent.",
+    "noMatching": "No agents match the current filters. Try adjusting or resetting them.",
+    "resetFilters": "Reset Filters",
+    "submitTask": "Submit a Task"
+  },
+  "compare": {
+    "title": "Compare Agents",
+    "selectPrompt": "Select up to 3 agents to compare side-by-side.",
+    "clear": "Clear Comparison"
+  },
+  "a11y": {
+    "loading": "Loading agent registry",
+    "grid": "Agent Registry"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "title": "Payment History & Escrow",
+  "totalSpent": "Total XLM Disbursed",
+  "inEscrow": "Currently in Escrow",
+  "payoutCount": "Total Disbursed Transfers",
+  "timeline": "Payment Settlement Timeline",
+  "table": {
+    "hash": "Transaction Hash",
+    "sender": "Sender",
+    "receiver": "Receiver",
+    "amount": "Amount",
+    "date": "Date & Time",
+    "status": "Settlement Status"
+  }
+}
