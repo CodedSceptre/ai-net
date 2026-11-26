@@ -18,6 +18,7 @@
     "db:migrate": "ts-node src/db/cli.ts migrate",
     "db:rollback": "ts-node src/db/cli.ts rollback",
     "db:seed": "ts-node src/db/cli.ts seed",
+    "db:make-migration": "ts-node src/db/cli.ts make-migration",
     "docs:generate": "typedoc --options typedoc.json"
   },
   "license": "MIT",
