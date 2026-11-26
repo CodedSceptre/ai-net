@@ -31,9 +31,9 @@ export interface ToastContextValue {
 }
 
 const defaultDurations: Record<ToastType, number> = {
-  success: 5000,
-  info: 5000,
-  warning: 7000,
+  success: 4000,
+  info: 4000,
+  warning: 8000,
   error: 8000,
 }
 
@@ -123,10 +123,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         createdAt: Date.now(),
       }
 
-      // stacking: keep max 6 visible, drop oldest if exceeded
+      // stacking: keep max 3 visible, drop oldest if exceeded
       setToasts((prev) => {
         const next = [...prev, toast]
-        if (next.length > 6) return next.slice(next.length - 6)
+        if (next.length > 3) return next.slice(next.length - 3)
         return next
       })
 
