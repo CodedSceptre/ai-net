@@ -20,7 +20,7 @@ use soroban_sdk::{
 };
 
 use crate::{
-    EscrowRecord, EscrowStatus, Error, PaymentEscrowContract, PaymentEscrowContractClient,
+    Error, EscrowRecord, EscrowStatus, PaymentEscrowContract, PaymentEscrowContractClient,
     ESCROW_TIMEOUT_SECS,
 };
 
@@ -50,6 +50,11 @@ fn advance_time(env: &Env, seconds: u64) {
     let mut info: LedgerInfo = env.ledger().get();
     info.timestamp += seconds;
     env.ledger().set(info);
+}
+
+fn advance_ledgers(env: &Env, ledgers: u32) {
+    env.ledger()
+        .with_mut(|ledger| ledger.sequence_number += ledgers);
 }
 
 // ── initialize ────────────────────────────────────────────────────────────────
@@ -91,8 +96,7 @@ fn test_lock_funds_happy_path() {
     );
 
     // Verify the escrow record is stored with the correct amount.
-    let record: EscrowRecord = client
-        .get_escrow(&sym(&env, "task001"), &sym(&env, "nodeA"));
+    let record: EscrowRecord = client.get_escrow(&sym(&env, "task001"), &sym(&env, "nodeA"));
     assert_eq!(record.amount, 1_000_000_i128);
     assert_eq!(record.submitter, submitter);
     assert_eq!(record.agent, agent);
@@ -114,8 +118,7 @@ fn test_lock_funds_records_correct_expiry() {
         &500_000_i128,
     );
 
-    let record = client
-        .get_escrow(&sym(&env, "task002"), &sym(&env, "nodeA"));
+    let record = client.get_escrow(&sym(&env, "task002"), &sym(&env, "nodeA"));
     assert_eq!(record.locked_at, now);
     assert_eq!(record.expires_at, now + ESCROW_TIMEOUT_SECS);
 }
@@ -163,7 +166,10 @@ fn test_lock_funds_unauthorized_caller_rejected() {
         &agent,
         &500_i128,
     );
-    assert!(result.is_err(), "lock_funds should fail when coordinator auth is not provided");
+    assert!(
+        result.is_err(),
+        "lock_funds should fail when coordinator auth is not provided"
+    );
 }
 
 #[test]
@@ -239,6 +245,7 @@ fn test_release_funds_happy_path() {
         &2_000_000_i128,
     );
 
+    advance_ledgers(&env, 2);
     let record = client.release_funds(&sym(&env, "task006"), &sym(&env, "nodeA"));
 
     assert_eq!(record.amount, 2_000_000_i128);
@@ -283,7 +290,10 @@ fn test_release_funds_non_coordinator_rejected() {
     }]);
 
     let result = client.try_release_funds(&sym(&env, "task007"), &sym(&env, "nodeA"));
-    assert!(result.is_err(), "release_funds should fail when non-coordinator tries to release");
+    assert!(
+        result.is_err(),
+        "release_funds should fail when non-coordinator tries to release"
+    );
 }
 
 #[test]
@@ -309,6 +319,7 @@ fn test_refund_funds_happy_path() {
         &3_000_000_i128,
     );
 
+    advance_ledgers(&env, 2);
     let record = client.refund_funds(&sym(&env, "task008"), &sym(&env, "nodeA"));
 
     assert_eq!(record.amount, 3_000_000_i128);
@@ -353,7 +364,10 @@ fn test_refund_funds_non_coordinator_rejected_before_timeout() {
     }]);
 
     let result = client.try_refund_funds(&sym(&env, "task009"), &sym(&env, "nodeA"));
-    assert!(result.is_err(), "refund_funds should fail when non-coordinator calls before timeout");
+    assert!(
+        result.is_err(),
+        "refund_funds should fail when non-coordinator calls before timeout"
+    );
 }
 
 #[test]
@@ -381,6 +395,7 @@ fn test_auto_refund_after_timeout_no_auth_required() {
 
     // Advance time past the 7-day timeout.
     advance_time(&env, ESCROW_TIMEOUT_SECS + 1);
+    advance_ledgers(&env, 2);
 
     let record = client.refund_funds(&sym(&env, "taskTimeout"), &sym(&env, "nodeA"));
 
@@ -404,6 +419,7 @@ fn test_release_after_timeout_rejected() {
 
     // Advance past timeout.
     advance_time(&env, ESCROW_TIMEOUT_SECS + 1);
+    advance_ledgers(&env, 2);
 
     // release_funds must be rejected after timeout.
     let result = client.try_release_funds(&sym(&env, "taskExpired"), &sym(&env, "nodeA"));
@@ -426,6 +442,7 @@ fn test_release_before_timeout_succeeds() {
 
     // Advance just before the timeout — release should still succeed.
     advance_time(&env, ESCROW_TIMEOUT_SECS - 1);
+    advance_ledgers(&env, 2);
 
     let record = client.release_funds(&sym(&env, "taskFresh"), &sym(&env, "nodeA"));
     assert_eq!(record.status, EscrowStatus::Released);
@@ -471,6 +488,7 @@ fn test_release_funds_emits_released_event() {
         &agent,
         &1_000_i128,
     );
+    advance_ledgers(&env, 2);
     client.release_funds(&sym(&env, "taskEvt2"), &sym(&env, "nodeA"));
 
     let events = env.events().all();
@@ -494,6 +512,7 @@ fn test_refund_funds_emits_refunded_event() {
         &agent,
         &1_000_i128,
     );
+    advance_ledgers(&env, 2);
     client.refund_funds(&sym(&env, "taskEvt3"), &sym(&env, "nodeA"));
 
     let events = env.events().all();
@@ -559,6 +578,7 @@ fn test_multiple_escrows_are_independent() {
     );
 
     // Release one, refund the other.
+    advance_ledgers(&env, 2);
     let released = client.release_funds(&sym(&env, "taskMulti"), &sym(&env, "nodeA"));
     let refunded = client.refund_funds(&sym(&env, "taskMulti"), &sym(&env, "nodeB"));
 
@@ -617,6 +637,7 @@ fn test_platform_fee_collection_and_accounting() {
         &amount,
     );
 
+    advance_ledgers(&env, 2);
     let record = client.release_funds(&sym(&env, "taskFee1"), &sym(&env, "nodeA"));
     assert_eq!(record.status, EscrowStatus::Released);
 
@@ -643,7 +664,54 @@ fn test_zero_fee_does_not_block_payment() {
         &amount,
     );
 
+    advance_ledgers(&env, 2);
     let record = client.release_funds(&sym(&env, "taskZeroFee"), &sym(&env, "nodeA"));
     assert_eq!(record.status, EscrowStatus::Released);
     assert_eq!(client.get_total_fees_collected(), 0);
+}
+
+#[test]
+fn release_and_refund_require_two_ledgers() {
+    let (env, client, _) = setup();
+    let task = sym(&env, "delay");
+    let release_node = sym(&env, "release");
+    let refund_node = sym(&env, "refund");
+    let submitter = Address::generate(&env);
+    let agent = Address::generate(&env);
+
+    for node in [&release_node, &refund_node] {
+        client.lock_funds(&task, node, &submitter, &agent, &100);
+        assert_eq!(
+            client.get_escrow(&task, node).lock_ledger,
+            env.ledger().sequence()
+        );
+    }
+
+    for _ in 0..2 {
+        assert_eq!(
+            client.try_release_funds(&task, &release_node),
+            Err(Ok(Error::MinimumLockPeriodNotMet)),
+        );
+        assert_eq!(
+            client.try_refund_funds(&task, &refund_node),
+            Err(Ok(Error::MinimumLockPeriodNotMet)),
+        );
+        assert!(env.host().get_events().unwrap().0.iter().any(|entry| {
+            use soroban_sdk::xdr::{ContractEventBody, ScVal};
+            let ContractEventBody::V0(body) = &entry.event.body;
+            entry.failed_call && body.topics.iter().any(|topic| {
+                matches!(topic, ScVal::Symbol(name) if name.0.as_slice() == b"flash_loan_attempt_detected")
+            })
+        }));
+        advance_ledgers(&env, 1);
+    }
+
+    assert_eq!(
+        client.release_funds(&task, &release_node).status,
+        EscrowStatus::Released
+    );
+    assert_eq!(
+        client.refund_funds(&task, &refund_node).status,
+        EscrowStatus::Refunded
+    );
 }

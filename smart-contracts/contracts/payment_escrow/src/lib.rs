@@ -24,6 +24,8 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, IntoVal,
     Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, Map,
+    Symbol, TryFromVal, Val,
 };
 
 fn registry_allows(env: &Env, registry: &Address, caller: &Address, function: &str) -> bool {
@@ -92,6 +94,7 @@ pub enum Error {
     EscrowAlreadyResolved = 9,
     EscrowMismatch = 10,
     EscrowNotFunded = 11,
+    MinimumLockPeriodNotMet = 9,
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -115,10 +118,20 @@ pub struct EscrowRecord {
     pub agent: Address,
     /// Ledger timestamp at which this escrow was locked.
     pub locked_at: u64,
+    /// Ledger sequence at which the escrow was locked.
+    pub lock_ledger: u32,
     /// Ledger timestamp after which this escrow auto-refunds.
     pub expires_at: u64,
     /// Current lifecycle status.
     pub status: EscrowStatus,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FlashLoanAttemptDetected {
+    pub escrow_id: (Symbol, Symbol),
+    pub lock_ledger: u32,
+    pub attempted_release_ledger: u32,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -282,6 +295,7 @@ impl PaymentEscrowContract {
             submitter,
             agent,
             locked_at: now,
+            lock_ledger: env.ledger().sequence(),
             expires_at: now + ESCROW_TIMEOUT_SECS,
             status: EscrowStatus::Locked,
         };
@@ -332,6 +346,9 @@ impl PaymentEscrowContract {
             .storage()
             .persistent()
             .get(&DataKey::FundedEscrow(task_id.clone(), node_id.clone()));
+        let mut record = Self::read_escrow(&env, &key)?;
+
+        Self::require_lock_period(&env, &task_id, &node_id, record.lock_ledger)?;
 
         // Releasing after timeout is not allowed — caller should call
         // refund_funds instead once the escrow has expired.
@@ -399,7 +416,7 @@ impl PaymentEscrowContract {
 
     /// Refund the locked funds back to the submitter.
     ///
-    /// The coordinator may call this at any time. After the timeout,
+    /// The coordinator may call this once two ledgers have passed. After the timeout,
     /// *anyone* may call this (auto-refund path).
     pub fn refund_funds(env: Env, task_id: Symbol, node_id: Symbol) -> Result<EscrowRecord, Error> {
         let record = Self::get_escrow(env.clone(), task_id.clone(), node_id.clone())?;
@@ -432,6 +449,8 @@ impl PaymentEscrowContract {
             .persistent()
             .get(&key)
             .ok_or(Error::NotFound)?;
+        let key = DataKey::Escrow(task_id.clone(), node_id.clone());
+        let mut record = Self::read_escrow(&env, &key)?;
 
         let now = env.ledger().timestamp();
         let is_expired = now >= record.expires_at;
@@ -463,6 +482,8 @@ impl PaymentEscrowContract {
             EscrowStatus::Refunded => return Ok(record),
             EscrowStatus::Locked => {}
         }
+        Self::require_lock_period(&env, &task_id, &node_id, record.lock_ledger)?;
+
         record.status = EscrowStatus::Refunded;
         env.storage()
             .persistent()
@@ -485,7 +506,7 @@ impl PaymentEscrowContract {
     /// Read the current escrow record without mutating it.
     pub fn get_escrow(env: Env, task_id: Symbol, node_id: Symbol) -> Result<EscrowRecord, Error> {
         let key = DataKey::Escrow(task_id, node_id);
-        env.storage().persistent().get(&key).ok_or(Error::NotFound)
+        Self::read_escrow(&env, &key)
     }
 
     // ── Internals ─────────────────────────────────────────────────────────────
@@ -501,6 +522,41 @@ impl PaymentEscrowContract {
             }
         }
         caller.require_auth();
+    fn read_escrow(env: &Env, key: &DataKey) -> Result<EscrowRecord, Error> {
+        // Existing records predate this field. Their original sequence is
+        // unavailable, so treat them as historical escrows.
+        let mut fields: Map<Symbol, Val> =
+            env.storage().persistent().get(key).ok_or(Error::NotFound)?;
+        let lock_ledger = Symbol::new(env, "lock_ledger");
+        if !fields.contains_key(lock_ledger.clone()) {
+            fields.set(lock_ledger, 0_u32.into_val(env));
+        }
+        let value: Val = fields.into_val(env);
+        EscrowRecord::try_from_val(env, &value).map_err(|_| Error::NotFound)
+    }
+
+    fn require_lock_period(
+        env: &Env,
+        task_id: &Symbol,
+        node_id: &Symbol,
+        lock_ledger: u32,
+    ) -> Result<(), Error> {
+        let attempted_release_ledger = env.ledger().sequence();
+        if attempted_release_ledger.saturating_sub(lock_ledger) < 2 {
+            // Failed invocations only expose this event in diagnostic traces.
+            env.events().publish(
+                (
+                    symbol_short!("escrow"),
+                    Symbol::new(env, "flash_loan_attempt_detected"),
+                ),
+                FlashLoanAttemptDetected {
+                    escrow_id: (task_id.clone(), node_id.clone()),
+                    lock_ledger,
+                    attempted_release_ledger,
+                },
+            );
+            return Err(Error::MinimumLockPeriodNotMet);
+        }
         Ok(())
     }
 
