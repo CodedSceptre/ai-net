@@ -73,6 +73,8 @@ pub enum Error {
     InvalidPrice = 35,
     /// Batch size exceeds the maximum allowed limit of 20 entries.
     BatchSizeLimitExceeded = 36,
+    /// Capability version string does not match the required MAJOR.MINOR.PATCH semver format.
+    InvalidCapabilityVersion = 32,
 }
 
 impl Error {
@@ -116,6 +118,12 @@ impl Error {
             34 => Some(Error::InvalidAuditRange),
             35 => Some(Error::InvalidPrice),
             36 => Some(Error::BatchSizeLimitExceeded),
+            27 => Some(Error::BridgeProofExpired),
+            28 => Some(Error::BridgeProofNotFound),
+            29 => Some(Error::BridgeProofMismatch),
+            30 => Some(Error::InvalidBridgeExpiry),
+            31 => Some(Error::InvalidAuditRange),
+            32 => Some(Error::InvalidCapabilityVersion),
             _ => None,
         }
     }
