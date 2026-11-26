@@ -518,3 +518,27 @@
   opacity: 0.5;
   transform: translateY(0);
 }
+
+/* ── Mobile responsive overrides ───────────────────────────────────────────── */
+
+@media (max-width: 767px) {
+  /* Minimum 44px tap target height on mobile */
+  .hireButton {
+    min-height: 44px;
+    padding: 12px 10px;
+  }
+
+  /* Increase status badge tap area */
+  .statusBadge {
+    padding: 6px 12px;
+    min-height: 32px;
+  }
+
+  /* Ensure agent name doesn't truncate at full card width */
+  .name {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+    max-width: none;
+  }
+}

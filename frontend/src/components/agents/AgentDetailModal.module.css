@@ -442,6 +442,23 @@
 ══════════════════════════════ */
 .tabSection {
   padding: 0;
+@media (max-width: 540px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Capability chips wrap to multiple lines (flex-wrap already set on .pills) */
+  .pills {
+    gap: 8px;
+  }
+
+  .pill {
+    /* Ensure each chip has a minimum tap-friendly height */
+    padding: 6px 14px;
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+  }
 }
 
 .tabList {

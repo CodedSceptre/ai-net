@@ -132,6 +132,36 @@
   border: none !important;
 }
 
+/* On mobile, increase node size to meet 44×44px minimum tap target */
+@media (max-width: 767px) {
+  .node {
+    min-width: 150px;
+    min-height: 44px;
+    padding: 12px 16px;
+  }
+
+  .nodeLabel {
+    font-size: 0.85rem;
+  }
+
+  .nodeCapBadge {
+    width: 32px;
+    height: 32px;
+    font-size: 0.65rem;
+  }
+
+  /* Larger handle hit area on touch */
+  .handle {
+    width: 12px !important;
+    height: 12px !important;
+  }
+
+  /* Hide minimap on mobile — too small to be useful */
+  .minimap {
+    display: none !important;
+  }
+}
+
 /* ─── Capability tooltip ──────────────────────────────────────────────────── */
 
 .tooltip {
@@ -244,8 +274,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  /* Minimum 44×44px tap target on mobile */
+  width: 44px;
+  height: 44px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--surface-black) 90%, transparent);
   border: 1px solid var(--border-muted);
@@ -253,6 +284,13 @@
   font-size: 1rem;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
+}
+
+@media (min-width: 768px) {
+  .fitViewBtn {
+    width: 28px;
+    height: 28px;
+  }
 }
 
 .fitViewBtn:hover {

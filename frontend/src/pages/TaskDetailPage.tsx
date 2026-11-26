@@ -343,6 +343,40 @@ const TaskDetailPage: React.FC = () => {
           <span className="text-[10px] text-[var(--text-muted)] ml-auto">
             {t("page.task.dagHint")}
           </span>
+          <h3 className="text-md font-semibold text-[var(--text-primary)]">{t('page.task.dagTitle')}</h3>
+          <span className="text-[10px] text-[var(--text-muted)] ml-auto">{t('page.task.dagHint')}</span>
+        </div>
+        
+        <div 
+          id="dag-preview"
+          className="w-full bg-[var(--surface-glass-subtle)] rounded-xl border border-[var(--panel-border)] overflow-hidden relative"
+          style={{ height: '280px' }}
+        >
+          {flowNodes.length > 0 ? (
+            <ReactFlow
+              nodes={flowNodes}
+              edges={flowEdges}
+              nodeTypes={nodeTypes}
+              onNodeClick={(_event, node) => setSelectedNodeId(node.id)}
+              fitView
+              fitViewOptions={{ padding: 0.2 }}
+              nodesConnectable={false}
+              nodesDraggable={false}
+              zoomOnScroll={false}
+              zoomOnPinch={true}
+              zoomOnDoubleClick={false}
+              panOnDrag={true}
+              preventScrolling={true}
+              attributionPosition="bottom-left"
+            >
+              <Background color="var(--surface-elevated)" gap={16} size={1} />
+              <Controls showInteractive={false} />
+            </ReactFlow>
+          ) : (
+            <div className="flex items-center justify-center h-full text-[var(--text-muted)]">
+              {t('page.task.dagEmpty')}
+            </div>
+          )}
         </div>
 
         <DAGVisualization

@@ -18,6 +18,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import type { DagEdge, DagNode } from '../../services/taskService';
 import styles from './DAGPreview.module.css';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -205,6 +206,9 @@ interface InnerProps {
 function DAGPreviewInner({ nodes, edges }: InnerProps) {
   const { t } = useTranslation();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // On viewports below 768px switch to vertical top-to-bottom node stacking.
+  // Horizontal DAGs are unreadable on narrow screens.
+  const isMobile = useMediaQuery('(max-width: 767px)');
 
   const flowNodes = useMemo<Node<PreviewNodeData>[]>(
     () =>
@@ -223,14 +227,15 @@ function DAGPreviewInner({ nodes, edges }: InnerProps) {
             status: ext.status as PreviewNodeData['status'],
             selected: isSelected,
           },
-          // Lay out horizontally; if only 1 node vertically centre it
-          position: { x: index * 230, y: 60 },
+          // Vertical layout on mobile, horizontal on desktop
+          position: isMobile
+            ? { x: 60, y: index * 110 }
+            : { x: index * 230, y: 60 },
           selected: isSelected,
-          // Nodes are not draggable in preview — only in full task detail view
           draggable: false,
         };
       }),
-    [nodes, selectedNodeId],
+    [nodes, selectedNodeId, isMobile],
   );
 
   const flowEdges = useMemo<Edge[]>(
@@ -278,9 +283,9 @@ function DAGPreviewInner({ nodes, edges }: InnerProps) {
         connectionLineType={ConnectionLineType.SmoothStep}
         // ── Interaction toggles ─────────────────────────────────────────────
         zoomOnScroll
-        zoomOnPinch
+        zoomOnPinch={true}
         zoomOnDoubleClick={false}
-        panOnDrag
+        panOnDrag={true}
         panOnScroll={false}
         nodesConnectable={false}
         nodesDraggable={false}
