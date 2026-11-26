@@ -1,0 +1,165 @@
+name: E2E Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  e2e:
+    name: End-to-End Tests (Stellar Testnet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      TESTNET_RPC_URL: ${{ secrets.TESTNET_RPC_URL }}
+      TEST_WALLET_SEED: ${{ secrets.TEST_WALLET_SEED }}
+      TEST_WALLET_ADDRESS: ${{ secrets.TEST_WALLET_ADDRESS }}
+      TEST_WALLET_ADDRESS_2: ${{ secrets.TEST_WALLET_ADDRESS_2 }}
+      VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}
+      REGISTRY_CONTRACT_ID: ${{ secrets.REGISTRY_CONTRACT_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install backend dependencies
+        run: npm ci --prefix backend
+
+      - name: Create test results directory
+        run: mkdir -p test-results
+
+      - name: Start services via Docker Compose
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.test.yml \
+            up -d --build
+        env:
+          STELLAR_SECRET_KEY: ${{ secrets.TEST_WALLET_SEED }}
+          VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}
+
+      - name: Wait for all services to be healthy
+        run: |
+          echo "Waiting for services to become healthy (max 2 minutes)..."
+          DEADLINE=$(( $(date +%s) + 120 ))
+
+          check_service() {
+            local service=$1
+            local url=$2
+            curl -fsS "$url" > /dev/null 2>&1
+          }
+
+          while true; do
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "ERROR: Services did not become healthy within 2 minutes"
+              docker compose -f docker-compose.yml -f docker-compose.test.yml logs
+              exit 1
+            fi
+
+            BACKEND_OK=false
+            STELLAR_OK=false
+
+            if check_service "backend" "http://localhost:3000/health"; then
+              BACKEND_OK=true
+            fi
+
+            if check_service "stellar" "http://localhost:8000/health"; then
+              STELLAR_OK=true
+            fi
+
+            if $BACKEND_OK && $STELLAR_OK; then
+              echo "All services are healthy."
+              break
+            fi
+
+            echo "Still waiting... backend=$BACKEND_OK stellar=$STELLAR_OK"
+            sleep 5
+          done
+
+      - name: Fund test Stellar accounts via Friendbot
+        run: |
+          fund_account() {
+            local addr=$1
+            local name=$2
+            echo "Funding $name ($addr) via Friendbot..."
+            response=$(curl -sS "https://friendbot.stellar.org/?addr=${addr}")
+            if echo "$response" | grep -q '"hash"'; then
+              echo "$name funded successfully"
+            else
+              echo "WARNING: Friendbot response for $name: $response"
+            fi
+          }
+
+          if [ -n "$TEST_WALLET_ADDRESS" ]; then
+            fund_account "$TEST_WALLET_ADDRESS" "TEST_WALLET_1"
+          fi
+
+          if [ -n "$TEST_WALLET_ADDRESS_2" ]; then
+            fund_account "$TEST_WALLET_ADDRESS_2" "TEST_WALLET_2"
+          fi
+
+          # Allow ledger time to close
+          sleep 5
+
+      - name: Run E2E tests
+        run: |
+          npm --prefix backend run test:e2e \
+            --testTimeout=120000 \
+            --reporters=default \
+            --reporters=jest-junit
+        env:
+          JEST_JUNIT_OUTPUT_DIR: ../test-results
+          JEST_JUNIT_OUTPUT_NAME: e2e.xml
+          JEST_JUNIT_SUITE_NAME: E2E Tests
+          NODE_ENV: test
+          TESTNET_RPC_URL: ${{ secrets.TESTNET_RPC_URL }}
+          TEST_WALLET_SEED: ${{ secrets.TEST_WALLET_SEED }}
+          TEST_WALLET_ADDRESS: ${{ secrets.TEST_WALLET_ADDRESS }}
+          TEST_WALLET_ADDRESS_2: ${{ secrets.TEST_WALLET_ADDRESS_2 }}
+          VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}
+          REGISTRY_CONTRACT_ID: ${{ secrets.REGISTRY_CONTRACT_ID }}
+          BACKEND_URL: http://localhost:3000
+
+      - name: Upload JUnit test results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: test-results/e2e.xml
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Annotate PR with test failures
+        if: always()
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: test-results/e2e.xml
+          check_name: E2E Test Results
+          fail_on_failure: true
+          require_tests: false
+          detailed_summary: true
+          annotate_only: false
+
+      - name: Teardown all services and volumes
+        if: always()
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.test.yml \
+            down -v --remove-orphans
