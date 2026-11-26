@@ -36,11 +36,18 @@
   gap: 0.5rem;
 }
 
+.activityFeed {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
 .recentTasks {
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
+
 
 .heading {
   font-size: 1.125rem;
