@@ -162,4 +162,40 @@ export const handlers = [
   http.post('/api/notifications/preferences', async () => {
     return HttpResponse.json({ success: true })
   }),
+
+  http.post('/api/tasks/estimate', async ({ request }) => {
+    const body = await request.json() as { prompt?: string }
+    const prompt = (body?.prompt ?? '').toLowerCase()
+
+    // Derive a simple node list from keywords in the prompt
+    type AgentKey = 'research' | 'risk' | 'coding' | 'design' | 'report'
+    const costs: Record<AgentKey, number> = {
+      research: 0.5,
+      risk: 0.3,
+      coding: 1.2,
+      design: 0.6,
+      report: 0.4,
+    }
+    const keywords: AgentKey[] = ['research', 'risk', 'coding', 'design', 'report']
+    const matched: AgentKey[] = keywords.filter((k) => prompt.includes(k))
+    const agents: AgentKey[] = matched.length > 0 ? matched : ['research', 'report']
+
+    const breakdown = agents.map((agent) => ({
+      agent,
+      costXLM: costs[agent],
+    }))
+    const subtotalXLM = breakdown.reduce((s, b) => s + b.costXLM, 0)
+    const platformFeeRate = 0.05
+    const platformFeeXLM = parseFloat((subtotalXLM * platformFeeRate).toFixed(4))
+    const estimatedCostXLM = parseFloat((subtotalXLM + platformFeeXLM).toFixed(4))
+
+    return HttpResponse.json({
+      currency: 'XLM',
+      breakdown,
+      subtotalXLM,
+      platformFeeXLM,
+      platformFeeRate,
+      estimatedCostXLM,
+    })
+  }),
 ]
