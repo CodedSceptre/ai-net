@@ -55,3 +55,21 @@
   color: var(--surface-canvas);
   margin: 0;
 }
+
+.agentPerformance {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agentPerformance li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0;
+}
+
+.agentPerformance strong {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}

@@ -170,19 +170,38 @@ const RoutedContent: React.FC = () => {
                     path="/tasks/new"
                     element={
                       <RouteErrorBoundary label="New Task">
+                <RouteTransition>
+                  <Routes>
+                    <Route
+                      path="/dashboard"
+                      element={
+                        <RouteErrorBoundary label="Dashboard">
+                          <ProtectedRoute>
+                            <DashboardPage />
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/wallet"
+                      element={
+                        <RouteErrorBoundary label="Wallet">
+                          <ProtectedRoute>
+                            <WalletPage />
+                          </ProtectedRoute>
+                        </RouteErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/payments"
+                      element={
                         <ProtectedRoute>
                           <PaymentsPage />
                         </ProtectedRoute>
                       }
                     />
-                    <Route
-                      path="/marketplace"
-                      element={<Navigate to="/agents" replace />}
-                    />
-                    <Route
-                      path="/tasks"
-                      element={<Navigate to="/tasks/history" replace />}
-                    />
+                    <Route path="/marketplace" element={<Navigate to="/agents" replace />} />
+                    <Route path="/tasks" element={<Navigate to="/tasks/history" replace />} />
                     <Route
                       path="/notifications"
                       element={
@@ -191,6 +210,8 @@ const RoutedContent: React.FC = () => {
                         </ProtectedRoute>
                       }
                     />
+                    <Route path="/forbidden" element={<ForbiddenPage />} />
+                    <Route path="/server-error" element={<ServerErrorPage />} />
                     <Route
                       path="/agents"
                       element={
@@ -201,8 +222,6 @@ const RoutedContent: React.FC = () => {
                         </RouteErrorBoundary>
                       }
                     />
-                    <Route path="/forbidden" element={<ForbiddenPage />} />
-                    <Route path="/server-error" element={<ServerErrorPage />} />
                     <Route
                       path="/agents/:id"
                       element={

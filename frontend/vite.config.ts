@@ -28,7 +28,7 @@ export default defineConfig(({ mode }) => ({
     environment: 'jsdom',
     setupFiles: './vitest.setup.ts',
     globals: true,
-    exclude: ['tests/e2e/**', 'node_modules/**'],
+    exclude: ['tests/e2e/**', 'tests/visual/**', 'node_modules/**'],
   },
   build: {
     // Warn when an individual chunk exceeds 250kb (developer-specified budget)

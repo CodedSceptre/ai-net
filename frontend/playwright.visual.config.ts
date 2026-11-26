@@ -1,54 +1,43 @@
 import { defineConfig, devices } from '@playwright/test';
-import '@percy/playwright/dropin';
 
-/**
- * Visual-regression config, kept separate from `playwright.config.ts`
- * (functional e2e) because screenshot baselines are pixel-tied to a single
- * browser engine, viewport, and OS. Mixing them into the functional suite's
- * multi-browser matrix would double the number of baselines to maintain for
- * no correctness benefit — a CSS regression shows up the same way in
- * Chromium as it does in Firefox.
- *
- * Baselines are generated/verified with the `mcr.microsoft.com/playwright`
- * Docker image pinned to the `@playwright/test` version in package.json, so
- * local updates match what CI renders. See `tests/visual/README.md`.
- */
+const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
+
 export default defineConfig({
   testDir: './tests/visual',
-  fullyParallel: false,
+  // The older theme suite keeps its own checked-in images.
+  testIgnore: '**/*.visual.spec.ts',
+  snapshotPathTemplate: '{testDir}/baselines/{projectName}/{arg}{ext}',
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
   workers: 1,
-  reporter: [
-    ['html', { outputFolder: 'playwright-report-visual', open: 'never' }],
-    ['list'],
-    ['@percy/playwright/dropin/reporter', { gate: 'fail-on-changes' }],
-  ],
+  updateSnapshots: 'none',
+  reporter: [['html', { outputFolder: 'playwright-report-visual', open: 'never' }], ['list']],
   expect: {
-    // Global threshold: 1% pixel-diff ceiling for all surfaces.
-    // Anti-aliasing / sub-pixel jitter is typically < 0.2%; 1% gives enough
-    // headroom without masking real layout regressions.
-    // Each screenshot assertion also declares this threshold explicitly.
     toHaveScreenshot: {
-      maxDiffPixelRatio: 0.01,
+      maxDiffPixelRatio: 0.001,
       animations: 'disabled',
+      fullPage: true,
     },
   },
   use: {
-    baseURL: 'http://localhost:3000',
-    viewport: { width: 1440, height: 900 },
+    baseURL,
+    locale: 'en-US',
+    timezoneId: 'UTC',
+    reducedMotion: 'reduce',
     trace: 'retain-on-failure',
   },
   projects: [
-    {
-      name: 'visual-chromium',
-      use: { ...devices['Desktop Chrome'] },
-    },
+    { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } } },
+    { name: 'mobile', use: {
+      ...devices['Pixel 7'],
+      defaultBrowserType: 'chromium',
+      viewport: { width: 390, height: 844 },
+      deviceScaleFactor: 1,
+    } },
   ],
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:3000',
+  webServer: process.env.PLAYWRIGHT_BASE_URL ? undefined : {
+    command: 'npm run dev -- --port 5173 --strictPort',
+    url: baseURL,
     reuseExistingServer: !process.env.CI,
-    timeout: 120 * 1000,
+    timeout: 120_000,
   },
 });

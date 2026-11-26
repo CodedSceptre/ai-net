@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 
 import { useTaskMonitor } from "../hooks/useTaskMonitor";
 import { useTaskStream } from "../hooks/useTaskStream";
+import { PipelineStepIndicator } from "../components/tasks/PipelineStepIndicator";
 import { DAGVisualization } from "../components/tasks/DAGVisualization";
 import { PipelineStepIndicator } from "../components/tasks/PipelineStepIndicator";
 import { TaskMilestoneTimeline } from "../components/tasks/TaskMilestoneTimeline";
