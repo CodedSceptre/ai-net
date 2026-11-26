@@ -1,0 +1,22 @@
+{
+  "title": "Gestión de Billetera",
+  "balance": "Saldo Total",
+  "availableBalance": "Saldo Disponible",
+  "reserve": "Reserva Mínima: {{amount}} XLM",
+  "publicKey": "Clave Pública",
+  "copyAddress": "Clave pública copiada al portapapeles",
+  "viewExplorer": "Ver en Stellar Expert",
+  "sendXLM": "Enviar XLM",
+  "receive": "Recibir XLM",
+  "scanQR": "Escanee el código QR para recibir pagos",
+  "transactions": "Historial de Transacciones",
+  "connectWallet": "Conectar Billetera",
+  "connectFreighter": "Conectar con Freighter",
+  "connectSecret": "Conectar con Clave Secreta",
+  "secretKeyPlaceholder": "Ingrese clave secreta S... (Solo Testnet)",
+  "disconnectConfirmTitle": "¿Desconectar Billetera?",
+  "disconnectConfirmBody": "¿Está seguro de que desea desconectar esta sesión de billetera? Deberá volver a conectarse para firmar transacciones.",
+  "a11y": {
+    "loadingWallet": "Cargando detalles de la billetera"
+  }
+}

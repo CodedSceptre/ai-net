@@ -180,7 +180,7 @@ function WalletPage() {
           title={t('a11y.balanceChip', { code })}
         >
           <span className={styles.balanceChipAmount} aria-label={`${parseFloat(entry.balance)} ${code}`}>
-            {new Intl.NumberFormat(undefined, { maximumFractionDigits: 7 }).format(parseFloat(entry.balance) || 0)}
+            {new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 7 }).format(parseFloat(entry.balance) || 0)}
           </span>
           <span className={styles.balanceChipCode}>{code}</span>
         </span>

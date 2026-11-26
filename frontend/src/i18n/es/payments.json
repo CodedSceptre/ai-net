@@ -1,0 +1,15 @@
+{
+  "title": "Historial de Pagos y Depósito en Garantía",
+  "totalSpent": "Total XLM Desembolsado",
+  "inEscrow": "Actualmente en Depósito",
+  "payoutCount": "Total de Transferencias Desembolsadas",
+  "timeline": "Cronología de Liquidación de Pagos",
+  "table": {
+    "hash": "Hash de Transacción",
+    "sender": "Remitente",
+    "receiver": "Receptor",
+    "amount": "Monto",
+    "date": "Fecha y Hora",
+    "status": "Estado de Liquidación"
+  }
+}

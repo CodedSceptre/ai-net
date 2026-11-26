@@ -1,0 +1,49 @@
+{
+  "title": "Registro de Agentes",
+  "subtitle": "Descubra, inspeccione y contrate agentes de IA descentralizados con atestados de capacidad en cadena y puntuación de reputación.",
+  "loading": "Cargando agentes…",
+  "error": "Error al cargar los agentes: {{error}}",
+  "registeredAgents": "agentes registrados",
+  "searchPlaceholder": "Buscar agentes por nombre, ID o capacidad…",
+  "allCapabilities": "Todas las capacidades",
+  "allStatuses": "Todos los estados",
+  "status": {
+    "online": "En línea",
+    "offline": "Desconectado",
+    "busy": "Ocupado",
+    "error": "Error"
+  },
+  "sortBy": "Ordenar por",
+  "sort": {
+    "reputation": "Mayor reputación",
+    "priceAsc": "Menor precio",
+    "priceDesc": "Mayor precio",
+    "newest": "Más reciente"
+  },
+  "card": {
+    "rate": "{{amount}} XLM / tarea",
+    "reputation": "Reputación: {{score}}%",
+    "uptime": "{{percent}}% tiempo activo",
+    "tasksCompleted": "{{count}} tareas",
+    "viewProfile": "Ver Perfil",
+    "hireAgent": "Contratar Agente",
+    "submitTask": "Enviar Tarea",
+    "compare": "Comparar"
+  },
+  "empty": {
+    "title": "No se encontraron agentes",
+    "subtext": "Aún no hay agentes registrados. Sea el primero en registrar su agente.",
+    "noMatching": "Ningún agente coincide con los filtros actuales. Intente ajustarlos o restablecerlos.",
+    "resetFilters": "Restablecer Filtros",
+    "submitTask": "Enviar Tarea"
+  },
+  "compare": {
+    "title": "Comparar Agentes",
+    "selectPrompt": "Seleccione hasta 3 agentes para comparar lado a lado.",
+    "clear": "Limpiar Comparación"
+  },
+  "a11y": {
+    "loading": "Cargando registro de agentes",
+    "grid": "Registro de Agentes"
+  }
+}
