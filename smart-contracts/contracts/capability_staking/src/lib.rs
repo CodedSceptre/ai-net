@@ -39,7 +39,9 @@
 //! | `slash_bond`      | `(staking, slashed)`           | `BondSlashedEvent` |
 //! | `claim_unbonded`  | `(staking, claimed)`           | `BondClaimedEvent` |
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, Symbol, Vec,
+};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -82,9 +84,24 @@ pub enum DataKey {
     Blacklist(Address),
     /// Address+Bytes keyed stake record for the new slash() path.
     AddressStakeRecord(Address, Bytes),
+    VotingStakeEnabled,
+    ActiveBondOwner(Symbol, Symbol),
+    ActiveBondId(Address, Symbol),
+    UnbondingOwner(Symbol, Symbol),
+    StakeHistory(Address),
+    TotalStakeHistory,
 }
 
 // ─── Data Types ──────────────────────────────────────────────────────────────
+
+const MAX_STAKE_CHECKPOINTS: u32 = 100;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StakeCheckpoint {
+    pub ledger: u32,
+    pub balance: i128,
+}
 
 /// On-chain record for an active stake bond.
 #[contracttype]
@@ -229,6 +246,81 @@ fn extend_persistent_ttl(env: &Env, key: &DataKey) {
     }
 }
 
+fn append_checkpoint(history: &mut Vec<StakeCheckpoint>, ledger: u32, delta: i128) {
+    let balance = history
+        .back()
+        .map_or(0, |entry| entry.balance)
+        .checked_add(delta)
+        .expect("stake balance overflow");
+    let entry = StakeCheckpoint { ledger, balance };
+    if history.back().is_some_and(|latest| latest.ledger == ledger) {
+        history.set(history.len() - 1, entry);
+    } else {
+        if history.len() == MAX_STAKE_CHECKPOINTS {
+            history.pop_front();
+        }
+        history.push_back(entry);
+    }
+}
+
+fn record_stake_change(env: &Env, owner: &Address, delta: i128) {
+    let key = DataKey::StakeHistory(owner.clone());
+    let storage = env.storage().persistent();
+    let mut history = storage.get(&key).unwrap_or_else(|| Vec::new(env));
+    let instance = env.storage().instance();
+    let mut total = instance
+        .get(&DataKey::TotalStakeHistory)
+        .unwrap_or_else(|| Vec::new(env));
+    // Use balances entering the proposal ledger. Stake acquired later in that
+    // same ledger must be ineligible even if the proposal is voted on later.
+    let effective_ledger = env
+        .ledger()
+        .sequence()
+        .checked_add(1)
+        .expect("ledger sequence overflow");
+    append_checkpoint(&mut history, effective_ledger, delta);
+    append_checkpoint(&mut total, effective_ledger, delta);
+    storage.set(&key, &history);
+    extend_persistent_ttl(env, &key);
+    instance.set(&DataKey::TotalStakeHistory, &total);
+}
+
+fn balance_at(history: &Vec<StakeCheckpoint>, ledger: u32) -> i128 {
+    let mut low = 0;
+    let mut high = history.len();
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if history.get(mid).unwrap().ledger <= ledger {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low.checked_sub(1)
+        .and_then(|index| history.get(index))
+        .map_or(0, |entry| entry.balance)
+}
+
+fn funded_bond_for(env: &Env, owner: &Address, capability: &Bytes) -> Option<(Symbol, Symbol)> {
+    let mut buffer = [0; 32];
+    let bytes = buffer.get_mut(..capability.len() as usize)?;
+    capability.copy_into_slice(bytes);
+    if bytes.is_empty()
+        || !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+    {
+        return None;
+    }
+    let name = core::str::from_utf8(bytes).ok()?;
+    let symbol = Symbol::new(env, name);
+    let id = env
+        .storage()
+        .persistent()
+        .get(&DataKey::ActiveBondId(owner.clone(), symbol.clone()))?;
+    Some((id, symbol))
+}
+
 fn load_admin(env: &Env) -> Address {
     env.storage()
         .instance()
@@ -286,6 +378,34 @@ impl CapabilityStakingContract {
             .instance()
             .set(&DataKey::TokenContract, &token);
         extend_instance_ttl(&env);
+    }
+
+    /// New bonds will be token-backed and eligible for governance voting.
+    /// Existing event-based bonds remain claimable through their original flow.
+    pub fn enable_voting_stake(env: Env) {
+        load_admin(&env).require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::VotingStakeEnabled, &true);
+        extend_instance_ttl(&env);
+    }
+
+    pub fn get_voting_power_at(env: Env, voter: Address, ledger: u32) -> i128 {
+        let history = env
+            .storage()
+            .persistent()
+            .get(&DataKey::StakeHistory(voter))
+            .unwrap_or_else(|| Vec::new(&env));
+        balance_at(&history, ledger)
+    }
+
+    pub fn get_total_voting_power_at(env: Env, ledger: u32) -> i128 {
+        let history = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStakeHistory)
+            .unwrap_or_else(|| Vec::new(&env));
+        balance_at(&history, ledger)
     }
 
     /// Admin: set the dispute_resolution contract address that is permitted to
@@ -366,6 +486,29 @@ impl CapabilityStakingContract {
             panic!("stake below minimum");
         }
 
+        let key = DataKey::StakeRecord(agent_id.clone(), capability.clone());
+        let storage = env.storage().persistent();
+        if env.storage().instance().has(&DataKey::VotingStakeEnabled) {
+            if amount_stroops <= 0 {
+                panic!("stake must be positive");
+            }
+            let id_key = DataKey::ActiveBondId(owner.clone(), capability.clone());
+            if storage.has(&key) || storage.has(&id_key) {
+                panic!("stake already exists");
+            }
+            token::Client::new(&env, &load_token(&env)).transfer(
+                &owner,
+                &env.current_contract_address(),
+                &amount_stroops,
+            );
+            let owner_key = DataKey::ActiveBondOwner(agent_id.clone(), capability.clone());
+            storage.set(&owner_key, &owner);
+            storage.set(&id_key, &agent_id);
+            extend_persistent_ttl(&env, &owner_key);
+            extend_persistent_ttl(&env, &id_key);
+            record_stake_change(&env, &owner, amount_stroops);
+        }
+
         let ledger_seq = env.ledger().sequence() as u64;
         let record = StakeRecord {
             agent_id: agent_id.clone(),
@@ -375,7 +518,6 @@ impl CapabilityStakingContract {
             unbonding_since: None,
         };
 
-        let key = DataKey::StakeRecord(agent_id.clone(), capability.clone());
         env.storage().persistent().set(&key, &record);
         extend_persistent_ttl(&env, &key);
         extend_instance_ttl(&env);
@@ -401,12 +543,7 @@ impl CapabilityStakingContract {
     ///
     /// # Errors
     /// Panics with `Error::StakeNotFound` if no active stake exists.
-    pub fn unstake_bond(
-        env: Env,
-        owner: Address,
-        agent_id: Symbol,
-        capability: Symbol,
-    ) {
+    pub fn unstake_bond(env: Env, owner: Address, agent_id: Symbol, capability: Symbol) {
         owner.require_auth();
 
         let stake_key = DataKey::StakeRecord(agent_id.clone(), capability.clone());
@@ -415,6 +552,27 @@ impl CapabilityStakingContract {
             .persistent()
             .get(&stake_key)
             .unwrap_or_else(|| panic!("stake not found"));
+
+        let storage = env.storage().persistent();
+        let owner_key = DataKey::ActiveBondOwner(agent_id.clone(), capability.clone());
+        let unbonding_owner_key = DataKey::UnbondingOwner(agent_id.clone(), capability.clone());
+        let unbonding_key = DataKey::UnbondingRecord(agent_id.clone(), capability.clone());
+        if storage.has(&unbonding_owner_key) {
+            panic!("unbonding already exists");
+        }
+        if let Some(bond_owner) = storage.get::<_, Address>(&owner_key) {
+            if owner != bond_owner {
+                panic!("wrong bond owner");
+            }
+            if storage.has(&unbonding_key) {
+                panic!("unbonding already exists");
+            }
+            record_stake_change(&env, &owner, -record.amount_stroops);
+            storage.remove(&owner_key);
+            storage.remove(&DataKey::ActiveBondId(owner.clone(), capability.clone()));
+            storage.set(&unbonding_owner_key, &owner);
+            extend_persistent_ttl(&env, &unbonding_owner_key);
+        }
 
         // Remove the active stake record.
         env.storage().persistent().remove(&stake_key);
@@ -430,7 +588,6 @@ impl CapabilityStakingContract {
             claimable_at,
         };
 
-        let unbonding_key = DataKey::UnbondingRecord(agent_id.clone(), capability.clone());
         env.storage().persistent().set(&unbonding_key, &unbonding);
         extend_persistent_ttl(&env, &unbonding_key);
         extend_instance_ttl(&env);
@@ -461,12 +618,7 @@ impl CapabilityStakingContract {
     /// - Panics with `Error::UnbondingNotFound` if no unbonding record exists.
     /// - Panics with `Error::UnbondingPeriodNotElapsed` if the waiting period
     ///   has not yet passed.
-    pub fn claim_unbonded(
-        env: Env,
-        owner: Address,
-        agent_id: Symbol,
-        capability: Symbol,
-    ) {
+    pub fn claim_unbonded(env: Env, owner: Address, agent_id: Symbol, capability: Symbol) {
         owner.require_auth();
 
         let unbonding_key = DataKey::UnbondingRecord(agent_id.clone(), capability.clone());
@@ -479,6 +631,20 @@ impl CapabilityStakingContract {
         let current_ledger = env.ledger().sequence() as u64;
         if current_ledger < record.claimable_at {
             panic!("unbonding period not elapsed");
+        }
+
+        let owner_key = DataKey::UnbondingOwner(agent_id.clone(), capability.clone());
+        let storage = env.storage().persistent();
+        if let Some(bond_owner) = storage.get::<_, Address>(&owner_key) {
+            if owner != bond_owner {
+                panic!("wrong bond owner");
+            }
+            storage.remove(&owner_key);
+            token::Client::new(&env, &load_token(&env)).transfer(
+                &env.current_contract_address(),
+                &owner,
+                &record.amount_stroops,
+            );
         }
 
         // Remove the unbonding record — stake is considered claimed.
@@ -509,12 +675,7 @@ impl CapabilityStakingContract {
     /// # Errors
     /// Panics if neither an active stake nor an unbonding record is found for
     /// the given (agent_id, capability) pair.
-    pub fn slash_bond(
-        env: Env,
-        agent_id: Symbol,
-        capability: Symbol,
-        reason: Symbol,
-    ) {
+    pub fn slash_bond(env: Env, agent_id: Symbol, capability: Symbol, reason: Symbol) {
         let admin = load_admin(&env);
         admin.require_auth();
 
@@ -524,19 +685,40 @@ impl CapabilityStakingContract {
         let stake_key = DataKey::StakeRecord(agent_id.clone(), capability.clone());
         let unbonding_key = DataKey::UnbondingRecord(agent_id.clone(), capability.clone());
 
+        let storage = env.storage().persistent();
+        let active_owner_key = DataKey::ActiveBondOwner(agent_id.clone(), capability.clone());
+        let unbonding_owner_key = DataKey::UnbondingOwner(agent_id.clone(), capability.clone());
         let amount_stroops: i128 = if let Some(record) = env
             .storage()
             .persistent()
             .get::<DataKey, StakeRecord>(&stake_key)
         {
-            env.storage().persistent().remove(&stake_key);
+            storage.remove(&stake_key);
+            if let Some(owner) = storage.get::<_, Address>(&active_owner_key) {
+                storage.remove(&active_owner_key);
+                storage.remove(&DataKey::ActiveBondId(owner.clone(), capability.clone()));
+                record_stake_change(&env, &owner, -record.amount_stroops);
+                token::Client::new(&env, &load_token(&env)).transfer(
+                    &env.current_contract_address(),
+                    &treasury,
+                    &record.amount_stroops,
+                );
+            }
             record.amount_stroops
         } else if let Some(record) = env
             .storage()
             .persistent()
             .get::<DataKey, UnbondingRecord>(&unbonding_key)
         {
-            env.storage().persistent().remove(&unbonding_key);
+            storage.remove(&unbonding_key);
+            if storage.has(&unbonding_owner_key) {
+                storage.remove(&unbonding_owner_key);
+                token::Client::new(&env, &load_token(&env)).transfer(
+                    &env.current_contract_address(),
+                    &treasury,
+                    &record.amount_stroops,
+                );
+            }
             record.amount_stroops
         } else {
             panic!("stake not found");
@@ -602,62 +784,40 @@ impl CapabilityStakingContract {
         let token_id = load_token(&env);
         let current_ledger = env.ledger().sequence();
 
-        // ── Convert Bytes capability key to Symbol for storage lookup ────────
-        // Stake records are keyed by Symbol; we derive a lookup key from the
-        // raw Bytes by interpreting up to 9 ASCII bytes as a symbol.
-        // For the slash path we search using a dedicated Address-keyed store.
-        // Because the existing StakeRecord keys use (Symbol, Symbol) we store
-        // the address-based record under a separate compound key using the
-        // agent Address as the first component.
-        //
-        // We use DataKey::Blacklist(agent_id) which takes Address — reuse that
-        // address in a second lookup key form for the stake:
-        // DataKey::StakeRecord stores (Symbol, Symbol). We need to support the
-        // new Address-based slash path separately.
-        //
-        // Implementation: look up stake by iterating known patterns or store
-        // address-keyed stakes. Since the current StakeRecord key is
-        // (Symbol, Symbol) and the new slash() takes Address + Bytes, we store
-        // an Address+Bytes keyed stake under a new DataKey variant:
-        // AddressStakeRecord(Address, Bytes).
-        //
-        // However, to avoid a breaking storage migration we also check if
-        // there is a matching record under the legacy (Symbol, Symbol) key.
-        // For new stakers the agent owner is tracked via AddressStakeRecord.
-
-        let addr_key = DataKey::AddressStakeRecord(agent_id.clone(), capability.clone());
-        let stake_opt: Option<AddressStakeRecord> = env
-            .storage()
-            .persistent()
-            .get(&addr_key);
-
-        let record = stake_opt.unwrap_or_else(|| panic!("stake not found"));
-
-        let actual_slash = if slash_amount >= record.amount_stroops {
-            record.amount_stroops
-        } else {
-            slash_amount
-        };
-        let remaining = record.amount_stroops - actual_slash;
-
-        if remaining == 0 {
-            // Full slash: remove record and blacklist agent for 30 ledger-days.
-            env.storage().persistent().remove(&addr_key);
-
-            let blacklist_expires = current_ledger + BLACKLIST_PERIOD_LEDGERS;
-            let bl_key = DataKey::Blacklist(agent_id.clone());
-            env.storage()
-                .persistent()
-                .set(&bl_key, &blacklist_expires);
-            extend_persistent_ttl(&env, &bl_key);
-        } else {
-            // Partial slash: update the stake record.
-            let updated = AddressStakeRecord {
-                amount_stroops: remaining,
-                ..record
+        let storage = env.storage().persistent();
+        let (actual_slash, remaining) =
+            if let Some((id, symbol)) = funded_bond_for(&env, &agent_id, &capability) {
+                let key = DataKey::StakeRecord(id.clone(), symbol.clone());
+                let mut record: StakeRecord = storage.get(&key).expect("stake not found");
+                let actual = slash_amount.min(record.amount_stroops);
+                record.amount_stroops -= actual;
+                record_stake_change(&env, &agent_id, -actual);
+                if record.amount_stroops == 0 {
+                    storage.remove(&key);
+                    storage.remove(&DataKey::ActiveBondOwner(id, symbol.clone()));
+                    storage.remove(&DataKey::ActiveBondId(agent_id.clone(), symbol));
+                } else {
+                    storage.set(&key, &record);
+                }
+                (actual, record.amount_stroops)
+            } else {
+                let key = DataKey::AddressStakeRecord(agent_id.clone(), capability.clone());
+                let mut record: AddressStakeRecord = storage.get(&key).expect("stake not found");
+                let actual = slash_amount.min(record.amount_stroops);
+                record.amount_stroops -= actual;
+                if record.amount_stroops == 0 {
+                    storage.remove(&key);
+                } else {
+                    storage.set(&key, &record);
+                    extend_persistent_ttl(&env, &key);
+                }
+                (actual, record.amount_stroops)
             };
-            env.storage().persistent().set(&addr_key, &updated);
-            extend_persistent_ttl(&env, &addr_key);
+        if remaining == 0 {
+            let expires = current_ledger.saturating_add(BLACKLIST_PERIOD_LEDGERS);
+            let key = DataKey::Blacklist(agent_id.clone());
+            storage.set(&key, &expires);
+            extend_persistent_ttl(&env, &key);
         }
 
         // Transfer slashed funds to treasury via the token contract.
@@ -689,11 +849,7 @@ impl CapabilityStakingContract {
 
     /// Returns the active `StakeRecord` for an (agent_id, capability) pair, or
     /// `None` if no stake exists.
-    pub fn get_stake(
-        env: Env,
-        agent_id: Symbol,
-        capability: Symbol,
-    ) -> Option<StakeRecord> {
+    pub fn get_stake(env: Env, agent_id: Symbol, capability: Symbol) -> Option<StakeRecord> {
         extend_instance_ttl(&env);
         env.storage()
             .persistent()
@@ -716,11 +872,7 @@ impl CapabilityStakingContract {
     /// Returns `true` if the agent has an active stake >= the capability's
     /// minimum stake, `false` otherwise (no stake, insufficient stake, or
     /// stake is in the unbonding period).
-    pub fn is_sufficiently_staked(
-        env: Env,
-        agent_id: Symbol,
-        capability: Symbol,
-    ) -> bool {
+    pub fn is_sufficiently_staked(env: Env, agent_id: Symbol, capability: Symbol) -> bool {
         extend_instance_ttl(&env);
         let min_stake: i128 = env
             .storage()
@@ -743,11 +895,7 @@ impl CapabilityStakingContract {
     pub fn is_blacklisted(env: Env, agent_id: Address) -> bool {
         extend_instance_ttl(&env);
         let key = DataKey::Blacklist(agent_id);
-        match env
-            .storage()
-            .persistent()
-            .get::<DataKey, u32>(&key)
-        {
+        match env.storage().persistent().get::<DataKey, u32>(&key) {
             Some(expires_at) => env.ledger().sequence() < expires_at,
             None => false,
         }

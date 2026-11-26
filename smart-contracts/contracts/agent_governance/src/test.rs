@@ -408,7 +408,10 @@ fn full_proposal_lifecycle_all_types() {
 #[test]
 fn test_configurable_quorum_and_voting_period() {
     let (_env, client) = setup();
-    assert_eq!(client.get_voting_period_ledgers(), DEFAULT_VOTING_PERIOD_LEDGERS);
+    assert_eq!(
+        client.get_voting_period_ledgers(),
+        DEFAULT_VOTING_PERIOD_LEDGERS
+    );
     client.set_voting_period_ledgers(&20_160);
     assert_eq!(client.get_voting_period_ledgers(), 20_160);
 
@@ -453,10 +456,7 @@ fn test_voting_period_enforcement_with_ledger_sequence() {
 #[cfg(test)]
 mod timelock_tests {
     use super::*;
-    use soroban_sdk::{
-        testutils::Ledger,
-        Env, Symbol, Vec,
-    };
+    use soroban_sdk::{testutils::Ledger, Env, Symbol, Vec};
 
     fn setup() -> (Env, AgentGovernanceContractClient<'static>, Address) {
         let env = Env::default();
@@ -630,4 +630,91 @@ mod timelock_tests {
         let result = client.try_propose_change(&admin, &param, &execute_after);
         assert_eq!(result, Err(Ok(Error::InvalidDelay)));
     }
+}
+
+#[test]
+fn proposals_use_token_backed_stake_entering_the_snapshot_ledger() {
+    use capability_staking::{CapabilityStakingContract, CapabilityStakingContractClient};
+    use soroban_sdk::{symbol_short, token, Bytes};
+
+    let (env, governance) = setup();
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let asset = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let asset_client = token::StellarAssetClient::new(&env, &asset);
+    let staking_id = env.register(CapabilityStakingContract, ());
+    let staking = CapabilityStakingContractClient::new(&env, &staking_id);
+    staking.initialize(&admin, &treasury, &asset);
+    staking.enable_voting_stake();
+    governance.set_capability_staking(&staking_id);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let newcomer = Address::generate(&env);
+    let cap = symbol_short!("compute");
+    let unit = capability_staking::DEFAULT_MIN_STAKE_STROOPS;
+    asset_client.mint(&alice, &(unit * 2));
+    asset_client.mint(&bob, &unit);
+    asset_client.mint(&newcomer, &unit);
+    register(&governance, &alice, 0, 1);
+
+    env.ledger().set_sequence_number(100);
+    staking.stake_bond(&alice, &symbol_short!("alice"), &cap, &unit);
+    staking.stake_bond(&bob, &symbol_short!("bob"), &cap, &unit);
+    env.ledger().set_sequence_number(101);
+    let proposal = new_proposal(&env, &governance, &alice);
+    assert_eq!(
+        governance.get_proposal(&proposal).unwrap().snapshot_ledger,
+        101
+    );
+    assert_eq!(
+        governance
+            .get_proposal(&proposal)
+            .unwrap()
+            .total_power_snapshot,
+        unit * 2
+    );
+
+    // A later transaction in the same ledger cannot increase voting power.
+    staking.stake_bond(
+        &alice,
+        &symbol_short!("alice"),
+        &symbol_short!("other"),
+        &unit,
+    );
+    staking.stake_bond(&newcomer, &symbol_short!("newcomer"), &cap, &unit);
+    env.ledger().set_sequence_number(102);
+    staking.unstake_bond(&bob, &symbol_short!("bob"), &cap);
+    env.ledger().set_sequence_number(103);
+    assert_eq!(staking.get_voting_power_at(&alice, &100), 0);
+    assert_eq!(staking.get_voting_power_at(&alice, &101), unit);
+    assert_eq!(staking.get_voting_power_at(&alice, &103), unit * 2);
+    assert_eq!(staking.get_voting_power_at(&bob, &101), unit);
+    assert_eq!(staking.get_voting_power_at(&bob, &103), 0);
+
+    staking.set_dispute_resolution(&admin);
+    staking.slash(
+        &alice,
+        &Bytes::from_slice(&env, b"compute"),
+        &(unit / 2),
+        &Bytes::new(&env),
+    );
+    env.ledger().set_sequence_number(104);
+    assert_eq!(staking.get_voting_power_at(&alice, &104), unit + unit / 2);
+    assert_eq!(staking.get_voting_power_at(&alice, &101), unit);
+
+    governance.vote_on_proposal(&proposal, &alice, &VoteChoice::For);
+    governance.vote_on_proposal(&proposal, &bob, &VoteChoice::Against);
+    assert_eq!(governance.get_vote(&proposal, &alice).unwrap().weight, unit);
+    assert_eq!(governance.get_vote(&proposal, &bob).unwrap().weight, unit);
+    assert_eq!(
+        governance.try_vote_on_proposal(&proposal, &alice, &VoteChoice::For),
+        Err(Ok(Error::AlreadyVoted)),
+    );
+    assert_eq!(
+        governance.try_vote_on_proposal(&proposal, &newcomer, &VoteChoice::For),
+        Err(Ok(Error::InsufficientVotingPower)),
+    );
 }

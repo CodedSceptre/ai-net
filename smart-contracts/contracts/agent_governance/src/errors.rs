@@ -48,7 +48,6 @@ pub enum Error {
     EmptyMetadata = 16,
 
     // ── Timelock errors (17–25) ──────────────────────────────────────────────
-
     /// The timelock delay has not yet elapsed; execution is not allowed.
     TimelockActive = 17,
     /// The referenced pending change does not exist.
@@ -67,4 +66,5 @@ pub enum Error {
     NotGuardian = 24,
     /// This guardian has already approved the change.
     AlreadyApprovedByGuardian = 25,
+    InsufficientVotingPower = 26,
 }
