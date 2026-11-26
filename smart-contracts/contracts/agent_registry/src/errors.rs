@@ -59,6 +59,20 @@ pub enum Error {
     InvalidConfig = 29,
     /// Invalid semantic version string.
     InvalidSemVer = 30,
+    /// Bridge proof has expired.
+    BridgeProofExpired = 30,
+    /// Bridge proof was not found.
+    BridgeProofNotFound = 31,
+    /// Bridge proof digest or signature does not match stored proof.
+    BridgeProofMismatch = 32,
+    /// Bridge proof expiry timestamp is invalid.
+    InvalidBridgeExpiry = 33,
+    /// Audit query range is invalid.
+    InvalidAuditRange = 34,
+    /// Price must be strictly positive.
+    InvalidPrice = 35,
+    /// Batch size exceeds the maximum allowed limit of 20 entries.
+    BatchSizeLimitExceeded = 36,
 }
 
 impl Error {
@@ -95,6 +109,13 @@ impl Error {
             28 => Some(Error::RateLimitExceeded),
             29 => Some(Error::InvalidConfig),
             30 => Some(Error::InvalidSemVer),
+            30 => Some(Error::BridgeProofExpired),
+            31 => Some(Error::BridgeProofNotFound),
+            32 => Some(Error::BridgeProofMismatch),
+            33 => Some(Error::InvalidBridgeExpiry),
+            34 => Some(Error::InvalidAuditRange),
+            35 => Some(Error::InvalidPrice),
+            36 => Some(Error::BatchSizeLimitExceeded),
             _ => None,
         }
     }

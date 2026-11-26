@@ -2373,3 +2373,217 @@ fn test_get_capability_versions_multiple_agents() {
     assert_eq!(v2.deprecated_at, None);
 }
 
+// ── batch_register tests ──────────────────────────────────────────────────
+
+use crate::events::BatchRegisteredEvent;
+
+/// Builds a batch of `count` valid, uniquely-owned agent records.
+fn make_batch(env: &Env, count: u32, prefix: &str, capability: &str) -> Vec<AgentRecord> {
+    let mut agents = Vec::new(env);
+    for i in 0..count {
+        let owner = Address::generate(env);
+        let id = format!("{}_{}", prefix, i);
+        agents.push_back(make_record(env, &id, capability, owner));
+    }
+    agents
+}
+
+#[test]
+fn batch_register_full_success_batch_of_20() {
+    let (env, client) = setup();
+    let agents = make_batch(&env, 20, "batch", "research");
+
+    let results = client.batch_register(&agents).unwrap();
+
+    assert_eq!(results.len(), 20);
+    for i in 0..results.len() {
+        match results.get(i).unwrap() {
+            BatchResult::Ok(id) => {
+                let expected = Symbol::new(&env, &format!("batch_{}", i));
+                assert_eq!(id, expected);
+            }
+            BatchResult::Err(code) => panic!("entry {i} unexpectedly failed with code {code}"),
+        }
+    }
+
+    // All 20 agents appear in registry storage.
+    for i in 0..20u32 {
+        let agent_key = DataKey::Agent(Symbol::new(&env, &format!("batch_{}", i)));
+        let exists: bool = env.as_contract(&client.address, || {
+            env.storage().persistent().has(&agent_key)
+        });
+        assert!(exists, "agent batch_{} missing from storage", i);
+    }
+
+    // The batch summary event was emitted — check the event list is non-trivial.
+    let events = env.events().all();
+    // 20 agent_reg + 20 bond_lck + 1 batch_reg = 41 events minimum
+    assert!(events.len() >= 41, "expected at least 41 events, got {}", events.len());
+}
+
+#[test]
+fn batch_register_oversized_batch_of_21_returns_error() {
+    let (env, client) = setup();
+    let agents = make_batch(&env, 21, "toomany", "research");
+
+    assert_eq!(
+        client.try_batch_register(&agents),
+        Err(Ok(Error::BatchSizeLimitExceeded))
+    );
+
+    // No entries were processed — no agents in storage.
+    let agent_key = DataKey::Agent(Symbol::new(&env, "toomany_0"));
+    let exists: bool = env.as_contract(&client.address, || {
+        env.storage().persistent().has(&agent_key)
+    });
+    assert!(!exists, "oversized batch must not write any entries");
+}
+
+#[test]
+fn batch_register_partial_failure_one_duplicate() {
+    let (env, client) = setup();
+
+    // Pre-register one agent so entry 0 duplicates an existing ID.
+    let dup_owner = Address::generate(&env);
+    client.register_agent(&make_record(&env, "dup_agent", "coding", dup_owner.clone()));
+
+    // 3 entries: index 0 is a duplicate (already exists), 1 and 2 are valid.
+    let mut agents = Vec::new(&env);
+    agents.push_back(make_record(&env, "dup_agent", "coding", dup_owner));
+    agents.push_back(make_record(&env, "fresh_a", "coding", Address::generate(&env)));
+    agents.push_back(make_record(&env, "fresh_b", "coding", Address::generate(&env)));
+
+    let results = client.batch_register(&agents).unwrap();
+
+    assert_eq!(results.len(), 3);
+
+    // Entry 0 failed with AlreadyExists.
+    match results.get(0).unwrap() {
+        BatchResult::Err(code) => assert_eq!(code, Error::AlreadyExists as u32),
+        BatchResult::Ok(_) => panic!("duplicate entry unexpectedly succeeded"),
+    }
+    // Entries 1 and 2 succeeded.
+    assert!(matches!(results.get(1).unwrap(), BatchResult::Ok(_)));
+    assert!(matches!(results.get(2).unwrap(), BatchResult::Ok(_)));
+
+    // The two valid entries were written despite the failure.
+    for id in ["fresh_a", "fresh_b"] {
+        let agent_key = DataKey::Agent(Symbol::new(&env, id));
+        let exists: bool = env.as_contract(&client.address, || {
+            env.storage().persistent().has(&agent_key)
+        });
+        assert!(exists, "valid entry {} must be written", id);
+    }
+}
+
+#[test]
+fn batch_register_invalid_price_fails_entry_only() {
+    let (env, client) = setup();
+
+    let mut agents = Vec::new(&env);
+    // Valid entry.
+    agents.push_back(make_record(&env, "ok_agent", "research", Address::generate(&env)));
+    // Invalid entry: zero price.
+    let mut bad = make_record(&env, "bad_agent", "research", Address::generate(&env));
+    bad.price_stroops = 0;
+    agents.push_back(bad);
+    // Valid entry.
+    agents.push_back(make_record(&env, "ok_agent2", "research", Address::generate(&env)));
+
+    let results = client.batch_register(&agents).unwrap();
+
+    assert_eq!(results.len(), 3);
+    assert!(matches!(results.get(0).unwrap(), BatchResult::Ok(_)));
+    match results.get(1).unwrap() {
+        BatchResult::Err(code) => assert_eq!(code, Error::InvalidPrice as u32),
+        BatchResult::Ok(_) => panic!("zero-price entry unexpectedly succeeded"),
+    }
+    assert!(matches!(results.get(2).unwrap(), BatchResult::Ok(_)));
+}
+
+#[test]
+fn batch_register_single_entry_batch() {
+    let (env, client) = setup();
+    let agents = make_batch(&env, 1, "solo", "research");
+
+    let results = client.batch_register(&agents).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert!(matches!(results.get(0).unwrap(), BatchResult::Ok(_)));
+
+    let agent_key = DataKey::Agent(Symbol::new(&env, "solo_0"));
+    let exists: bool = env.as_contract(&client.address, || {
+        env.storage().persistent().has(&agent_key)
+    });
+    assert!(exists, "single-entry batch must write the agent");
+}
+
+#[test]
+fn batch_register_empty_batch_returns_empty_results() {
+    let (env, client) = setup();
+    let agents: Vec<AgentRecord> = Vec::new(&env);
+
+    let results = client.batch_register(&agents).unwrap();
+
+    assert_eq!(results.len(), 0);
+}
+
+#[test]
+fn batch_register_emits_batch_registered_event() {
+    let (env, client) = setup();
+
+    // Build 3 entries where entry 1 has an insufficient bond.
+    let mut agents = Vec::new(&env);
+    agents.push_back(make_record(&env, "ev_a", "research", Address::generate(&env)));
+    let mut bad = make_record(&env, "ev_b", "research", Address::generate(&env));
+    bad.bond_amount = 1; // below min bond
+    agents.push_back(bad);
+    agents.push_back(make_record(&env, "ev_c", "research", Address::generate(&env)));
+
+    let results = client.batch_register(&agents).unwrap();
+    assert_eq!(results.len(), 3);
+
+    // Find the (registry, batch_reg) event among the published events.
+    let events = env.events().all();
+    let mut found = false;
+    for i in 0..events.len() {
+        let (_, topics, data) = events.get(i).unwrap();
+        let t0 = Symbol::from_val(&env, &topics.get(0).unwrap());
+        let t1 = Symbol::from_val(&env, &topics.get(1).unwrap());
+        if t0 == symbol_short!("registry") && t1 == symbol_short!("batch_reg") {
+            found = true;
+            let summary: BatchRegisteredEvent =
+                BatchRegisteredEvent::from_val(&env, &data);
+            assert_eq!(summary.total, 3);
+            assert_eq!(summary.success_count, 2);
+            assert_eq!(summary.failure_count, 1);
+            assert_eq!(summary.failed_indices.len(), 1);
+            assert_eq!(summary.failed_indices.get(0).unwrap(), 1);
+        }
+    }
+    assert!(found, "(registry, batch_reg) event must be emitted");
+}
+
+#[test]
+fn batch_register_insufficient_bond_fails_entry() {
+    let (env, client) = setup();
+
+    let mut agents = Vec::new(&env);
+    let mut bad = make_record(&env, "poor_agent", "research", Address::generate(&env));
+    bad.bond_amount = 1;
+    agents.push_back(bad);
+
+    let results = client.batch_register(&agents).unwrap();
+
+    assert_eq!(results.len(), 1);
+    match results.get(0).unwrap() {
+        BatchResult::Err(code) => assert_eq!(code, Error::InsufficientBond as u32),
+        BatchResult::Ok(_) => panic!("under-bonded entry unexpectedly succeeded"),
+    }
+
+    let agent_key = DataKey::Agent(Symbol::new(&env, "poor_agent"));
+    let exists: bool = env.as_contract(&client.address, || {
+        env.storage().persistent().has(&agent_key)
+    });
+    assert!(!exists);
+}

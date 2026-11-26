@@ -1394,6 +1394,194 @@ impl AgentRegistryContract {
         results
     }
 
+    // ─── batch_register ───────────────────────────────────────────────────────
+
+    /// Register up to 20 agents in a single transaction.
+    ///
+    /// Unlike `register_agents` (which is atomic — all-or-nothing), `batch_register`
+    /// processes entries independently: valid registrations are committed and invalid
+    /// ones return an error in their result slot without blocking the rest of the
+    /// batch.  This mirrors the EVM batch-registration pattern and is designed for
+    /// bulk onboarding workflows.
+    ///
+    /// ## Authorization
+    ///
+    /// All unique agent owner addresses in the batch are collected and each calls
+    /// `require_auth()` exactly once in the pre-flight phase.  This means every
+    /// distinct agent independently authorizes its own registration.  A missing
+    /// signature for any owner aborts the transaction before any entries are
+    /// processed, ensuring partial writes never occur due to auth failures alone.
+    ///
+    /// ## Batch size limit
+    ///
+    /// A hard limit of 20 entries is enforced.  Passing more than 20 entries returns
+    /// `Err(Error::BatchSizeLimitExceeded)` immediately — no entries are processed.
+    ///
+    /// ## Return value
+    ///
+    /// `Vec<BatchResult>` with per-entry outcomes in input order.  On overall
+    /// success the outer `Result` is `Ok`.  Returns `Err(BatchSizeLimitExceeded)`
+    /// (or `Err(ContractPaused)`) when the entire batch is rejected before
+    /// processing begins.
+    ///
+    /// ## Event
+    ///
+    /// A single `(registry, batch_reg)` event is emitted at the end summarising
+    /// `success_count`, `failure_count`, and the zero-based indices that failed.
+    /// Individual `(registry, agent_registered)` events are still emitted per
+    /// committed agent so indexers handle them uniformly across all registration paths.
+    pub fn batch_register(
+        env: Env,
+        registrations: Vec<AgentRecord>,
+    ) -> Result<Vec<BatchResult>, Error> {
+        /// Maximum entries allowed in a single `batch_register` call.
+        const MAX_BATCH_SIZE: u32 = 20;
+
+        // ── Hard size limit — fail fast before touching any state ────────────
+        if registrations.len() > MAX_BATCH_SIZE {
+            return Err(Error::BatchSizeLimitExceeded);
+        }
+
+        // ── Empty batch: return empty result vec without touching state ───────
+        let mut results: Vec<BatchResult> = Vec::new(&env);
+        if registrations.is_empty() {
+            return Ok(results);
+        }
+
+        // ── Contract-level pause check ────────────────────────────────────────
+        require_not_paused(&env)?;
+
+        // ── Pre-flight: collect unique owners and auth each exactly once ──────
+        // Each distinct agent owner independently authorizes their own entries.
+        // Calling require_auth once per unique address avoids redundant auth
+        // checks while still recording every owner's authorization requirement.
+        let mut unique_owners: Vec<Address> = Vec::new(&env);
+        for i in 0..registrations.len() {
+            let record = registrations.get(i).unwrap();
+            let mut already_seen = false;
+            for j in 0..unique_owners.len() {
+                if unique_owners.get(j).unwrap() == record.owner {
+                    already_seen = true;
+                    break;
+                }
+            }
+            if !already_seen {
+                unique_owners.push_back(record.owner.clone());
+            }
+        }
+        for i in 0..unique_owners.len() {
+            unique_owners.get(i).unwrap().require_auth();
+        }
+
+        // ── Per-entry processing: each entry is validated and written independently
+        let mut success_count: u32 = 0;
+        let mut failure_count: u32 = 0;
+        let mut failed_indices: Vec<u32> = Vec::new(&env);
+
+        for i in 0..registrations.len() {
+            let record = registrations.get(i).unwrap();
+
+            // ── Validation for this entry ─────────────────────────────────────
+            let entry_result: Result<(), Error> = (|| {
+                // Price must be strictly positive.
+                if record.price_stroops <= 0 {
+                    return Err(Error::InvalidPrice);
+                }
+
+                // Metadata entry count.
+                if record.metadata.len() > MAX_METADATA_ENTRIES {
+                    return Err(Error::InvalidRecord);
+                }
+
+                // Bond must meet minimum.
+                let required = min_bond(&env);
+                if record.bond_amount < required {
+                    return Err(Error::InsufficientBond);
+                }
+
+                // Agent must not be frozen.
+                require_not_frozen(&env, &record.id)?;
+
+                // Agent must not already exist in persistent storage.
+                let agent_key = DataKey::Agent(record.id.clone());
+                if env.storage().persistent().has(&agent_key) {
+                    return Err(Error::AlreadyExists);
+                }
+
+                // ── Write to persistent storage ───────────────────────────────
+                env.storage().persistent().set(&agent_key, &record);
+                extend_ttl_for_existing_key(&env, &agent_key);
+
+                // Update capability index.
+                append_capability_index(&env, &record.capability, &record.id);
+
+                // Update the sequential index (for cursor-based pagination).
+                let seq = get_registration_sequence(&env);
+                let index_key = DataKey::AgentByIndex(seq);
+                env.storage().persistent().set(&index_key, &record.id);
+                extend_ttl_for_existing_key(&env, &index_key);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::RegistrationSequence, &(seq + 1));
+
+                // Increment total active agent count.
+                let current_total = get_total_agents(&env);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::TotalAgents, &(current_total + 1));
+
+                // Emit per-agent registration event (uniform with single/batch paths).
+                env.events().publish(
+                    (symbol_short!("registry"), symbol_short!("agent_reg")),
+                    AgentRegisteredEvent {
+                        agent_id: record.id.clone(),
+                        owner: record.owner.clone(),
+                        capability: record.capability.clone(),
+                        price_stroops: record.price_stroops,
+                    },
+                );
+
+                // Emit bond locked event so bond indexers work uniformly
+                // across single, batch, and batch_register registration paths.
+                env.events().publish(
+                    (symbol_short!("registry"), symbol_short!("bond_lck")),
+                    events::BondLocked {
+                        agent_id: record.id.clone(),
+                        owner: record.owner.clone(),
+                        amount_stroops: record.bond_amount,
+                    },
+                );
+
+                Ok(())
+            })();
+
+            match entry_result {
+                Ok(()) => {
+                    results.push_back(BatchResult::Ok(record.id.clone()));
+                    success_count += 1;
+                }
+                Err(err) => {
+                    results.push_back(BatchResult::Err(err as u32));
+                    failed_indices.push_back(i);
+                    failure_count += 1;
+                }
+            }
+        }
+
+        // ── Emit single batch summary event ───────────────────────────────────
+        env.events().publish(
+            (symbol_short!("registry"), symbol_short!("batch_reg")),
+            events::BatchRegisteredEvent {
+                total: registrations.len(),
+                success_count,
+                failure_count,
+                failed_indices,
+            },
+        );
+
+        Ok(results)
+    }
+
     pub fn lookup_agents(env: Env, capability: Symbol) -> Vec<AgentRecord> {
         let cap_key = DataKey::CapabilityIndex(capability);
         let stored_ids: Option<Vec<Symbol>> = env.storage().persistent().get(&cap_key);
@@ -1403,6 +1591,9 @@ impl AgentRegistryContract {
         if stored_ids.is_some() {
             extend_ttl_for_existing_key(&env, &cap_key);
         }
+
+        let mut ttl_keys: Vec<DataKey> = Vec::new(&env);
+        let mut records: Vec<AgentRecord> = Vec::new(&env);
 
         for id in ids.iter() {
             let agent_key = DataKey::Agent(id.clone());
