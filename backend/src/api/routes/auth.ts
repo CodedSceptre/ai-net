@@ -10,6 +10,7 @@ const walletVerifySchema = z.object({
   publicKey: stellarPublicKeySchema,
   nonce: z.string().min(1).max(128),
   signature: z.string().min(1).max(256),
+  signatureScheme: z.enum(["raw", "sep53"]).default("raw"),
   deviceId: z.string().trim().min(1).max(128).default("wallet"),
 }).strict();
 
@@ -26,13 +27,13 @@ export function createAuthRouter(authService?: AuthService): Router {
   const router = Router();
   const service = authService ?? getAuthService();
 
-  router.get("/nonce", (_req: Request, res: Response) => {
+  router.get(["/nonce", "/challenge"], (_req: Request, res: Response) => {
     res.status(200).json(service.createWalletNonce());
   });
 
   const verifyWallet = (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { publicKey, nonce, signature, deviceId } = req.body as z.infer<typeof walletVerifySchema>;
+      const { publicKey, nonce, signature, signatureScheme, deviceId } = req.body as z.infer<typeof walletVerifySchema>;
       const ipAddress = req.ip || req.socket.remoteAddress || "unknown";
       const userAgent = req.headers["user-agent"] || "unknown";
 
@@ -40,6 +41,7 @@ export function createAuthRouter(authService?: AuthService): Router {
         walletPublicKey: publicKey,
         nonce,
         signature,
+        signatureScheme,
         deviceId,
         ipAddress,
         userAgent,

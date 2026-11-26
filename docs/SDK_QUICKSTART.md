@@ -314,3 +314,231 @@ If the backend returns `404`, make sure you registered the agent (`src/register.
 | [REST API Reference](API_REFERENCE.md) | All backend endpoints with curl examples |
 | [Architecture Specification](architecture/index.md) | System context and sequence diagrams |
 | [Smart Contract Deployment Guide](../smart-contracts/docs/DEPLOYMENT_GUIDE.md) | Deploy contracts to testnet/mainnet |
+
+## Submit tasks from Python, a browser, or Node.js
+
+The examples below call a running ai-net API. Set the URL to your deployment.
+For local development, they use the backend sample configuration on port 3001.
+
+### Authentication and token lifecycle
+
+1. Request `GET /api/auth/challenge` and read `nonce` and `expiresAt`. The
+   original spelling is `GET /api/auth/nonce`. A nonce is available for five
+   minutes and becomes invalid once a successful exchange consumes it.
+2. Sign the nonce with your Stellar account. Python and Node.js sign the UTF-8
+   bytes of the nonce string directly. Freighter signs the SEP-53 digest of the
+   message. Preserve the nonce string exactly and encode the 64-byte Ed25519
+   signature as standard base64.
+3. Send `publicKey`, `nonce`, `signature`, and an optional `deviceId` to
+   `POST /api/auth/token`. For Freighter include `"signatureScheme":"sep53"`.
+   The default scheme is `raw`.
+4. Use `Authorization: Bearer <accessToken>` on authenticated REST calls.
+   Wallet access tokens last 24 hours. Read `expiresIn` from the response for
+   the issued lifetime. A protected route can return HTTP 401 for an expired or
+   revoked token. The task routes also support legacy wallet fallback, so
+   refresh proactively when maintaining a longer-lived session.
+5. Exchange the current `refreshToken` through `POST /api/auth/refresh`.
+   Store the replacement pair together and serialize refreshes. Reusing a
+   consumed refresh token revokes its session family. If refresh fails with
+   HTTP 401, get a new nonce and sign in again. The quickstarts get a new
+   challenge once on HTTP 401.
+
+The task endpoint currently returns HTTP 201 with `taskId` and `status`.
+HTTP 202 is also treated as queued by the Python example. Use the same UUID v4
+`Idempotency-Key` for retries of a submission and a different key for each new
+task. Send `prompt`, `walletPublicKey`, `priority`, `maxBudgetXLM` and
+`agentPreferences`; budget and preferences are accepted schema fields.
+
+### Python CLI
+
+Use a Stellar keypair for server-side Python. Install the pinned example
+dependencies in a virtual environment. The public PyPI index currently has no
+`ai-net-sdk` distribution. If your organization publishes one privately, use
+its documented index and pin the reviewed release with
+`pip install 'ai-net-sdk==<approved-version>'`.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r docs/sdk-examples/python/requirements.txt
+export AI_NET_API_URL=http://localhost:3001
+python docs/sdk-examples/python/quickstart.py --generate-key --prompt "Explain Stellar fees"
+```
+
+For a persistent service account, supply `STELLAR_SECRET_KEY` through your
+secret manager and omit `--generate-key`. The command exchanges a signed
+challenge, submits the full task body, polls `GET /api/tasks/:id` with a delay
+that doubles from 1 to 15 seconds, and prints the completed DAG node results.
+Failed, cancelled and timed-out tasks exit with an error.
+[Complete Python example](sdk-examples/python/quickstart.py)
+
+```python
+import base64
+import requests
+from stellar_sdk import Keypair
+
+def authenticate(base, wallet):
+    reply = requests.get(f"{base}/api/auth/challenge", timeout=15)
+    reply.raise_for_status()
+    nonce = reply.json()["nonce"]
+    signature = base64.b64encode(wallet.sign(nonce.encode("utf-8"))).decode("ascii")
+    reply = requests.post(f"{base}/api/auth/token", timeout=15, json={
+        "publicKey": wallet.public_key, "nonce": nonce, "signature": signature,
+    })
+    reply.raise_for_status()
+    return reply.json()["accessToken"]
+
+# Use Keypair.random() for a disposable development identity or load a secret
+# with Keypair.from_secret(os.environ["STELLAR_SECRET_KEY"]).
+```
+
+### Browser JavaScript with Freighter
+
+Serve the HTML file from a local HTTP origin and allow that origin in the API's
+`ALLOWED_ORIGINS` setting. Use an HTTPS page and API for a remote deployment.
+
+```bash
+python -m http.server 8000 --bind 127.0.0.1 --directory docs/sdk-examples/javascript
+```
+
+Open `http://127.0.0.1:8000/browser-quickstart.html`. The page detects
+Freighter and shows an install link when needed. The connect action calls
+`requestAccess()`, reads the wallet address and the selected network via
+`getNetwork()`, requests a nonce, signs it with `signMessage()`, and
+submits the task with `fetch` and the resulting bearer token.
+[Complete browser example](sdk-examples/javascript/browser-quickstart.html)
+
+The stream endpoint is `/tasks/:id/stream` on the same host via `ws:` or
+`wss:`. Send `{ walletPublicKey }` as the first message in the current
+stream protocol, and reply to each application `ping` with `{type:"pong"}`.
+The page displays node, payment, agent and task events and closes the stream
+on terminal task events. Use the REST status endpoint to recover when a stream
+closes early. A reconnect can resume with `?lastEventId=<last-seq>`.
+The current stream handshake uses the wallet address as its ownership field.
+Keep private task contents out of deployments where stream access is exposed
+to untrusted clients. [SEP-53 message format](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0053.md)
+
+### TypeScript service account and concurrent submissions
+
+Use Node.js 22 or later. Install the Stellar SDK and run the example as a
+TypeScript module. Load `STELLAR_SECRET_KEY` through your secret manager.
+
+```bash
+npm install --save-exact @stellar/stellar-sdk@12.3.0
+node quickstart.mts
+```
+
+```typescript
+import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
+import { Keypair } from "@stellar/stellar-sdk";
+
+const secret = process.env.STELLAR_SECRET_KEY;
+if (!secret) throw new Error("Set STELLAR_SECRET_KEY");
+const wallet = Keypair.fromSecret(secret);
+const base = process.env.AI_NET_API_URL ?? "http://localhost:3001";
+
+async function request(path: string, init?: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(new URL(path, base), {
+      ...init, signal: AbortSignal.timeout(15000),
+    });
+    if (response.status !== 429 || attempt === 4) return response;
+    const retry = Number(response.headers.get("Retry-After"));
+    await response.body?.cancel();
+    await sleep(1000 * Math.max(2 ** attempt, Number.isFinite(retry) ? retry : 0));
+  }
+}
+
+async function read<T>(response: Response): Promise<T> {
+  const body = await response.json().catch(() => ({}));
+  if (response.ok) return body as T;
+  const messages: Record<number, string> = {
+    400: "Check request fields", 401: "Sign in again", 403: "Access denied",
+    429: "Quota exhausted",
+  };
+  const code = body.error?.code ?? body.code;
+  throw new Error(`${messages[response.status] ??
+    (response.status >= 500 ? "Service unavailable" : "Request failed")}
+    (HTTP ${response.status}${code ? `, ${code}` : ""})`);
+}
+
+async function authenticate(): Promise<string> {
+  let response = await request("/api/auth/challenge");
+  if (response.status === 404) response = await request("/api/auth/nonce");
+  const { nonce } = await read<{ nonce: string }>(response);
+  const signature = wallet.sign(Buffer.from(nonce, "utf8")).toString("base64");
+  const tokens = await read<{ accessToken: string }>(await request("/api/auth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ publicKey: wallet.publicKey(), nonce, signature }),
+  }));
+  return tokens.accessToken;
+}
+
+let token = await authenticate();
+let renewal: Promise<string> | undefined;
+
+async function submit(prompt: string) {
+  const key = randomUUID();
+  const send = (accessToken: string) => request("/api/tasks", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json", "API-Version": "1.0",
+      Authorization: `Bearer ${accessToken}`, "Idempotency-Key": key,
+    },
+    body: JSON.stringify({
+      prompt, walletPublicKey: wallet.publicKey(),
+      priority: "normal", maxBudgetXLM: 1, agentPreferences: [],
+    }),
+  });
+  const submittedWith = token;
+  let response = await send(submittedWith);
+  if (response.status === 401) {
+    if (submittedWith === token) {
+      renewal ??= authenticate().then((nextToken) => {
+        token = nextToken;
+        return token;
+      }).finally(() => { renewal = undefined; });
+      await renewal;
+    }
+    response = await send(token);
+  }
+  return read<{ taskId: string; status: string }>(response);
+}
+
+const prompts = ["Explain XLM fees", "Summarize Stellar accounts", "Describe Soroban"];
+const outcomes = await Promise.all(prompts.map(async (prompt) => {
+  try {
+    return { prompt, task: await submit(prompt) };
+  } catch (error) {
+    return { prompt, error: error instanceof Error ? error.message : String(error) };
+  }
+}));
+console.table(outcomes);
+```
+
+### Rate limits and errors
+
+The examples honor HTTP 429 `Retry-After` in seconds, falling back to
+exponential backoff, and stop after five attempts. A daily quota may last
+longer than that retry window. Treat HTTP 400 as an input problem, HTTP 401 as
+a session problem, HTTP 403 as an ownership or permission problem, and HTTP 5xx
+as a service-side failure. A 5xx on submission can leave the outcome uncertain.
+If you retry, preserve the submission's idempotency key.
+
+### Compatibility
+
+These are the dependency pins used by the examples. The minimum API version
+refers to the task payload shape. Wallet auth routes are shared across versions.
+Freighter additionally requires the backend's SEP-53 challenge support.
+
+| SDK or client dependency | Minimum task API | API deprecation |
+| --- | --- | --- |
+| Python `stellar-sdk` 13.1.0 + `requests` 2.32.5 | 1.0 | API 1.x deprecated as of API 2.0 |
+| Browser `@stellar/freighter-api` 6.0.1 + Fetch | 1.0 | API 1.x deprecated as of API 2.0 |
+| Node.js `@stellar/stellar-sdk` 12.3.0 + Fetch | 1.0 | API 1.x deprecated as of API 2.0 |
+| `ai-net-sdk` / `@ai-net/agent-sdk` | No verified public release | No published compatibility or deprecation metadata |
+
+Read `GET /api/versions` or inspect the `X-API-Version`, `Deprecation`
+and `Sunset` response headers for deployment-specific version availability.

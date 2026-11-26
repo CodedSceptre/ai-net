@@ -14,6 +14,10 @@ export function createCorsMiddleware() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'walletpublickey', 'x-challenge', 'x-signature'],
+    allowedHeaders: [
+      'Content-Type', 'Authorization', 'walletpublickey', 'x-challenge',
+      'x-signature', 'Idempotency-Key', 'API-Version',
+    ],
+    exposedHeaders: ['Retry-After', 'X-API-Version', 'Deprecation', 'Sunset'],
   });
 }
