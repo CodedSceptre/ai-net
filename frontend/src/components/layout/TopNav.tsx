@@ -57,6 +57,8 @@ const WsStatusIndicator: React.FC<WsStatusIndicatorProps> = ({ state }) => {
     </span>
   )
 }
+import { Sun, Moon, Monitor } from 'lucide-react'
+import { GlobalSearch } from './GlobalSearch'
 
 interface TopNavProps {
   onMenuClick: () => void
@@ -179,6 +181,7 @@ const TopNav: React.FC<TopNavProps> = ({
         {wsConnectionState !== undefined && (
           <WsStatusIndicator state={wsConnectionState} />
         )}
+        <GlobalSearch />
         <NotificationBell />
 
         <button
