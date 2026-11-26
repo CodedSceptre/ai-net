@@ -50,6 +50,8 @@ import {
   authedLimiter,
   adminLimiter,
 } from "./middleware/rateLimit";
+import { ipRateLimitMiddleware } from "./middleware/rateLimiter";
+import { internalRouter } from "./routes/internal";
 import { createCorsMiddleware } from "./middleware/cors";
 import { compressionMiddleware } from "./middleware/compression";
 import { errorHandler } from "./middleware/errorHandler";
@@ -138,6 +140,7 @@ export function createApp(opts: AppOptions = {}): {
   app.use(requestId);
   app.use(requestLogger);
   app.use(metricsMiddleware);
+  app.use(ipRateLimitMiddleware);
   app.use(rateLimitMiddleware);
   app.use(versioningMiddleware);
   app.use(
@@ -252,6 +255,9 @@ export function createApp(opts: AppOptions = {}): {
 
   // ── Payment reconciliation routes ──────────────────────────────────────────
   app.use("/api/reconciliation", createReconciliationRouter(opts.reconciliation));
+
+  // ── Internal admin routes ─────────────────────────────────────────────────
+  app.use('/internal', internalRouter);
 
   app.use((_req: Request, res: Response) => {
     res.status(404).json({
