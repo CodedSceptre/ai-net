@@ -4,7 +4,7 @@
 >
 > Estimated time to complete: **45–60 minutes** on Stellar Testnet.
 
-For model selection, prompt templates, context management, token-cost estimation, streaming, and Venice API error handling, see the [Venice AI Prompting Guide](VENICE_AI_PROMPTING.md).
+> **New to ai-net?** Start with the hands-on tutorial: [Build a Custom Agent and Register It on ai-net](tutorials/BUILD_CUSTOM_AGENT.md). It walks you through scaffolding, local testing, testnet funding, staking, and registration in 30 minutes before coming back here for the full API reference.
 
 For model selection, prompt templates, context management, token-cost estimation, streaming, and Venice API error handling, see the [Venice AI Prompting Guide](VENICE_AI_PROMPTING.md).
 
