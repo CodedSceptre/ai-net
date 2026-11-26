@@ -310,6 +310,11 @@ pub enum DataKey {
     AuditConfig,
     /// Rolling operation counter for one caller.
     CallerActivity(Address),
+    // Versioned capability keys (issue #660)
+    /// Stored Capability record keyed by (agent_id, capability, version).
+    CapabilityVersion(Symbol, Symbol, String),
+    /// List of registered capability version entries for a capability: capability -> Vec<(Symbol, String)>.
+    CapabilityVersionEntries(Symbol),
 }
 
 /// Per-item result for batch registration.
@@ -336,6 +341,102 @@ pub enum VoidBatchResult {
 pub struct AgentRegistryContract;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Parse a strict semver string `MAJOR.MINOR.PATCH` into `(u32, u32, u32)`.
+/// Rejects non-semver strings like "latest", "v1", "1.0", "1.0.0.0", leading zeros, etc.
+pub fn parse_semver(s: &String) -> Result<(u32, u32, u32), Error> {
+    let len = s.len() as usize;
+    if len == 0 || len > 32 {
+        return Err(Error::InvalidSemVer);
+    }
+    let mut buf = [0u8; 32];
+    s.copy_into_slice(&mut buf[..len]);
+    let slice = &buf[..len];
+
+    let mut parts = [0u32; 3];
+    let mut part_idx = 0;
+    let mut has_digit = false;
+    let mut leading_zero = false;
+    let mut current_val: u32 = 0;
+
+    for &b in slice {
+        if b == b'.' {
+            if !has_digit || part_idx >= 2 {
+                return Err(Error::InvalidSemVer);
+            }
+            parts[part_idx] = current_val;
+            part_idx += 1;
+            has_digit = false;
+            leading_zero = false;
+            current_val = 0;
+        } else if b.is_ascii_digit() {
+            let digit = (b - b'0') as u32;
+            if !has_digit {
+                if digit == 0 {
+                    leading_zero = true;
+                }
+                has_digit = true;
+                current_val = digit;
+            } else {
+                if leading_zero {
+                    // Leading zeros in semver numbers (e.g. 01.0.0) are invalid
+                    return Err(Error::InvalidSemVer);
+                }
+                current_val = current_val
+                    .checked_mul(10)
+                    .and_then(|v| v.checked_add(digit))
+                    .ok_or(Error::InvalidSemVer)?;
+            }
+        } else {
+            return Err(Error::InvalidSemVer);
+        }
+    }
+
+    if !has_digit || part_idx != 2 {
+        return Err(Error::InvalidSemVer);
+    }
+    parts[2] = current_val;
+
+    Ok((parts[0], parts[1], parts[2]))
+}
+
+/// Matches a version string against a `VersionRange`.
+pub fn matches_version_range(version: &String, range: &VersionRange) -> bool {
+    let (v_maj, v_min, v_patch) = match parse_semver(version) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    match range {
+        VersionRange::Exact(req_str) => {
+            if let Ok(req) = parse_semver(req_str) {
+                (v_maj, v_min, v_patch) == req
+            } else {
+                false
+            }
+        }
+        VersionRange::Compatible(req_str) => {
+            if let Ok((r_maj, r_min, r_patch)) = parse_semver(req_str) {
+                if r_maj > 0 {
+                    v_maj == r_maj && ((v_min > r_min) || (v_min == r_min && v_patch >= r_patch))
+                } else if r_min > 0 {
+                    v_maj == 0 && v_min == r_min && v_patch >= r_patch
+                } else {
+                    v_maj == 0 && v_min == 0 && v_patch == r_patch
+                }
+            } else {
+                false
+            }
+        }
+        VersionRange::PatchOnly(req_str) => {
+            if let Ok((r_maj, r_min, r_patch)) = parse_semver(req_str) {
+                v_maj == r_maj && v_min == r_min && v_patch >= r_patch
+            } else {
+                false
+            }
+        }
+    }
+}
 
 fn gas_config(env: &Env) -> GasConfig {
     env.storage()
@@ -1369,6 +1470,145 @@ impl AgentRegistryContract {
         // Batch-extend TTLs for every agent loaded in this lookup.
         extend_ttl_batch_existing(&env, &ttl_keys);
         records
+    }
+
+    /// Register a versioned capability entry for an agent (issue #660).
+    ///
+    /// Stores a versioned capability entry in Persistent storage keyed by (agent_id, capability, version).
+    /// Rejects non-semver strings at registration time with Error::InvalidSemVer.
+    pub fn register_capability_version(
+        env: Env,
+        agent_id: Symbol,
+        capability: Symbol,
+        version: String,
+    ) -> Result<(), Error> {
+        require_not_paused(&env)?;
+        parse_semver(&version)?;
+
+        let agent_key = DataKey::Agent(agent_id.clone());
+        let agent: AgentRecord = env
+            .storage()
+            .persistent()
+            .get(&agent_key)
+            .ok_or(Error::NotFound)?;
+        agent.owner.require_auth();
+
+        let cap_key = DataKey::CapabilityVersion(agent_id.clone(), capability.clone(), version.clone());
+        if env.storage().persistent().has(&cap_key) {
+            return Err(Error::AlreadyExists);
+        }
+
+        let cap_entry = Capability {
+            capability: capability.clone(),
+            version: version.clone(),
+            deprecated_at: None,
+        };
+        env.storage().persistent().set(&cap_key, &cap_entry);
+
+        let entries_key = DataKey::CapabilityVersionEntries(capability.clone());
+        let mut entries: Vec<(Symbol, String)> = env
+            .storage()
+            .persistent()
+            .get(&entries_key)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        entries.push_back((agent_id, version));
+        env.storage().persistent().set(&entries_key, &entries);
+
+        Ok(())
+    }
+
+    /// Mark a registered capability version as deprecated (issue #660).
+    ///
+    /// Callable by the agent's owner. Sets `deprecated_at` to the current ledger timestamp.
+    pub fn deprecate_capability_version(
+        env: Env,
+        agent_id: Symbol,
+        capability: Symbol,
+        version: String,
+    ) -> Result<(), Error> {
+        require_not_paused(&env)?;
+
+        let agent_key = DataKey::Agent(agent_id.clone());
+        let agent: AgentRecord = env
+            .storage()
+            .persistent()
+            .get(&agent_key)
+            .ok_or(Error::NotFound)?;
+        agent.owner.require_auth();
+
+        let cap_key = DataKey::CapabilityVersion(agent_id.clone(), capability.clone(), version.clone());
+        let mut cap: Capability = env
+            .storage()
+            .persistent()
+            .get(&cap_key)
+            .ok_or(Error::NotFound)?;
+
+        cap.deprecated_at = Some(env.ledger().timestamp());
+        env.storage().persistent().set(&cap_key, &cap);
+
+        Ok(())
+    }
+
+    /// Returns all agents whose registered version for `capability` satisfies `version_range` (issue #660).
+    ///
+    /// Deprecated versions are excluded from query results.
+    pub fn get_agents_by_capability_version(
+        env: Env,
+        capability: Symbol,
+        version_range: VersionRange,
+    ) -> Vec<Symbol> {
+        let entries_key = DataKey::CapabilityVersionEntries(capability.clone());
+        let entries: Vec<(Symbol, String)> = env
+            .storage()
+            .persistent()
+            .get(&entries_key)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let mut result = Vec::new(&env);
+        for i in 0..entries.len() {
+            let (aid, ver) = entries.get(i).unwrap();
+            let cap_key = DataKey::CapabilityVersion(aid.clone(), capability.clone(), ver.clone());
+            if let Some(cap) = env.storage().persistent().get::<DataKey, Capability>(&cap_key) {
+                if cap.deprecated_at.is_some() {
+                    continue;
+                }
+                if matches_version_range(&ver, &version_range) {
+                    let mut already_present = false;
+                    for j in 0..result.len() {
+                        if result.get(j).unwrap() == aid {
+                            already_present = true;
+                            break;
+                        }
+                    }
+                    if !already_present {
+                        result.push_back(aid);
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// Returns all registered versions for a capability across all agents (issue #660),
+    /// including deprecated ones with their `deprecated_at` timestamps.
+    pub fn get_capability_versions(env: Env, capability: Symbol) -> Vec<Capability> {
+        let entries_key = DataKey::CapabilityVersionEntries(capability.clone());
+        let entries: Vec<(Symbol, String)> = env
+            .storage()
+            .persistent()
+            .get(&entries_key)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let mut result = Vec::new(&env);
+        for i in 0..entries.len() {
+            let (aid, ver) = entries.get(i).unwrap();
+            let cap_key = DataKey::CapabilityVersion(aid, capability.clone(), ver);
+            if let Some(cap) = env.storage().persistent().get::<DataKey, Capability>(&cap_key) {
+                result.push_back(cap);
+            }
+        }
+        result
     }
 
     /// Cursor-based paginated agent listing with upper bound on page size (issue #339).

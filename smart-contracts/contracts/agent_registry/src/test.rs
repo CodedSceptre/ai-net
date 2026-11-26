@@ -2187,3 +2187,189 @@ fn error_mapper_propagation_consistency() {
     assert!(common.is_some());
     assert_eq!(common.unwrap(), CommonExitCode::AlreadyExists);
 }
+
+// ─── Capability Versioning & SemVer Pinning Tests (issue #660) ───────────────
+
+#[test]
+fn test_register_and_exact_version_query() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let agent_id = Symbol::new(&env, "agent_1");
+    let capability = Symbol::new(&env, "research");
+
+    client.register_agent(&make_record(&env, "agent_1", "research", owner.clone()));
+
+    // Register version 2.1.0
+    let ver_210 = String::from_str(&env, "2.1.0");
+    client.register_capability_version(&agent_id, &capability, &ver_210);
+
+    // Exact query matching 2.1.0
+    let range_exact = VersionRange::Exact(String::from_str(&env, "2.1.0"));
+    let matched = client.get_agents_by_capability_version(&capability, &range_exact);
+    assert_eq!(matched.len(), 1);
+    assert_eq!(matched.get(0).unwrap(), agent_id);
+
+    // Exact query for 2.1.1 should return empty
+    let range_mismatch = VersionRange::Exact(String::from_str(&env, "2.1.1"));
+    let empty = client.get_agents_by_capability_version(&capability, &range_mismatch);
+    assert_eq!(empty.len(), 0);
+}
+
+#[test]
+fn test_compatible_caret_version_range() {
+    let (env, client) = setup();
+    let owner1 = Address::generate(&env);
+    let owner2 = Address::generate(&env);
+    let owner3 = Address::generate(&env);
+    let owner4 = Address::generate(&env);
+
+    client.register_agent(&make_record(&env, "a1", "coding", owner1));
+    client.register_agent(&make_record(&env, "a2", "coding", owner2));
+    client.register_agent(&make_record(&env, "a3", "coding", owner3));
+    client.register_agent(&make_record(&env, "a4", "coding", owner4));
+
+    let capability = Symbol::new(&env, "coding");
+
+    client.register_capability_version(&Symbol::new(&env, "a1"), &capability, &String::from_str(&env, "1.0.0"));
+    client.register_capability_version(&Symbol::new(&env, "a2"), &capability, &String::from_str(&env, "1.2.3"));
+    client.register_capability_version(&Symbol::new(&env, "a3"), &capability, &String::from_str(&env, "1.9.9"));
+    client.register_capability_version(&Symbol::new(&env, "a4"), &capability, &String::from_str(&env, "2.0.0"));
+
+    // Compatible("1.0.0") matches 1.0.0, 1.2.3, 1.9.9 but not 2.0.0
+    let range_compat = VersionRange::Compatible(String::from_str(&env, "1.0.0"));
+    let matched = client.get_agents_by_capability_version(&capability, &range_compat);
+    assert_eq!(matched.len(), 3);
+    assert!(matched.contains(Symbol::new(&env, "a1")));
+    assert!(matched.contains(Symbol::new(&env, "a2")));
+    assert!(matched.contains(Symbol::new(&env, "a3")));
+    assert!(!matched.contains(Symbol::new(&env, "a4")));
+}
+
+#[test]
+fn test_patch_only_tilde_version_range() {
+    let (env, client) = setup();
+    let owner1 = Address::generate(&env);
+    let owner2 = Address::generate(&env);
+    let owner3 = Address::generate(&env);
+
+    client.register_agent(&make_record(&env, "a1", "design", owner1));
+    client.register_agent(&make_record(&env, "a2", "design", owner2));
+    client.register_agent(&make_record(&env, "a3", "design", owner3));
+
+    let capability = Symbol::new(&env, "design");
+
+    client.register_capability_version(&Symbol::new(&env, "a1"), &capability, &String::from_str(&env, "1.2.0"));
+    client.register_capability_version(&Symbol::new(&env, "a2"), &capability, &String::from_str(&env, "1.2.9"));
+    client.register_capability_version(&Symbol::new(&env, "a3"), &capability, &String::from_str(&env, "1.3.0"));
+
+    // PatchOnly("1.2.0") matches 1.2.0, 1.2.9 but not 1.3.0
+    let range_patch = VersionRange::PatchOnly(String::from_str(&env, "1.2.0"));
+    let matched = client.get_agents_by_capability_version(&capability, &range_patch);
+    assert_eq!(matched.len(), 2);
+    assert!(matched.contains(Symbol::new(&env, "a1")));
+    assert!(matched.contains(Symbol::new(&env, "a2")));
+    assert!(!matched.contains(Symbol::new(&env, "a3")));
+}
+
+#[test]
+fn test_deprecation_lifecycle() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let agent_id = Symbol::new(&env, "dep_agent");
+    let capability = Symbol::new(&env, "audit");
+
+    client.register_agent(&make_record(&env, "dep_agent", "audit", owner.clone()));
+
+    let ver_100 = String::from_str(&env, "1.0.0");
+    client.register_capability_version(&agent_id, &capability, &ver_100);
+
+    // Initial check: active
+    let range = VersionRange::Exact(String::from_str(&env, "1.0.0"));
+    let matched_before = client.get_agents_by_capability_version(&capability, &range);
+    assert_eq!(matched_before.len(), 1);
+
+    // Deprecate version
+    client.deprecate_capability_version(&agent_id, &capability, &ver_100);
+
+    // Excluded from default queries
+    let matched_after = client.get_agents_by_capability_version(&capability, &range);
+    assert_eq!(matched_after.len(), 0);
+
+    // Still accessible via get_capability_versions with timestamp
+    let versions = client.get_capability_versions(&capability);
+    assert_eq!(versions.len(), 1);
+    let cap = versions.get(0).unwrap();
+    assert_eq!(cap.capability, capability);
+    assert_eq!(cap.version, ver_100);
+    assert!(cap.deprecated_at.is_some());
+    assert_eq!(cap.deprecated_at.unwrap(), env.ledger().timestamp());
+}
+
+#[test]
+fn test_non_semver_rejected() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let agent_id = Symbol::new(&env, "test_agent");
+    let capability = Symbol::new(&env, "research");
+
+    client.register_agent(&make_record(&env, "test_agent", "research", owner.clone()));
+
+    // "latest" rejected
+    let res1 = client.try_register_capability_version(
+        &agent_id,
+        &capability,
+        &String::from_str(&env, "latest"),
+    );
+    assert_eq!(res1, Err(Ok(Error::InvalidSemVer)));
+
+    // "v1" rejected
+    let res2 = client.try_register_capability_version(
+        &agent_id,
+        &capability,
+        &String::from_str(&env, "v1"),
+    );
+    assert_eq!(res2, Err(Ok(Error::InvalidSemVer)));
+
+    // "1.0" rejected (missing patch)
+    let res3 = client.try_register_capability_version(
+        &agent_id,
+        &capability,
+        &String::from_str(&env, "1.0"),
+    );
+    assert_eq!(res3, Err(Ok(Error::InvalidSemVer)));
+
+    // "01.0.0" rejected (leading zero)
+    let res4 = client.try_register_capability_version(
+        &agent_id,
+        &capability,
+        &String::from_str(&env, "01.0.0"),
+    );
+    assert_eq!(res4, Err(Ok(Error::InvalidSemVer)));
+}
+
+#[test]
+fn test_get_capability_versions_multiple_agents() {
+    let (env, client) = setup();
+    let owner1 = Address::generate(&env);
+    let owner2 = Address::generate(&env);
+
+    client.register_agent(&make_record(&env, "a1", "risk", owner1));
+    client.register_agent(&make_record(&env, "a2", "risk", owner2));
+
+    let capability = Symbol::new(&env, "risk");
+
+    client.register_capability_version(&Symbol::new(&env, "a1"), &capability, &String::from_str(&env, "1.0.0"));
+    client.register_capability_version(&Symbol::new(&env, "a2"), &capability, &String::from_str(&env, "2.0.0"));
+
+    let versions = client.get_capability_versions(&capability);
+    assert_eq!(versions.len(), 2);
+
+    let v1 = versions.get(0).unwrap();
+    assert_eq!(v1.version, String::from_str(&env, "1.0.0"));
+    assert_eq!(v1.deprecated_at, None);
+
+    let v2 = versions.get(1).unwrap();
+    assert_eq!(v2.version, String::from_str(&env, "2.0.0"));
+    assert_eq!(v2.deprecated_at, None);
+}
+
