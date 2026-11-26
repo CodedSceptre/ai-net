@@ -2,11 +2,11 @@
 //! # Error Registry (with TTL expiration)
 //!
 //! On-chain store for agent error reports on Soroban. Each report is an
-//! [`ErrorRecord`] keyed by a caller-supplied `error_id` ([`BytesN<32>`]).
+//! [`ErrorReport`] keyed by a caller-supplied `error_id` ([`BytesN<32>`]).
 //!
 //! ## Why TTL?
 //!
-//! Without expiration, every submitted [`ErrorRecord`] lives on the ledger
+//! Without expiration, every submitted [`ErrorReport`] lives on the ledger
 //! forever. That means unbounded storage growth, rising rent/fees, and slower
 //! lookups over time. To bound this, every record carries an application-level
 //! **time-to-live (TTL)**: `submit_error` computes `expires_at = created_at +
@@ -19,7 +19,7 @@
 //! once `ledger_timestamp > expires_at`. Note the boundary: at the exact instant
 //! `now == expires_at` the record is still active — expiry is strictly `>`.
 //!
-//! Expiry is enforced at **read time**: every query ([`get_error`],
+//! Expiry is enforced at **read time**: every query ([`get_error_report`],
 //! [`get_errors_by_code`], [`count_active_by_code`]) filters out expired records,
 //! so callers never receive stale data regardless of whether cleanup has run.
 //! Cleanup is therefore purely a storage-reclamation concern, never a
@@ -49,7 +49,7 @@
 //! ## Migration
 //!
 //! This is a brand-new contract, deployed with the `expires_at` field already
-//! present in [`ErrorRecord`]. There is no prior on-chain data to migrate, so no
+//! present in [`ErrorReport`]. There is no prior on-chain data to migrate, so no
 //! migration path is required. Were an older schema (without `expires_at`) ever
 //! deployed, a migration would need to backfill `expires_at` for existing keys —
 //! but that situation does not exist here.
@@ -85,7 +85,7 @@ pub const CONTRACT_VERSION: &str = "1.0.0";
 /// and the caller-supplied TTL; they are never trusted from the caller.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ErrorRecord {
+pub struct ErrorReport {
     /// Application-defined error code, also used as the secondary index key.
     pub error_code: u32,
     /// Human-readable short error message.
@@ -96,6 +96,35 @@ pub struct ErrorRecord {
     pub created_at: u64,
     /// Ledger timestamp (seconds) after which the record is considered expired.
     pub expires_at: u64,
+}
+
+const MAX_ERROR_CODES: u32 = 10_000;
+const MAX_PAGE_SIZE: u32 = 50;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ErrorSeverity {
+    Info,
+    Warning,
+    Critical,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ErrorRecord {
+    pub code: u32,
+    pub name: String,
+    pub description: String,
+    pub severity: ErrorSeverity,
+    pub deprecated: bool,
+    pub registered_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ErrorPage {
+    pub records: Vec<ErrorRecord>,
+    pub next_cursor: Option<u32>,
 }
 
 /// Statistics returned by [`cleanup_expired_errors`], useful for callers driving
@@ -118,12 +147,15 @@ pub enum DataKey {
     Admin,
     /// Current semantic contract version.
     Version,
-    /// Primary storage: `error_id` -> [`ErrorRecord`].
+    /// Primary storage: `error_id` -> [`ErrorReport`].
     Record(BytesN<32>),
     /// Secondary lookup index: `error_code` -> `Vec<error_id>`.
     CodeIndex(u32),
     /// Enumeration index of every live `error_id`, used by cleanup.
     AllErrorIds,
+    CatalogCount,
+    CatalogRecord(u32),
+    CatalogIndex(u32),
 }
 
 #[contracterror]
@@ -143,6 +175,9 @@ pub enum Error {
     Unauthorized = 6,
     /// Requested upgrade could not be applied.
     UpgradeFailed = 7,
+    DuplicateErrorCode = 8,
+    ErrorCodeNotFound = 9,
+    RegistryFull = 10,
 }
 
 #[contract]
@@ -190,6 +225,80 @@ impl ErrorRegistryContract {
         Ok(())
     }
 
+    pub fn register_error(
+        env: Env,
+        code: u32,
+        name: String,
+        description: String,
+        severity: ErrorSeverity,
+    ) -> Result<(), Error> {
+        require_admin(&env)?;
+        let storage = env.storage().persistent();
+        let key = DataKey::CatalogRecord(code);
+        if storage.has(&key) {
+            return Err(Error::DuplicateErrorCode);
+        }
+        let count: u32 = env.storage().instance().get(&DataKey::CatalogCount).unwrap_or(0);
+        if count >= MAX_ERROR_CODES {
+            return Err(Error::RegistryFull);
+        }
+        let record = ErrorRecord {
+            code,
+            name: name.clone(),
+            description,
+            severity: severity.clone(),
+            deprecated: false,
+            registered_at: env.ledger().timestamp(),
+        };
+        storage.set(&key, &record);
+        storage.set(&DataKey::CatalogIndex(count), &code);
+        env.storage().instance().set(&DataKey::CatalogCount, &(count + 1));
+        env.events().publish((Symbol::new(&env, "ErrorRegistered"), code), (name, severity));
+        Ok(())
+    }
+
+    pub fn update_error_description(
+        env: Env,
+        code: u32,
+        new_description: String,
+    ) -> Result<(), Error> {
+        require_admin(&env)?;
+        let mut record = Self::get_error(env.clone(), code)?;
+        record.description = new_description.clone();
+        env.storage().persistent().set(&DataKey::CatalogRecord(code), &record);
+        env.events().publish((Symbol::new(&env, "ErrorUpdated"), code), new_description);
+        Ok(())
+    }
+
+    pub fn deprecate_error(env: Env, code: u32) -> Result<(), Error> {
+        require_admin(&env)?;
+        let mut record = Self::get_error(env.clone(), code)?;
+        record.deprecated = true;
+        env.storage().persistent().set(&DataKey::CatalogRecord(code), &record);
+        Ok(())
+    }
+
+    pub fn get_error(env: Env, code: u32) -> Result<ErrorRecord, Error> {
+        env.storage().persistent().get(&DataKey::CatalogRecord(code)).ok_or(Error::ErrorCodeNotFound)
+    }
+
+    /// The cursor is an index in registration order. A page can be empty when
+    /// its entries are deprecated, so callers should follow next_cursor.
+    pub fn list_errors(env: Env, include_deprecated: bool, cursor: u32, limit: u32) -> ErrorPage {
+        let count: u32 = env.storage().instance().get(&DataKey::CatalogCount).unwrap_or(0);
+        let end = cursor.saturating_add(limit.clamp(1, MAX_PAGE_SIZE)).min(count);
+        let storage = env.storage().persistent();
+        let mut records = Vec::new(&env);
+        for index in cursor..end {
+            let code: u32 = storage.get(&DataKey::CatalogIndex(index)).unwrap();
+            let record: ErrorRecord = storage.get(&DataKey::CatalogRecord(code)).unwrap();
+            if include_deprecated || !record.deprecated {
+                records.push_back(record);
+            }
+        }
+        ErrorPage { records, next_cursor: (end < count).then_some(end) }
+    }
+
     /// Submit a new error report with an explicit TTL.
     ///
     /// * `error_id` — unique 32-byte key for the record (caller-supplied, e.g. a
@@ -223,7 +332,7 @@ impl ErrorRegistryContract {
             .checked_add(ttl_seconds)
             .ok_or(Error::TtlOverflow)?;
 
-        let record = ErrorRecord {
+        let record = ErrorReport {
             error_code,
             message,
             agent_id,
@@ -265,17 +374,17 @@ impl ErrorRegistryContract {
 
     /// Fetch a single record by `error_id`, or `None` if it does not exist or has
     /// expired. Expired records are treated exactly as if absent.
-    pub fn get_error(env: Env, error_id: BytesN<32>) -> Option<ErrorRecord> {
+    pub fn get_error_report(env: Env, error_id: BytesN<32>) -> Option<ErrorReport> {
         let now = env.ledger().timestamp();
         env.storage()
             .persistent()
-            .get::<DataKey, ErrorRecord>(&DataKey::Record(error_id))
+            .get::<DataKey, ErrorReport>(&DataKey::Record(error_id))
             .filter(|record| is_active(now, record))
     }
 
     /// Return all **active** records carrying `error_code`. Expired records are
     /// skipped and never returned to the caller.
-    pub fn get_errors_by_code(env: Env, error_code: u32) -> Vec<ErrorRecord> {
+    pub fn get_errors_by_code(env: Env, error_code: u32) -> Vec<ErrorReport> {
         let now = env.ledger().timestamp();
         let ids = read_code_index(&env, error_code);
 
@@ -284,7 +393,7 @@ impl ErrorRegistryContract {
             if let Some(record) = env
                 .storage()
                 .persistent()
-                .get::<DataKey, ErrorRecord>(&DataKey::Record(id))
+                .get::<DataKey, ErrorReport>(&DataKey::Record(id))
             {
                 if is_active(now, &record) {
                     records.push_back(record);
@@ -356,7 +465,7 @@ impl ErrorRegistryContract {
             match env
                 .storage()
                 .persistent()
-                .get::<DataKey, ErrorRecord>(&error_key)
+                .get::<DataKey, ErrorReport>(&error_key)
             {
                 Some(record) if is_active(now, &record) => {
                     // Still active — keep it.
@@ -427,7 +536,7 @@ fn validate_ttl(ttl_seconds: u64) -> Result<(), Error> {
 
 /// A record is active while the clock has not passed its expiry. Expiry is
 /// strictly `>`, so `now == expires_at` is still active.
-fn is_active(now: u64, record: &ErrorRecord) -> bool {
+fn is_active(now: u64, record: &ErrorReport) -> bool {
     now <= record.expires_at
 }
 
