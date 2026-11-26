@@ -57,6 +57,7 @@ pub enum DataKey {
     Price(Symbol),
     /// Active feeder submissions for an asset pair (Persistent storage, Vec<FeederSubmission>).
     Submissions(Symbol),
+    XlmUsdObservation(Address),
 }
 
 /// Event emitted when a new price is submitted or updated.
@@ -98,4 +99,13 @@ pub struct MaxAgeUpdatedEvent {
     /// New max age in seconds.
     pub new_max_age: u64,
     pub ledger: u32,
+}
+
+/// Published for each accepted XLM/USD observation.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct XlmUsdPriceUpdatedEvent {
+    pub source: Address,
+    pub price: i128,
+    pub timestamp: u64,
 }
