@@ -17,7 +17,7 @@ export interface AgentRecord {
   stellarPublicKey: string;
   reputationScore: number;
   lastSeenAt: string;
-  status: 'online' | 'offline';
+  status: 'online' | 'offline' | 'deregistered';
   bondAmountXLM?: number;
   tasksCompleted?: number;
   tasksFailed?: number;

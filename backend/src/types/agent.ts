@@ -3,7 +3,7 @@ export interface AgentRegistration {
   type: string;
   endpoint: string;
   cost: number;
-  status: 'online' | 'offline';
+  status: 'online' | 'offline' | 'deregistered';
   reputation?: number;
 }
 
