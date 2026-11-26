@@ -1,4 +1,4 @@
-import React, { useContext } from 'react';
+import React, { useContext, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -28,6 +28,7 @@ const ResearchReportRenderer: React.FC<Props> = ({ result, searchQuery }) => {
     (markdown ?? '').matchAll(/!\[([^\]]*)\]\(([^\s)]+)(?:\s+"([^"]*)")?\)/g),
     ([, alt, url, title]) => ({ url, alt, title }),
   );
+  const reportRef = useRef<HTMLDivElement>(null);
 
   if (!markdown) {
     return (
@@ -73,6 +74,7 @@ const ResearchReportRenderer: React.FC<Props> = ({ result, searchQuery }) => {
   const content = (
     <>
     <div
+      ref={reportRef}
       className="markdown-body"
       id="research-markdown"
       data-testid="research-markdown"
@@ -143,11 +145,18 @@ const ResearchReportRenderer: React.FC<Props> = ({ result, searchQuery }) => {
             );
           },
           img({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
-            const imageIndex = images.findIndex((image) => image.url === src);
             return (
               <button
                 type="button"
                 onClick={() => lightbox.openLightbox(imageIndex >= 0 ? images : src ? [{ url: src, alt, title }] : [], Math.max(imageIndex, 0))}
+                onClick={(event) => {
+                  const elements = Array.from(reportRef.current?.querySelectorAll('img') ?? []);
+                  const images: LightboxImage[] = elements.map(image => ({
+                    url: image.src, alt: image.alt, title: image.title,
+                  }));
+                  const index = elements.findIndex(image => event.currentTarget.contains(image));
+                  if (index >= 0) lightbox.openLightbox(images, index);
+                }}
                 aria-label={`Open image: ${alt || title || 'report image'}`}
                 style={{ display: 'block', maxWidth: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}
               >

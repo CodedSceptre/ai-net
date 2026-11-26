@@ -105,7 +105,7 @@ function ReputationStars({ rating }: { rating: number }) {
         <Star
           key={i}
           size={10}
-          className={i < stars ? 'text-warning fill-warning' : 'text-text-secondary/30'}
+          className={i < stars ? 'text-warning fill-warning' : 'text-text-secondary'}
         />
       ))}
     </div>
@@ -176,7 +176,7 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, index, selected = false, o
               {isOnline ? 'Online' : 'Offline'}
             </span>
             {agent.lastHeartbeat && (
-              <span className="text-[8px] text-text-secondary/60">
+              <span className="text-[8px] text-text-secondary">
                 {formatHeartbeatAge(agent.lastHeartbeat)}
               </span>
             )}

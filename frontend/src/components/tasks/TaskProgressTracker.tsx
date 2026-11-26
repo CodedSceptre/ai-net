@@ -1,3 +1,4 @@
+import ModalFocusTrap from '../common/ModalFocusTrap';
 /**
  * TaskProgressTracker — Live progress tracker for a running pipeline task.
  *
@@ -190,65 +191,59 @@ const CancelModal: React.FC<CancelModalProps> = ({
   isLoading,
   refundAmount,
 }) => {
-  // Trap focus in modal
-  const confirmRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    confirmRef.current?.focus();
-  }, []);
-
   return (
-    <div
-      className={styles.modalOverlay}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="cancel-modal-title"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className={styles.modal}>
-        <h2 id="cancel-modal-title" className={styles.modalTitle}>
-          Cancel this task?
-        </h2>
-        <p className={styles.modalBody}>
-          This will stop execution of all remaining sub-agents. Any completed
-          steps will not be refunded.
-          {refundAmount !== undefined && refundAmount > 0 && (
-            <>
-              {' '}
-              Estimated refund:{' '}
-              <strong>{refundAmount.toFixed(2)} XLM</strong>.
-            </>
-          )}
-        </p>
-        <div className={styles.modalActions}>
-          <button
-            className={styles.btnSecondary}
-            onClick={onClose}
-            disabled={isLoading}
-          >
-            Keep running
-          </button>
-          <button
-            ref={confirmRef}
-            className={styles.btnDanger}
-            onClick={onConfirm}
-            disabled={isLoading}
-            aria-busy={isLoading}
-          >
-            {isLoading ? (
+    <ModalFocusTrap onEscape={onClose}>
+      <div
+        className={styles.modalOverlay}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cancel-modal-title"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onClose();
+        }}
+      >
+        <div className={styles.modal}>
+          <h2 id="cancel-modal-title" className={styles.modalTitle}>
+            Cancel this task?
+          </h2>
+          <p className={styles.modalBody}>
+            This will stop execution of all remaining sub-agents. Any completed
+            steps will not be refunded.
+            {refundAmount !== undefined && refundAmount > 0 && (
               <>
-                <Loader2 size={14} className={styles.spin} aria-hidden="true" />
-                Cancelling…
+                {' '}
+                Estimated refund:{' '}
+                <strong>{refundAmount.toFixed(2)} XLM</strong>.
               </>
-            ) : (
-              'Yes, cancel task'
             )}
-          </button>
+          </p>
+          <div className={styles.modalActions}>
+            <button
+              className={styles.btnSecondary}
+              onClick={onClose}
+              disabled={isLoading}
+            >
+              Keep running
+            </button>
+            <button
+                            className={styles.btnDanger}
+              onClick={onConfirm}
+              disabled={isLoading}
+              aria-busy={isLoading}
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 size={14} className={styles.spin} aria-hidden="true" />
+                  Cancelling…
+                </>
+              ) : (
+                'Yes, cancel task'
+              )}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </ModalFocusTrap>
   );
 };
 

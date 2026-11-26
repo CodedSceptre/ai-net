@@ -56,7 +56,11 @@ export const useNodeState = (_taskId: string) => {
             return {
               ...n,
               status: "completed" as NodeStatus,
-              result: payload,
+              result: {
+                ...(typeof payload === "object" && payload !== null ? payload : {}),
+                startedAt: (n as ExtendedDAGNode).startTime,
+                completedAt: event.timestamp,
+              },
               endTime: event.timestamp,
               duration,
               cost,

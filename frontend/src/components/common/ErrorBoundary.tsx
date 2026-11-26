@@ -168,6 +168,8 @@ export class RouteErrorBoundary extends Component<
 
     return this.props.children;
   }
+export function RouteErrorBoundary({ children, label }: Props) {
+  return <ErrorBoundary label={label}>{children}</ErrorBoundary>;
 }
 
 export default ErrorBoundary;

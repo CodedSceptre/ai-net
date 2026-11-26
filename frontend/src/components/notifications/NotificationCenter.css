@@ -597,3 +597,27 @@
     max-height: calc(100vh - 120px);
   }
 }
+
+
+.notification-view-all {
+  display: block;
+  padding: 12px 16px;
+  color: var(--accent-text-interactive);
+  text-align: center;
+  text-decoration: underline;
+}
+
+.notification-group-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-info);
+}
+
+.notification-group-dot.payment {
+  background: var(--status-success);
+}
+
+.notification-group-dot.task {
+  background: var(--accent-text-interactive);
+}

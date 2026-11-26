@@ -259,12 +259,11 @@ export const TaskResult: React.FC<TaskResultProps> = ({
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             iframe: () => null,
 
-            code({ inline, className: cls, children: ch, ...rest }: CodeProps) {
+            code({ className: cls, children: ch }) {
               return (
                 <CodeBlock
-                  inline={inline}
+                  inline={!cls}
                   className={cls}
-                  {...rest}
                 >
                   {ch}
                 </CodeBlock>

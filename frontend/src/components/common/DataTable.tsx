@@ -300,6 +300,7 @@ export function DataTable<T>({
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div
+      aria-busy={loading}
       className={`${styles.wrapper} ${className ?? ''}`}
       style={{ maxHeight }}
       data-overflowing={scrollState.overflowing || undefined}
@@ -362,6 +363,11 @@ export function DataTable<T>({
           </thead>
           <tbody>
             {visibleRows.map((row, rowIndex) => {
+            {loading
+              ? Array.from({ length: Math.min(pageSize, 5) }, (_, i) => (
+                  <SkeletonRow key={i} colCount={columns.length + Number(Boolean(onRowSelect))} />
+                ))
+              : visibleRows.map((row, rowIndex) => {
               const rowKey = resolveRowKey(row, startIndex + rowIndex);
               const isSelected = selectedRowKeys.includes(rowKey);
               const classes = [styles.row, rowClassName ? rowClassName(row) : ''];
@@ -421,12 +427,16 @@ export function DataTable<T>({
       )}
       {isPaginated && totalRows > 0 && (
         <div className={styles.pagination}>
+      {isPaginated && totalRows > 0 && !loading && (
+        <div className={styles.pagination} aria-label="Table pagination">
           <div className={styles.paginationLeft}>
             {pageSizeOptions.length > 1 && (
               <label>
                 Rows per page
                 <select value={pageSize} onChange={event => handlePageSizeChange(Number(event.target.value))}>
                   {pageSizeOptions.map(size => <option value={size} key={size}>{size}</option>)}
+                <select value={pageSize} onChange={(event) => handlePageSizeChange(Number(event.target.value))}>
+                  {pageSizeOptions.map(size => <option key={size} value={size}>{size}</option>)}
                 </select>
               </label>
             )}

@@ -2,6 +2,7 @@ import ReputationHistoryChart from '../components/agents/ReputationHistoryChart'
 import ScoreBreakdownChart from '../components/agents/ScoreBreakdownChart'
 import { useAgentReputation } from '../hooks/useAgentReputation'
 import { ReputationChart } from "../components/agents/ReputationChart";
+import { ReputationChart } from '../components/agents/ReputationChart';
 /**
  * AgentDetailPage
  *

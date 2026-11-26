@@ -1,3 +1,4 @@
+import ModalFocusTrap from '../components/common/ModalFocusTrap';
 /**
  * AgentsPage
  *
@@ -415,17 +416,19 @@ function AgentsPage() {
             />
           </div>
 
-          {/* Filter bar */}
-          <AgentFilterBar
+          <div className={styles.marketplaceLayout} data-filters-open={tabletFiltersOpen}>
+            <aside className={`${styles.filterSidebar} ${tabletFiltersOpen ? styles.filterSidebarOpen : ''}`} aria-label="Agent filters">
+              <AgentFilterBar
             filters={filters}
             availableCapabilities={capabilities}
             priceDomain={domain}
             onChange={updateFilters}
             onReset={resetFilters}
             onRefresh={refetch}
-          />
+              />
+            </aside>
 
-            <main className={styles.marketplaceResults}>
+            <section className={styles.marketplaceResults} aria-label="Agent results">
               <div className={styles.resultsToolbar}>
                 <button
                   type="button"
@@ -595,6 +598,8 @@ function AgentsPage() {
                 />
               )}
             </main>
+            </section>
+          </div>
         </div>
       )}
 
@@ -632,22 +637,16 @@ function AgentsPage() {
         <>
           <button
             type="button"
-            className={styles.sheetBackdrop}
+            data-modal-backdrop className={styles.sheetBackdrop}
             aria-label="Close panel"
             onClick={() => setMobileSheet(null)}
           />
-          <section
-            className={`${styles.mobileSheet} ${sheetExpanded ? styles.mobileSheetExpanded : ''}`}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="agent-sheet-title"
-          >
-            <button
-              type="button"
-              className={styles.sheetHandle}
-              onClick={() => setSheetExpanded((expanded) => !expanded)}
-              aria-label={sheetExpanded ? 'Snap sheet to half height' : 'Expand sheet to 90 percent height'}
-              aria-expanded={sheetExpanded}
+          <ModalFocusTrap>
+            <section
+              className={`${styles.mobileSheet} ${sheetExpanded ? styles.mobileSheetExpanded : ''}`}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="agent-sheet-title"
             >
               <span />
             </button>
@@ -655,74 +654,88 @@ function AgentsPage() {
               <h2 id="agent-sheet-title">{sheetTitle}</h2>
               <button type="button" className={styles.sheetClose} onClick={() => setMobileSheet(null)} aria-label={t('close', { defaultValue: 'Close panel' })}>
                 <X size={20} aria-hidden="true" />
+              <button
+                type="button"
+                className={styles.sheetHandle}
+                onClick={() => setSheetExpanded((expanded) => !expanded)}
+                aria-label={sheetExpanded ? 'Snap sheet to half height' : 'Expand sheet to 90 percent height'}
+                aria-expanded={sheetExpanded}
+              >
+                <span />
               </button>
-            </div>
-
-            {mobileSheet === 'filters' && (
-              <div className={styles.sheetContent}>
-                <AgentFilterBar
-                  variant="sheet"
-                  filters={filters}
-                  availableCapabilities={capabilities}
-                  priceDomain={domain}
-                  onChange={updateFilters}
-                  onReset={resetFilters}
-                  onRefresh={refetch}
-                />
+              <div className={styles.sheetHeader}>
+                <h2 id="agent-sheet-title">{sheetTitle}</h2>
+                <button type="button" className={styles.sheetClose} onClick={() => setMobileSheet(null)} aria-label="Close panel">
+                  <X size={20} aria-hidden="true" />
+                </button>
               </div>
-            )}
 
-            {mobileSheet === 'sort' && (
-              <div className={styles.sheetContent} role="radiogroup" aria-label="Sort agents">
-                {([
-                  { key: null, direction: 'desc', label: 'Recommended' },
-                  { key: 'price', direction: 'asc', label: 'Price: low to high' },
-                  { key: 'price', direction: 'desc', label: 'Price: high to low' },
-                  { key: 'reputation', direction: 'desc', label: 'Reputation' },
-                ] as const).map((option) => {
-                  const checked = filters.sortKey === option.key && (!option.key || filters.sortDir === option.direction)
-                  return (
-                    <button
-                      key={option.label}
-                      type="button"
-                      className={styles.sortOption}
-                      role="radio"
-                      aria-checked={checked}
-                      onClick={() => chooseSort(option.key, option.direction)}
-                    >
-                      <span>{option.label}</span>
-                      {checked && <Check size={18} aria-hidden="true" />}
-                    </button>
-                  )
-                })}
-              </div>
-            )}
+              {mobileSheet === 'filters' && (
+                <div className={styles.sheetContent}>
+                  <AgentFilterBar
+                    variant="sheet"
+                    filters={filters}
+                    availableCapabilities={capabilities}
+                    priceDomain={domain}
+                    onChange={updateFilters}
+                    onReset={resetFilters}
+                    onRefresh={refetch}
+                  />
+                </div>
+              )}
 
-            {mobileSheet === 'compare' && compareAgents.length === 2 && (
-              <div className={`${styles.sheetContent} ${styles.compareContent}`} role="table" aria-label="Agent comparison">
-                <div role="row" className={styles.compareRow}>
-                  <span role="columnheader">Agent</span>
-                  {compareAgents.map((agent) => <strong role="columnheader" key={agent.id}>{agent.name}</strong>)}
+              {mobileSheet === 'sort' && (
+                <div className={styles.sheetContent} role="radiogroup" aria-label="Sort agents">
+                  {([
+                    { key: null, direction: 'desc', label: 'Recommended' },
+                    { key: 'price', direction: 'asc', label: 'Price: low to high' },
+                    { key: 'price', direction: 'desc', label: 'Price: high to low' },
+                    { key: 'reputation', direction: 'desc', label: 'Reputation' },
+                  ] as const).map((option) => {
+                    const checked = filters.sortKey === option.key && (!option.key || filters.sortDir === option.direction)
+                    return (
+                      <button
+                        key={option.label}
+                        type="button"
+                        className={styles.sortOption}
+                        role="radio"
+                        aria-checked={checked}
+                        onClick={() => chooseSort(option.key, option.direction)}
+                      >
+                        <span>{option.label}</span>
+                        {checked && <Check size={18} aria-hidden="true" />}
+                      </button>
+                    )
+                  })}
                 </div>
-                <div role="row" className={styles.compareRow}>
-                  <span role="rowheader">Price</span>
-                  {compareAgents.map((agent) => <span role="cell" key={agent.id}>{agent.price.toFixed(2)} XLM</span>)}
+              )}
+
+              {mobileSheet === 'compare' && compareAgents.length === 2 && (
+                <div className={`${styles.sheetContent} ${styles.compareContent}`} role="table" aria-label="Agent comparison">
+                  <div role="row" className={styles.compareRow}>
+                    <span role="columnheader">Agent</span>
+                    {compareAgents.map((agent) => <strong role="columnheader" key={agent.id}>{agent.name}</strong>)}
+                  </div>
+                  <div role="row" className={styles.compareRow}>
+                    <span role="rowheader">Price</span>
+                    {compareAgents.map((agent) => <span role="cell" key={agent.id}>{agent.price.toFixed(2)} XLM</span>)}
+                  </div>
+                  <div role="row" className={styles.compareRow}>
+                    <span role="rowheader">Reputation</span>
+                    {compareAgents.map((agent) => <span role="cell" key={agent.id}>{agent.reputation.toFixed(1)} / 5</span>)}
+                  </div>
+                  <div role="row" className={styles.compareRow}>
+                    <span role="rowheader">Capabilities</span>
+                    {compareAgents.map((agent) => <span role="cell" key={agent.id}>{agent.capabilities.join(', ') || 'None'}</span>)}
+                  </div>
+                  <div role="row" className={styles.compareRow}>
+                    <span role="rowheader">Status</span>
+                    {compareAgents.map((agent) => <span role="cell" key={agent.id}>{agent.status}</span>)}
+                  </div>
                 </div>
-                <div role="row" className={styles.compareRow}>
-                  <span role="rowheader">Reputation</span>
-                  {compareAgents.map((agent) => <span role="cell" key={agent.id}>{agent.reputation.toFixed(1)} / 5</span>)}
-                </div>
-                <div role="row" className={styles.compareRow}>
-                  <span role="rowheader">Capabilities</span>
-                  {compareAgents.map((agent) => <span role="cell" key={agent.id}>{agent.capabilities.join(', ') || 'None'}</span>)}
-                </div>
-                <div role="row" className={styles.compareRow}>
-                  <span role="rowheader">Status</span>
-                  {compareAgents.map((agent) => <span role="cell" key={agent.id}>{agent.status}</span>)}
-                </div>
-              </div>
-            )}
-          </section>
+              )}
+            </section>
+          </ModalFocusTrap>
         </>
       )}
 

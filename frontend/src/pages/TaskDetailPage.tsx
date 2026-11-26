@@ -1,4 +1,5 @@
 import { PipelineStepIndicator } from "../components/tasks/PipelineStepIndicator";
+import PipelineStepIndicator from '../components/tasks/PipelineStepIndicator';
 import React, { useMemo } from "react";
 import { useTranslation, Trans } from "react-i18next";
 import { Link, useParams } from "react-router-dom";

@@ -1,3 +1,4 @@
+import ModalFocusTrap from '../common/ModalFocusTrap'
 import React, { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
@@ -85,7 +86,7 @@ const Navbar: React.FC = () => {
           <div className="flex items-center gap-1.5">
             <motion.button
               whileTap={{ scale: 0.9 }}
-              className="lg:hidden flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary/60 hover:text-text-primary hover:bg-background-surface/80 transition-colors"
+              className="lg:hidden flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:text-text-primary hover:bg-background-surface/80 transition-colors"
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               aria-label={t('a11y.toggleMobileMenu')}
             >
@@ -121,7 +122,7 @@ const Navbar: React.FC = () => {
                   href={link.route}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-3 py-1.5 rounded-md text-[13px] font-medium text-text-secondary/70 hover:text-text-primary hover:bg-background-surface/50 transition-all"
+                  className="px-3 py-1.5 rounded-md text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-background-surface/50 transition-all"
                 >
                   {link.label}
                 </a>
@@ -129,7 +130,7 @@ const Navbar: React.FC = () => {
                 <button
                   key={link.label}
                   onClick={() => navigate(link.route)}
-                  className="px-3 py-1.5 rounded-md text-[13px] font-medium text-text-secondary/70 hover:text-text-primary hover:bg-background-surface/50 transition-all"
+                  className="px-3 py-1.5 rounded-md text-[13px] font-medium text-text-secondary hover:text-text-primary hover:bg-background-surface/50 transition-all"
                 >
                   {link.label}
                 </button>
@@ -142,7 +143,7 @@ const Navbar: React.FC = () => {
         <div className="flex-1 max-w-[280px] mx-4 hidden lg:block">
           <div className="flex items-center w-full h-[32px] rounded-lg border border-border-subtle/60 bg-background-surface/40 hover:bg-background-surface/70 transition-all group focus-within:border-accent-cyan/30 focus-within:bg-background-surface/80 focus-within:shadow-info-glow-subtle">
             <div className="flex items-center gap-1.5 pl-2.5 pr-1 pointer-events-none">
-              <Search size={13} className="text-text-secondary/30 group-focus-within:text-accent-cyan/60 transition-colors" />
+              <Search size={13} className="text-text-secondary group-focus-within:text-accent-cyan/60 transition-colors" />
             </div>
             <input
               ref={desktopInputRef}
@@ -155,12 +156,12 @@ const Navbar: React.FC = () => {
                 }
               }}
               placeholder={t('common.searchPlaceholder')}
-              className="flex-1 bg-transparent pl-0 pr-0 text-[12.5px] text-text-primary placeholder:text-text-secondary/25 outline-none min-w-0 tracking-wide"
+              className="flex-1 bg-transparent pl-0 pr-0 text-[12.5px] text-text-primary placeholder:text-text-secondary outline-none min-w-0 tracking-wide"
             />
             <div className="flex items-center pr-2 pl-1">
               <div className="flex items-center gap-0.5 px-1 py-0.5 rounded-[3px] bg-background-surface-alt/50 border border-border-subtle/30">
-                <Command size={9} className="text-text-secondary/30" />
-                <span className="text-[9px] font-semibold text-text-secondary/30">K</span>
+                <Command size={9} className="text-text-secondary" />
+                <span className="text-[9px] font-semibold text-text-secondary">K</span>
               </div>
             </div>
           </div>
@@ -174,7 +175,7 @@ const Navbar: React.FC = () => {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-green opacity-50" />
               <span className="relative inline-flex rounded-full w-1.5 h-1.5 bg-accent-green shadow-success-glow" />
             </span>
-            <span className="text-[11px] font-medium text-text-secondary/70 tracking-wide">
+            <span className="text-[11px] font-medium text-text-secondary tracking-wide">
               {t('landing.navbar.network')}
             </span>
           </div>
@@ -182,7 +183,7 @@ const Navbar: React.FC = () => {
           {/* Mobile Search Toggle */}
           <motion.button
             whileTap={{ scale: 0.9 }}
-            className="sm:hidden flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary/50 hover:text-text-primary hover:bg-background-surface/80 transition-colors"
+            className="sm:hidden flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:text-text-primary hover:bg-background-surface/80 transition-colors"
             onClick={() => setMobileSearchOpen(!mobileSearchOpen)}
             aria-label={t('a11y.search')}
           >
@@ -199,7 +200,7 @@ const Navbar: React.FC = () => {
                 {truncateKey(publicKey)}
               </span>
               {connectionMethod && (
-                <span className="text-[9px] font-medium text-text-secondary/50 tracking-wide mx-1 hidden sm:inline">
+                <span className="text-[9px] font-medium text-text-secondary tracking-wide mx-1 hidden sm:inline">
                   {connectionMethod === 'freighter' ? t('wallet.freighter') : t('wallet.secretKey')}
                 </span>
               )}
@@ -207,7 +208,7 @@ const Navbar: React.FC = () => {
                 whileTap={{ scale: 0.9 }}
                 onClick={copyToClipboard}
                 aria-label={t('a11y.copyPublicKey')}
-                className="flex items-center justify-center w-5 h-5 rounded text-text-secondary/40 hover:text-text-primary hover:bg-background-surface/80 transition-colors"
+                className="flex items-center justify-center w-5 h-5 rounded text-text-secondary hover:text-text-primary hover:bg-background-surface/80 transition-colors"
               >
                 <Copy size={10} />
               </motion.button>
@@ -215,7 +216,7 @@ const Navbar: React.FC = () => {
                 whileTap={{ scale: 0.9 }}
                 onClick={disconnect}
                 aria-label={t('a11y.disconnectWallet')}
-                className="flex items-center justify-center w-5 h-5 rounded text-text-secondary/40 hover:text-red-400/80 hover:bg-background-surface/80 transition-colors"
+                className="flex items-center justify-center w-5 h-5 rounded text-text-secondary hover:text-red-400/80 hover:bg-background-surface/80 transition-colors"
               >
                 <ExternalLink size={10} />
               </motion.button>
@@ -228,7 +229,7 @@ const Navbar: React.FC = () => {
               className="group flex items-center gap-1.5 bg-background-surface/40 border border-border-subtle/60 rounded-md px-2.5 py-1 cursor-pointer hover:border-accent-cyan/30 hover:bg-background-surface/70 hover:shadow-info-glow-subtle transition-all"
             >
               <Wallet size={12} className="text-accent-cyan/80 group-hover:text-accent-cyan group-hover:scale-110 transition-all" />
-              <span className="text-[11px] font-medium text-text-secondary/60 group-hover:text-text-primary/90 transition-colors hidden sm:inline">
+              <span className="text-[11px] font-medium text-text-secondary group-hover:text-text-primary/90 transition-colors hidden sm:inline">
                 {t('landing.navbar.connect')}
               </span>
             </motion.button>
@@ -247,17 +248,18 @@ const Navbar: React.FC = () => {
             transition={{ duration: 0.2 }}
           >
             <div className="flex items-center h-9 rounded-lg bg-background-surface border border-border-subtle/60 focus-within:border-accent-cyan/30 focus-within:shadow-info-glow-subtle transition-all">
-              <Search size={14} className="ml-2.5 text-text-secondary/30" />
+              <Search size={14} className="ml-2.5 text-text-secondary" />
               <input
                 ref={mobileSearchRef}
                 type="text"
+                aria-label={t('a11y.search')}
                 placeholder={t('common.searchPlaceholder')}
                 onKeyDown={(e) => e.key === 'Escape' && setMobileSearchOpen(false)}
-                className="flex-1 bg-transparent pl-2 pr-2 text-[13px] text-text-primary placeholder:text-text-secondary/25 outline-none min-w-0"
+                className="flex-1 bg-transparent pl-2 pr-2 text-[13px] text-text-primary placeholder:text-text-secondary outline-none min-w-0"
               />
               <button
                 onClick={() => setMobileSearchOpen(false)}
-                className="flex items-center justify-center mr-2 text-text-secondary/30 hover:text-text-primary transition-colors"
+                className="flex items-center justify-center mr-2 text-text-secondary hover:text-text-primary transition-colors"
                 aria-label={t('a11y.closeSearch')}
               >
                 <X size={14} />
@@ -270,7 +272,11 @@ const Navbar: React.FC = () => {
       {/* Mobile Drawer */}
       <AnimatePresence>
         {mobileMenuOpen && (
+          <ModalFocusTrap onEscape={() => setMobileMenuOpen(false)}>
           <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('a11y.mobileNavigationMenu')}
             className="fixed inset-0 z-30 lg:hidden"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -285,6 +291,7 @@ const Navbar: React.FC = () => {
               onClick={() => setMobileMenuOpen(false)}
             />
             <motion.nav
+              aria-label={t('a11y.mobileNavigationMenu')}
               className="relative w-[250px] h-full bg-background-primary/98 backdrop-blur-2xl border-r border-border-subtle/80 pt-5 px-2.5 flex flex-col gap-0.5 shadow-2xl"
               initial={{ x: '-100%' }}
               animate={{ x: 0 }}
@@ -299,7 +306,7 @@ const Navbar: React.FC = () => {
                   <span className="font-semibold text-[14px] leading-tight text-text-primary tracking-wide">
                     ai-net
                   </span>
-                  <span className="text-[9px] text-text-secondary/50 tracking-[0.05em]">
+                  <span className="text-[9px] text-text-secondary tracking-[0.05em]">
                     {t('landing.navbar.agentNetwork')}
                   </span>
                 </div>
@@ -312,8 +319,8 @@ const Navbar: React.FC = () => {
                   transition={{ delay: 0.04 * idx, duration: 0.2 }}
                   className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-[12.5px] transition-all w-full text-left font-medium ${
                     item.route === '#'
-                      ? 'text-text-secondary/25 cursor-not-allowed'
-                      : 'text-text-secondary/70 hover:text-text-primary hover:bg-background-surface/80 active:bg-background-surface'
+                      ? 'text-text-secondary cursor-not-allowed'
+                      : 'text-text-secondary hover:text-text-primary hover:bg-background-surface/80 active:bg-background-surface'
                   }`}
                   onClick={() => handleNavClick(item)}
                 >
@@ -325,6 +332,7 @@ const Navbar: React.FC = () => {
               ))}
             </motion.nav>
           </motion.div>
+          </ModalFocusTrap>
         )}
       </AnimatePresence>
     </>

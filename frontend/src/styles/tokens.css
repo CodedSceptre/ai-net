@@ -28,8 +28,7 @@
   --text-primary: #f5f7fa;
   --text-secondary: #a5aebd;
   --text-muted: #94a3b8;
-  /* Raised from 0.6 to 0.85 — resolves to #808ea1 (5.49:1 on surface-primary), WCAG AA. */
-  --text-subtle: rgba(148, 163, 184, 0.85);
+  --text-subtle: #a3afc1;
   --text-disabled: rgba(148, 163, 184, 0.35);
   --text-inverse: #ffffff;
 
@@ -289,8 +288,8 @@
 
   --text-primary: #0a0e14;
   --text-secondary: #475569;
-  --text-muted: #64748b;
-  --text-subtle: rgba(71, 85, 105, 0.72);
+  --text-muted: #475569;
+  --text-subtle: #475569;
   --text-disabled: rgba(71, 85, 105, 0.42);
   --text-inverse: #ffffff;
 

@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { assertPageAccessibility } from '../utils/assertPageAccessibility'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import AgentDetailPage from './AgentDetailPage'
@@ -208,4 +209,11 @@ describe('AgentDetailPage', () => {
     const browseLink = screen.getByTestId('browse-registry-link') as HTMLAnchorElement
     expect(browseLink.getAttribute('href')).toBe('/agents')
   })
+})
+
+
+it('AgentDetailPage has no critical or serious axe violations', async () => {
+  vi.mocked(useAgentDetailModule.useAgentDetail).mockReturnValue({ ...baseResult, agent: mockAgent })
+  const { container } = renderPage()
+  await assertPageAccessibility(container)
 })

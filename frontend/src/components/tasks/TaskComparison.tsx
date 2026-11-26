@@ -1,3 +1,4 @@
+import ModalFocusTrap from '../common/ModalFocusTrap';
 import React, { useState } from 'react';
 import {
   X,
@@ -379,76 +380,78 @@ export const TaskComparison: React.FC<TaskComparisonProps> = ({
   };
 
   return (
-    <div className={styles.overlay} role="dialog" aria-modal="true" aria-label="Task comparison">
-      {/* Backdrop */}
-      <div className={styles.backdrop} onClick={onClose} aria-hidden="true" />
+    <ModalFocusTrap onEscape={onClose}>
+      <div className={styles.overlay} role="dialog" aria-modal="true" aria-label="Task comparison">
+        {/* Backdrop */}
+        <div className={styles.backdrop} onClick={onClose} aria-hidden="true" />
 
-      <div className={styles.panel}>
-        {/* Header */}
-        <div className={styles.header}>
-          <div className={styles.headerLeft}>
-            <ArrowLeftRight size={18} className={styles.headerIcon} aria-hidden="true" />
-            <h2 className={styles.headerTitle}>Comparison</h2>
-            <span className={styles.headerSubtitle}>
-              #{idA.slice(-8)} vs #{idB.slice(-8)}
-            </span>
+        <div className={styles.panel}>
+          {/* Header */}
+          <div className={styles.header}>
+            <div className={styles.headerLeft}>
+              <ArrowLeftRight size={18} className={styles.headerIcon} aria-hidden="true" />
+              <h2 className={styles.headerTitle}>Comparison</h2>
+              <span className={styles.headerSubtitle}>
+                #{idA.slice(-8)} vs #{idB.slice(-8)}
+              </span>
+            </div>
+
+            <div className={styles.headerActions}>
+              {/* Diff toggle */}
+              <label className={styles.diffToggle}>
+                <input
+                  type="checkbox"
+                  checked={showDiff}
+                  onChange={(e) => setShowDiff(e.target.checked)}
+                  aria-label="Highlight differences between tasks"
+                />
+                <span className={styles.diffLabel}>Show diff</span>
+              </label>
+
+              {/* Export */}
+              <button
+                type="button"
+                className={styles.exportBtn}
+                onClick={handleExport}
+                aria-label="Export comparison as markdown"
+              >
+                <Download size={14} />
+                Export MD
+              </button>
+
+              {/* Close */}
+              <button
+                type="button"
+                className={styles.closeBtn}
+                onClick={onClose}
+                aria-label="Close comparison"
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
 
-          <div className={styles.headerActions}>
-            {/* Diff toggle */}
-            <label className={styles.diffToggle}>
-              <input
-                type="checkbox"
-                checked={showDiff}
-                onChange={(e) => setShowDiff(e.target.checked)}
-                aria-label="Highlight differences between tasks"
-              />
-              <span className={styles.diffLabel}>Show diff</span>
-            </label>
+          {/* Split view */}
+          <div className={styles.splitView}>
+            <ComparisonColumn
+              task={taskA}
+              label="A"
+              otherTask={taskB}
+              showDiff={showDiff}
+            />
 
-            {/* Export */}
-            <button
-              type="button"
-              className={styles.exportBtn}
-              onClick={handleExport}
-              aria-label="Export comparison as markdown"
-            >
-              <Download size={14} />
-              Export MD
-            </button>
+            {/* Divider */}
+            <div className={styles.divider} aria-hidden="true" />
 
-            {/* Close */}
-            <button
-              type="button"
-              className={styles.closeBtn}
-              onClick={onClose}
-              aria-label="Close comparison"
-            >
-              <X size={16} />
-            </button>
+            <ComparisonColumn
+              task={taskB}
+              label="B"
+              otherTask={taskA}
+              showDiff={showDiff}
+            />
           </div>
-        </div>
-
-        {/* Split view */}
-        <div className={styles.splitView}>
-          <ComparisonColumn
-            task={taskA}
-            label="A"
-            otherTask={taskB}
-            showDiff={showDiff}
-          />
-
-          {/* Divider */}
-          <div className={styles.divider} aria-hidden="true" />
-
-          <ComparisonColumn
-            task={taskB}
-            label="B"
-            otherTask={taskA}
-            showDiff={showDiff}
-          />
         </div>
       </div>
-    </div>
+    </ModalFocusTrap>
   );
 };

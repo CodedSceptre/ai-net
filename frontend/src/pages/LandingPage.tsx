@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { motion } from 'framer-motion'
 import Navbar from '../components/landing/Navbar'
 import Sidebar from '../components/landing/Sidebar'
@@ -10,10 +11,14 @@ import SpecialistAgentsSection from '../components/landing/SpecialistAgentsSecti
 import Footer from '../components/landing/Footer'
 
 const LandingPage: React.FC = () => {
+  const { t } = useTranslation()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   return (
     <div className="min-h-screen bg-background-primary text-text-primary font-sans flex relative overflow-x-hidden">
+      <a href="#main-content" className="skip-to-content">
+        {t('a11y.skipToContent')}
+      </a>
       {/* Background Orbs */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className="absolute -top-40 -right-40 w-[600px] h-[600px] rounded-full bg-accent-cyan/5 blur-[120px]" />
@@ -34,6 +39,8 @@ const LandingPage: React.FC = () => {
         <Navbar />
 
         <motion.main
+          id="main-content"
+          tabIndex={-1}
           className="flex-1 w-full relative z-10"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}

@@ -55,7 +55,7 @@ const Footer: React.FC = () => {
           href={link.to}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-[13px] text-text-secondary/60 hover:text-text-primary transition-colors"
+          className="text-[13px] text-text-secondary hover:text-text-primary transition-colors"
         >
           {link.label}
         </a>
@@ -63,7 +63,7 @@ const Footer: React.FC = () => {
     }
     if (link.to === '#') {
       return (
-        <span className="text-[13px] text-text-secondary/30 cursor-not-allowed">
+        <span className="text-[13px] text-text-secondary cursor-not-allowed">
           {link.label}
         </span>
       )
@@ -71,7 +71,7 @@ const Footer: React.FC = () => {
     return (
       <Link
         to={link.to}
-        className="text-[13px] text-text-secondary/60 hover:text-text-primary transition-colors"
+        className="text-[13px] text-text-secondary hover:text-text-primary transition-colors"
       >
         {link.label}
       </Link>
@@ -91,7 +91,7 @@ const Footer: React.FC = () => {
               </div>
               <span className="font-bold text-[15px] text-text-primary tracking-wide">ai-net</span>
             </Link>
-            <p className="text-[13px] text-text-secondary/60 leading-relaxed max-w-[220px]">
+            <p className="text-[13px] text-text-secondary leading-relaxed max-w-[220px]">
               {t('footer.tagline')}
             </p>
           </div>
@@ -116,7 +116,7 @@ const Footer: React.FC = () => {
 
         {/* Bottom row: copyright + socials */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p className="text-[12px] text-text-secondary/40 flex items-center gap-1">
+          <p className="text-[12px] text-text-secondary flex items-center gap-1">
             <Trans
               i18nKey="footer.copyright"
               values={{ year: new Date().getFullYear() }}
@@ -124,13 +124,13 @@ const Footer: React.FC = () => {
             />
           </p>
           <div className="flex items-center gap-4">
-            <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub" className="text-text-secondary/40 hover:text-text-primary transition-colors">
+            <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub" className="text-text-secondary hover:text-text-primary transition-colors">
               <Github size={16} />
             </a>
-            <a href={TWITTER_URL} target="_blank" rel="noopener noreferrer" aria-label="Twitter" className="text-text-secondary/40 hover:text-text-primary transition-colors">
+            <a href={TWITTER_URL} target="_blank" rel="noopener noreferrer" aria-label="Twitter" className="text-text-secondary hover:text-text-primary transition-colors">
               <Twitter size={16} />
             </a>
-            <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" aria-label="Discord" className="text-text-secondary/40 hover:text-text-primary transition-colors">
+            <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" aria-label="Discord" className="text-text-secondary hover:text-text-primary transition-colors">
               <MessageCircle size={16} />
             </a>
           </div>

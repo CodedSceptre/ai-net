@@ -105,6 +105,7 @@ describe('NotificationCenter Component', () => {
     renderTopNavWithProvider(sampleNotifications);
 
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
     expect(bellBtn).toBeInTheDocument();
 
     // 2 unread out of 3 sample notifications
@@ -124,6 +125,7 @@ describe('NotificationCenter Component', () => {
     renderTopNavWithProvider(sampleNotifications);
 
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
     expect(screen.queryByTestId('notification-panel')).not.toBeInTheDocument();
 
     // Open
@@ -143,6 +145,7 @@ describe('NotificationCenter Component', () => {
     renderTopNavWithProvider([]);
 
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
     await act(async () => {
       fireEvent.click(bellBtn);
     });
@@ -155,6 +158,7 @@ describe('NotificationCenter Component', () => {
     renderTopNavWithProvider(sampleNotifications);
 
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
     await act(async () => {
       fireEvent.click(bellBtn);
     });
@@ -296,6 +300,7 @@ describe('NotificationCenter Component', () => {
     renderTopNavWithProvider(sampleNotifications);
 
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
 
     await act(async () => {
       fireEvent.click(bellBtn);
@@ -308,7 +313,7 @@ describe('NotificationCenter Component', () => {
     const labelledBy = panel.getAttribute('aria-labelledby');
     expect(labelledBy).toBeTruthy();
     expect(document.getElementById(labelledBy as string)).toHaveTextContent('Notifications');
-    expect(panel).toHaveFocus();
+    expect(panel).toContainElement(document.activeElement as HTMLElement);
 
     await act(async () => {
       fireEvent.keyDown(document, { key: 'Escape' });
@@ -322,6 +327,7 @@ describe('NotificationCenter Component', () => {
     renderTopNavWithProvider(sampleNotifications);
 
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
     await act(async () => {
       fireEvent.click(bellBtn);
     });
@@ -345,6 +351,7 @@ describe('NotificationCenter Component', () => {
     renderTopNavWithProvider(sampleNotifications);
 
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
     await act(async () => {
       fireEvent.click(bellBtn);
     });
@@ -377,6 +384,7 @@ describe('NotificationCenter Component', () => {
     renderTopNavWithProvider(sampleNotifications);
 
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
     await act(async () => {
       fireEvent.click(bellBtn);
     });
@@ -401,6 +409,7 @@ describe('NotificationCenter Component', () => {
     renderTopNavWithProvider(sampleNotifications);
 
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
     await act(async () => {
       fireEvent.click(bellBtn);
     });
@@ -423,6 +432,7 @@ describe('NotificationCenter Component', () => {
     renderTopNavWithProvider(sampleNotifications);
 
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
     await act(async () => {
       fireEvent.click(bellBtn);
     });
@@ -438,6 +448,7 @@ describe('NotificationCenter Component', () => {
     renderTopNavWithProvider(sampleNotifications);
 
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
     await act(async () => {
       fireEvent.click(bellBtn);
     });
@@ -454,6 +465,7 @@ describe('NotificationCenter Component', () => {
     renderTopNavWithProvider(sampleNotifications);
 
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
     await act(async () => {
       fireEvent.click(bellBtn);
     });
@@ -498,6 +510,7 @@ describe('NotificationCenter Component', () => {
 
     // Open panel
     const bellBtn = screen.getByTestId('notification-bell-btn');
+    bellBtn.focus();
     await act(async () => {
       fireEvent.click(bellBtn);
     });

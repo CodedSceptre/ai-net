@@ -69,10 +69,7 @@ const Breadcrumb: React.FC = () => {
     return segment.charAt(0).toUpperCase() + segment.slice(1)
   }
 
-  // Nothing above the root to show a trail for.
-  if (segments.length === 0) return null
-  const isAtHome = location.pathname === HOME_PATH
-  if (isAtHome) return null
+  const showTrail = segments.length > 0 && location.pathname !== HOME_PATH;
 
   const trail = [
     { label: t('nav.dashboard'), path: HOME_PATH, isLast: false },
@@ -103,6 +100,7 @@ const Breadcrumb: React.FC = () => {
   })
 
   useEffect(() => {
+    if (!showTrail) return;
     const script = document.createElement('script')
     script.id = 'breadcrumb-jsonld'
     script.type = 'application/ld+json'
@@ -110,7 +108,9 @@ const Breadcrumb: React.FC = () => {
     document.head.appendChild(script)
 
     return () => script.remove()
-  }, [jsonLd])
+  }, [jsonLd, showTrail])
+
+  if (!showTrail) return null
 
   return (
     <nav className={`breadcrumb${segments.length > 1 ? ' breadcrumb--deep' : ''}`} aria-label={t('a11y.breadcrumb')}>
