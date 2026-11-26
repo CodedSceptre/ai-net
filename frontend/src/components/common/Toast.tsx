@@ -16,6 +16,7 @@
  */
 
 import React, { useRef, useCallback, useEffect, useState } from 'react';
+import { useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle, XCircle, AlertTriangle, Info } from 'lucide-react';
 import './Toast.css';
@@ -154,6 +155,8 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
       aria-label="Notifications"
     >
       {visible.map((toast) => (
+    <div className="toast-container" aria-live="polite" aria-atomic="false">
+      {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />
       ))}
     </div>

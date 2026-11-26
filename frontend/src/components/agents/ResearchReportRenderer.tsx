@@ -23,6 +23,11 @@ const ResearchReportRenderer: React.FC<Props> = ({ result, searchQuery }) => {
   const { t } = useTranslation();
   const { effectiveTheme } = useContext(ThemeContext);
   const markdown = getMarkdown(result);
+  const lightbox = useLightbox();
+  const images: LightboxImage[] = Array.from(
+    (markdown ?? '').matchAll(/!\[([^\]]*)\]\(([^\s)]+)(?:\s+"([^"]*)")?\)/g),
+    ([, alt, url, title]) => ({ url, alt, title }),
+  );
 
   if (!markdown) {
     return (
@@ -66,6 +71,7 @@ const ResearchReportRenderer: React.FC<Props> = ({ result, searchQuery }) => {
   const isLongReport = markdown.length > 500;
 
   const content = (
+    <>
     <div
       className="markdown-body"
       id="research-markdown"
@@ -141,7 +147,7 @@ const ResearchReportRenderer: React.FC<Props> = ({ result, searchQuery }) => {
             return (
               <button
                 type="button"
-                onClick={() => lightbox.openLightbox(images, Math.max(imageIndex, 0))}
+                onClick={() => lightbox.openLightbox(imageIndex >= 0 ? images : src ? [{ url: src, alt, title }] : [], Math.max(imageIndex, 0))}
                 aria-label={`Open image: ${alt || title || 'report image'}`}
                 style={{ display: 'block', maxWidth: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}
               >

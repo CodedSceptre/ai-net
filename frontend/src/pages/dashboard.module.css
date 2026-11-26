@@ -72,4 +72,8 @@
 .agentPerformance strong {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+.quickLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
 }

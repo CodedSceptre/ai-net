@@ -133,6 +133,41 @@ export interface RouteErrorBoundaryProps {
  */
 export function RouteErrorBoundary({ children, label }: RouteErrorBoundaryProps) {
   return <ErrorBoundary label={label}>{children}</ErrorBoundary>;
+export class RouteErrorBoundary extends Component<
+  RouteErrorBoundaryProps,
+  State
+> {
+  public state: State = {
+    hasError: false,
+    error: null,
+  };
+
+  public static getDerivedStateFromError(error: Error): State {
+    return { hasError: true, error };
+  }
+
+  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    if (import.meta.env.DEV) {
+      console.error(
+        `RouteErrorBoundary [${this.props.label ?? "Route"}] caught an error:`,
+        error,
+        errorInfo,
+      );
+    }
+  }
+
+  public render() {
+    if (this.state.hasError) {
+      return (
+        <ServerErrorPage
+          error={this.state.error}
+          onRetry={() => this.setState({ hasError: false, error: null })}
+        />
+      );
+    }
+
+    return this.props.children;
+  }
 }
 
 export default ErrorBoundary;

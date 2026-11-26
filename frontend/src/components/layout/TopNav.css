@@ -393,3 +393,17 @@
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.35; }
 }
+
+.tour-settings {
+  position: relative;
+}
+
+.tour-settings-menu {
+  position: absolute;
+  right: 0;
+  z-index: 10;
+  white-space: nowrap;
+  padding: 0.5rem;
+  background: var(--surface-canvas);
+  border: 1px solid var(--border-strong);
+}

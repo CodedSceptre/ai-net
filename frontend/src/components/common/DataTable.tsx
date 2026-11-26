@@ -168,7 +168,7 @@ export function DataTable<T>({
     observer.observe(viewport);
     if (viewport.firstElementChild) observer.observe(viewport.firstElementChild);
     return () => observer.disconnect();
-  }, [columns.length, rows.length, updateScrollState]);
+  }, [columns.length, allRows.length, updateScrollState]);
 
   // Re-sync controlled pageSize if the prop changes
   useEffect(() => {
@@ -362,7 +362,7 @@ export function DataTable<T>({
           </thead>
           <tbody>
             {visibleRows.map((row, rowIndex) => {
-              const rowKey = getRowKey(row);
+              const rowKey = resolveRowKey(row, startIndex + rowIndex);
               const isSelected = selectedRowKeys.includes(rowKey);
               const classes = [styles.row, rowClassName ? rowClassName(row) : ''];
               if (isSelected) classes.push(styles.selectedRow);
@@ -384,7 +384,7 @@ export function DataTable<T>({
                       <input
                         type="checkbox"
                         checked={isSelected}
-                        onChange={() => handleSelect(rowKey, row)}
+                        onChange={() => onRowSelect(row)}
                         onClick={(event) => event.stopPropagation()}
                         aria-label={`Select row ${String(rowKey)}`}
                       />
@@ -405,6 +405,28 @@ export function DataTable<T>({
                       {column.render ? column.render(row) : getCellValue(row, column.key) ?? '—'}
                     </td>
                   ))}
+                </tr>
+              );
+            })}
+            {loading && Array.from({ length: 5 }, (_, index) => (
+              <SkeletonRow key={index} colCount={columns.length + Number(Boolean(onRowSelect))} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {virtualization && itemCount > 0 && (
+        <div className={styles.virtualizationMeta}>
+          Showing {Math.max(0, endIndex - startIndex)} of {itemCount} rows
+        </div>
+      )}
+      {isPaginated && totalRows > 0 && (
+        <div className={styles.pagination}>
+          <div className={styles.paginationLeft}>
+            {pageSizeOptions.length > 1 && (
+              <label>
+                Rows per page
+                <select value={pageSize} onChange={event => handlePageSizeChange(Number(event.target.value))}>
+                  {pageSizeOptions.map(size => <option value={size} key={size}>{size}</option>)}
                 </select>
               </label>
             )}
