@@ -36,4 +36,5 @@ pub enum Error {
     AlreadyVoted = 15,
     /// The proposal has reached the rejection threshold.
     ProposalRejected = 16,
+    InvalidDisputeDecision = 17,
 }

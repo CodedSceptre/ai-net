@@ -35,13 +35,7 @@ use soroban_sdk::{
 /// Minimal interface used to invoke `capability_staking::slash` via cross-contract call.
 #[contractclient(name = "CapabilityStakingClient")]
 pub trait ICapabilityStaking {
-    fn slash(
-        env: Env,
-        agent_id: Address,
-        capability: Bytes,
-        slash_amount: i128,
-        reason: Bytes,
-    );
+    fn slash(env: Env, agent_id: Address, capability: Bytes, slash_amount: i128, reason: Bytes);
 }
 
 /// Voting window: 72 hours in seconds.
@@ -50,6 +44,10 @@ const VOTING_PERIOD_SECS: u64 = 72 * 60 * 60; // 259_200
 const RAISE_WINDOW_SECS: u64 = 24 * 60 * 60; // 86_400
 /// Minimum Approve votes required for [`Resolution::Approve`] (3-of-5).
 const REQUIRED_APPROVE_VOTES: u32 = 3;
+const ESCALATION_FEE: i128 = 5 * 10_000_000;
+const ESCALATION_THRESHOLD: i128 = 1_000 * 10_000_000;
+const ESCALATION_SLA_SECS: u64 = 72 * 60 * 60;
+const CONTEST_WINDOW_SECS: u64 = 24 * 60 * 60;
 const STORAGE_TTL_THRESHOLD: u32 = 100_000;
 const STORAGE_TTL_EXTEND_TO: u32 = 535_680;
 
@@ -75,6 +73,17 @@ pub enum DataKey {
     NextDisputeId,
     /// capability_staking contract address — called on Reject resolutions.
     CapabilityStakingContract,
+    EscalationConfig,
+    Escalation(u64),
+    AutomatedAttempt(u64),
+}
+
+#[contracttype]
+#[derive(Clone)]
+struct EscalationConfig {
+    governance: Address,
+    native_token: Address,
+    fee_recipient: Address,
 }
 
 #[contract]
@@ -130,10 +139,101 @@ fn next_dispute_id(env: &Env) -> Result<u64, Error> {
         .get(&DataKey::NextDisputeId)
         .unwrap_or(0);
     let next = id.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-    env.storage()
-        .instance()
-        .set(&DataKey::NextDisputeId, &next);
+    env.storage().instance().set(&DataKey::NextDisputeId, &next);
     Ok(next)
+}
+
+fn read_dispute(env: &Env, dispute_id: u64) -> Result<DisputeRecord, Error> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Dispute(dispute_id))
+        .ok_or(Error::NotFound)
+}
+
+fn read_escrow(env: &Env, record: &DisputeRecord) -> Result<TaskEscrow, Error> {
+    let escrow: TaskEscrow = env
+        .storage()
+        .persistent()
+        .get(&DataKey::TaskEscrow(record.task_id.clone()))
+        .ok_or(Error::InvalidTaskEscrow)?;
+    if !escrow.disputed || escrow.settled {
+        return Err(Error::InvalidTaskEscrow);
+    }
+    Ok(escrow)
+}
+
+fn require_participant(escrow: &TaskEscrow, participant: &Address) -> Result<(), Error> {
+    if participant != &escrow.submitter && participant != &escrow.agent {
+        return Err(Error::Unauthorized);
+    }
+    participant.require_auth();
+    Ok(())
+}
+
+fn require_open(record: &DisputeRecord) -> Result<(), Error> {
+    match record.status {
+        DisputeStatus::Open => Ok(()),
+        DisputeStatus::Resolved => Err(Error::AlreadyResolved),
+        DisputeStatus::Escalated => Err(Error::EscalationRequired),
+    }
+}
+
+fn require_contest_window_closed(env: &Env, dispute_id: u64, now: u64) -> Result<(), Error> {
+    let attempted_at: u64 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::AutomatedAttempt(dispute_id))
+        .ok_or(Error::ContestWindowActive)?;
+    if now < attempted_at.saturating_add(CONTEST_WINDOW_SECS) {
+        return Err(Error::ContestWindowActive);
+    }
+    Ok(())
+}
+
+fn automated_decision(record: &DisputeRecord) -> Resolution {
+    if record.approve_votes >= REQUIRED_APPROVE_VOTES {
+        Resolution::Approve
+    } else {
+        Resolution::Reject
+    }
+}
+
+fn settle_dispute(
+    env: &Env,
+    record: &mut DisputeRecord,
+    mut escrow: TaskEscrow,
+    decision: &Resolution,
+) {
+    let recipient = if *decision == Resolution::Approve {
+        &escrow.agent
+    } else {
+        &escrow.submitter
+    };
+    if escrow.amount > 0 {
+        token::Client::new(env, &escrow.asset).transfer(
+            &env.current_contract_address(),
+            recipient,
+            &escrow.amount,
+        );
+    }
+    escrow.settled = true;
+    let escrow_key = DataKey::TaskEscrow(record.task_id.clone());
+    env.storage().persistent().set(&escrow_key, &escrow);
+    extend_ttl(env, &escrow_key);
+
+    record.status = DisputeStatus::Resolved;
+    record.resolution = Some(*decision as u32);
+    let dispute_key = DataKey::Dispute(record.dispute_id);
+    env.storage().persistent().set(&dispute_key, record);
+    extend_ttl(env, &dispute_key);
+}
+
+fn escalation_config(env: &Env) -> Option<EscalationConfig> {
+    env.storage().instance().get(&DataKey::EscalationConfig)
+}
+
+fn exceeds_threshold(config: &EscalationConfig, escrow: &TaskEscrow) -> bool {
+    escrow.asset == config.native_token && escrow.amount > ESCALATION_THRESHOLD
 }
 
 // ─── Contract implementation ─────────────────────────────────────────────────
@@ -163,7 +263,11 @@ impl DisputeResolutionContract {
             return Err(Error::InvalidArbiterSet);
         }
         for (index, arbiter) in arbiters.iter().enumerate() {
-            if arbiters.iter().skip(index + 1).any(|other| other == arbiter) {
+            if arbiters
+                .iter()
+                .skip(index + 1)
+                .any(|other| other == arbiter)
+            {
                 return Err(Error::InvalidArbiterSet);
             }
         }
@@ -175,9 +279,7 @@ impl DisputeResolutionContract {
         if next_dispute_id != 0 {
             return Err(Error::InvalidArbiterSet);
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::Arbiters, &arbiters);
+        env.storage().instance().set(&DataKey::Arbiters, &arbiters);
         Ok(())
     }
 
@@ -415,9 +517,7 @@ impl DisputeResolutionContract {
             .ok_or(Error::NotFound)?;
         extend_ttl(&env, &dispute_key);
 
-        if record.status == DisputeStatus::Resolved {
-            return Err(Error::AlreadyResolved);
-        }
+        require_open(&record)?;
 
         // Enforce voting window.
         let now = env.ledger().timestamp();
@@ -476,58 +576,34 @@ impl DisputeResolutionContract {
             .ok_or(Error::NotFound)?;
         extend_ttl(&env, &dispute_key);
 
-        if record.status == DisputeStatus::Resolved {
-            return Err(Error::AlreadyResolved);
-        }
+        require_open(&record)?;
 
         let now = env.ledger().timestamp();
         if now < record.voting_deadline {
             return Err(Error::VotingPeriodActive);
         }
 
-        // 3-of-5: approve wins if at least 3 arbiters approved.
-        let resolution = if record.approve_votes >= REQUIRED_APPROVE_VOTES {
-            Resolution::Approve
-        } else {
-            Resolution::Reject
-        };
-
-        record.status = DisputeStatus::Resolved;
-        record.resolution = Some(resolution.clone());
-
-        let escrow_key = DataKey::TaskEscrow(record.task_id.clone());
-        let mut settled_escrow: TaskEscrow = env
-            .storage()
-            .persistent()
-            .get(&escrow_key)
-            .ok_or(Error::InvalidTaskEscrow)?;
-        extend_ttl(&env, &escrow_key);
-        if !settled_escrow.disputed || settled_escrow.settled {
-            return Err(Error::InvalidTaskEscrow);
+        let settled_escrow = read_escrow(&env, &record)?;
+        if let Some(config) = escalation_config(&env) {
+            if exceeds_threshold(&config, &settled_escrow) {
+                return Err(Error::EscalationRequired);
+            }
+            // Give participants a chance to contest the automated outcome before
+            // the irreversible payout, even if a keeper submits the first call.
+            if settled_escrow.asset == config.native_token
+                && settled_escrow.amount >= ESCALATION_FEE
+            {
+                require_contest_window_closed(&env, dispute_id, now)?;
+            }
         }
-        let recipient = if resolution == Resolution::Approve {
-            settled_escrow.agent.clone()
-        } else {
-            settled_escrow.submitter.clone()
-        };
-        token::Client::new(&env, &settled_escrow.asset).transfer(
-            &env.current_contract_address(),
-            &recipient,
-            &settled_escrow.amount,
-        );
-        settled_escrow.settled = true;
-        env.storage()
-            .persistent()
-            .set(&escrow_key, &settled_escrow);
-        extend_ttl(&env, &escrow_key);
-        env.storage().persistent().set(&dispute_key, &record);
-        extend_ttl(&env, &dispute_key);
+        let resolution = automated_decision(&record);
+        settle_dispute(&env, &mut record, settled_escrow.clone(), &resolution);
 
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("resolved")),
             DisputeResolvedEvent {
                 dispute_id,
-                resolution: resolution.clone(),
+                resolution,
                 approve_votes: record.approve_votes,
                 reject_votes: record.reject_votes,
             },
@@ -550,16 +626,212 @@ impl DisputeResolutionContract {
                 let client = CapabilityStakingClient::new(&env, &staking_contract);
                 // Best-effort: if the slash panics (e.g. no stake registered),
                 // we swallow the error so dispute settlement is never blocked.
-                let _ = client.try_slash(
-                    &settled_escrow.agent,
-                    &capability,
-                    &slash_amount,
-                    &reason,
-                );
+                let _ =
+                    client.try_slash(&settled_escrow.agent, &capability, &slash_amount, &reason);
             }
         }
 
         Ok(resolution)
+    }
+
+    /// Set deployment addresses. Supply the native XLM Stellar Asset Contract
+    /// for this network. Existing escalations retain their assigned governance.
+    pub fn configure_escalation(
+        env: Env,
+        governance: Address,
+        native_token: Address,
+        fee_recipient: Address,
+    ) -> Result<(), Error> {
+        require_admin(&env)?;
+        let mut governance_strkey = [0_u8; 56];
+        governance
+            .to_string()
+            .copy_into_slice(&mut governance_strkey);
+        if governance_strkey[0] != b'C' || governance == env.current_contract_address() {
+            return Err(Error::Unauthorized);
+        }
+        if fee_recipient == env.current_contract_address() {
+            return Err(Error::InvalidEscalationAsset);
+        }
+        env.storage().instance().set(
+            &DataKey::EscalationConfig,
+            &EscalationConfig {
+                governance,
+                native_token,
+                fee_recipient,
+            },
+        );
+        Ok(())
+    }
+
+    /// Record a provisional outcome after voting, without transferring funds.
+    /// A signing caller may start the contest window. Either party can then
+    /// contest the outcome while the escrow is still held.
+    pub fn attempt_resolution(
+        env: Env,
+        dispute_id: u64,
+        caller: Address,
+    ) -> Result<Resolution, Error> {
+        require_not_paused(&env)?;
+        let record = read_dispute(&env, dispute_id)?;
+        require_open(&record)?;
+        read_escrow(&env, &record)?;
+        caller.require_auth();
+        let now = env.ledger().timestamp();
+        if now < record.voting_deadline {
+            return Err(Error::VotingPeriodActive);
+        }
+        let key = DataKey::AutomatedAttempt(dispute_id);
+        if !env.storage().persistent().has(&key) {
+            env.storage().persistent().set(&key, &now);
+            extend_ttl(&env, &key);
+            extend_ttl(&env, &DataKey::Dispute(dispute_id));
+            extend_ttl(&env, &DataKey::TaskEscrow(record.task_id.clone()));
+        }
+        Ok(automated_decision(&record))
+    }
+
+    /// Transfer the dispute to governance and pay the fixed fee from XLM escrow.
+    pub fn escalate_dispute(
+        env: Env,
+        dispute_id: u64,
+        participant: Address,
+        reason: EscalationReason,
+    ) -> Result<(), Error> {
+        require_not_paused(&env)?;
+        let mut record = read_dispute(&env, dispute_id)?;
+        require_open(&record)?;
+        let mut escrow = read_escrow(&env, &record)?;
+        require_participant(&escrow, &participant)?;
+        let config = escalation_config(&env).ok_or(Error::EscalationNotConfigured)?;
+        if escrow.asset != config.native_token {
+            return Err(Error::InvalidEscalationAsset);
+        }
+
+        let now = env.ledger().timestamp();
+        let reason = if exceeds_threshold(&config, &escrow) {
+            EscalationReason::AmountExceedsThreshold
+        } else {
+            let attempted = env
+                .storage()
+                .persistent()
+                .has(&DataKey::AutomatedAttempt(dispute_id));
+            let no_majority = now >= record.voting_deadline
+                && record.approve_votes < REQUIRED_APPROVE_VOTES
+                && record.reject_votes < REQUIRED_APPROVE_VOTES;
+            if (!attempted && !no_majority) || reason == EscalationReason::AmountExceedsThreshold {
+                return Err(Error::EscalationUnavailable);
+            }
+            reason
+        };
+        if escrow.amount < ESCALATION_FEE {
+            return Err(Error::InsufficientEscalationFunds);
+        }
+
+        token::Client::new(&env, &escrow.asset).transfer(
+            &env.current_contract_address(),
+            &config.fee_recipient,
+            &ESCALATION_FEE,
+        );
+        escrow.amount -= ESCALATION_FEE;
+        record.status = DisputeStatus::Escalated;
+        let storage = env.storage().persistent();
+        let escrow_key = DataKey::TaskEscrow(record.task_id.clone());
+        let dispute_key = DataKey::Dispute(dispute_id);
+        let escalation_key = DataKey::Escalation(dispute_id);
+        storage.set(&escrow_key, &escrow);
+        storage.set(&dispute_key, &record);
+        storage.set(
+            &escalation_key,
+            &EscalationRecord {
+                governance: config.governance,
+                escalated_at: now,
+                reason,
+                resolved_at: None,
+                decision: None,
+            },
+        );
+        extend_ttl(&env, &escrow_key);
+        extend_ttl(&env, &dispute_key);
+        extend_ttl(&env, &escalation_key);
+        env.events().publish(
+            (
+                symbol_short!("dispute"),
+                Symbol::new(&env, "DisputeEscalated"),
+            ),
+            DisputeEscalatedEvent {
+                dispute_id,
+                reason,
+                escalated_at: now,
+            },
+        );
+        Ok(())
+    }
+
+    /// Called by the governance contract when a majority-approved action executes.
+    pub fn resolve_escalated(
+        env: Env,
+        dispute_id: u64,
+        governance: Address,
+        decision: DisputeDecision,
+    ) -> Result<(), Error> {
+        require_not_paused(&env)?;
+        let key = DataKey::Escalation(dispute_id);
+        let storage = env.storage().persistent();
+        let mut escalation: EscalationRecord = storage.get(&key).ok_or(Error::NotFound)?;
+        if governance != escalation.governance {
+            return Err(Error::Unauthorized);
+        }
+        governance.require_auth();
+        let mut record = read_dispute(&env, dispute_id)?;
+        if record.status != DisputeStatus::Escalated {
+            return Err(Error::AlreadyResolved);
+        }
+
+        let escrow = read_escrow(&env, &record)?;
+        settle_dispute(&env, &mut record, escrow, &decision.into());
+        let now = env.ledger().timestamp();
+        escalation.resolved_at = Some(now);
+        escalation.decision = Some(decision as u32);
+        storage.set(&key, &escalation);
+        extend_ttl(&env, &key);
+        env.events().publish(
+            (
+                symbol_short!("dispute"),
+                Symbol::new(&env, "EscalatedDisputeResolved"),
+            ),
+            EscalatedDisputeResolvedEvent {
+                dispute_id,
+                decision,
+                resolved_at: now,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn get_escalation(env: Env, dispute_id: u64) -> Option<EscalationRecord> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Escalation(dispute_id))
+    }
+
+    pub fn get_escalation_sla_status(
+        env: Env,
+        dispute_id: u64,
+    ) -> Result<EscalationSlaStatus, Error> {
+        let escalation = Self::get_escalation(env.clone(), dispute_id).ok_or(Error::NotFound)?;
+        if let Some(resolved_at) = escalation.resolved_at {
+            return Ok(EscalationSlaStatus::Resolved(resolved_at));
+        }
+        let seconds = env
+            .ledger()
+            .timestamp()
+            .saturating_sub(escalation.escalated_at);
+        Ok(if seconds < ESCALATION_SLA_SECS {
+            EscalationSlaStatus::Remaining(ESCALATION_SLA_SECS - seconds)
+        } else {
+            EscalationSlaStatus::Overdue(seconds - ESCALATION_SLA_SECS)
+        })
     }
 
     /// Retrieve a dispute record by its numeric ID.
@@ -592,6 +864,6 @@ impl DisputeResolutionContract {
 }
 
 #[cfg(test)]
-mod test;
-#[cfg(test)]
 mod integration_tests;
+#[cfg(test)]
+mod test;

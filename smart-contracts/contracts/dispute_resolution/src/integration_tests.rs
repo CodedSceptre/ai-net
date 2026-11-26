@@ -1,254 +1,180 @@
-/// Integration tests for the DisputeResolution contract.
-///
-/// Covers:
-/// - Happy path: client wins (majority vote for client)
-/// - Happy path: agent wins (majority vote for agent)
-/// - Evidence submission phase
-/// - Appeal within the appeal window
-/// - Auth errors: non-juror cannot vote
-/// - Duplicate vote rejected
-/// - Resolve before voting deadline rejected
-#[cfg(test)]
-mod integration_tests {
-    use crate::{
-        DisputeResolutionContract, DisputeResolutionContractClient, DisputeStatus, Error, VoteSide,
-    };
-    use soroban_sdk::{
-        testutils::{Address as _, Ledger},
-        Address, BytesN, Env, Symbol,
-    };
+use super::*;
+use multisig_governance::{
+    Error as GovernanceError, GovernanceAction, MultisigGovernanceContract,
+    MultisigGovernanceContractClient, TIMELOCK_SECS,
+};
+use soroban_sdk::{
+    testutils::{Address as _, Events, Ledger},
+    IntoVal, TryFromVal, Val,
+};
 
-    // Evidence + Voting + Appeal phase lengths (seconds) — mirrors lib.rs constants.
-    const EVIDENCE_PHASE: u64 = 259_200;
-    const VOTING_PHASE: u64 = 172_800;
-    const APPEAL_WINDOW: u64 = 172_800;
+struct Fixture {
+    env: Env,
+    client: DisputeResolutionContractClient<'static>,
+    governance: MultisigGovernanceContractClient<'static>,
+    signers: [Address; 3],
+    submitter: Address,
+    agent: Address,
+    fee_recipient: Address,
+    asset: Address,
+    dispute_id: u64,
+}
 
-    // ─── Fixture ─────────────────────────────────────────────────────────────
+fn fixture(amount: i128) -> Fixture {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let submitter = Address::generate(&env);
+    let agent = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let signers = core::array::from_fn(|_| Address::generate(&env));
+    let governance_address = env.register(MultisigGovernanceContract, ());
+    let governance = MultisigGovernanceContractClient::new(&env, &governance_address);
+    governance.initialize(&Vec::from_array(&env, signers.clone()), &1);
 
-    struct Fixture {
-        env: Env,
-        client: DisputeResolutionContractClient<'static>,
-        admin: Address,
-        filer: Address,
-        agent_addr: Address,
-        dispute_id: Symbol,
-        jurors: [Address; 5],
+    let address = env.register(DisputeResolutionContract, ());
+    let client = DisputeResolutionContractClient::new(&env, &address);
+    client.initialize(&admin);
+    let arbiters = Vec::from_array(
+        &env,
+        core::array::from_fn::<_, 5, _>(|_| Address::generate(&env)),
+    );
+    client.set_arbiters(&arbiters);
+    let asset = env.register_stellar_asset_contract_v2(admin).address();
+    client.configure_escalation(&governance_address, &asset, &fee_recipient);
+    token::StellarAssetClient::new(&env, &asset).mint(&submitter, &amount);
+    let task = symbol_short!("task");
+    client.fund_task_escrow(&submitter, &task, &agent, &asset, &amount, &0);
+    let dispute_id = client.raise_dispute(
+        &submitter,
+        &task,
+        &BytesN::from_array(&env, &[1; 32]),
+        &String::from_str(&env, "conflicting delivery evidence"),
+    );
+    for index in 0..3 {
+        client.vote_on_dispute(&arbiters.get(index).unwrap(), &dispute_id, &Vote::Approve);
     }
 
-    fn fixture() -> Fixture {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|l| {
-            l.timestamp = 1_700_000_000;
-            l.sequence_number = 100;
-        });
+    Fixture {
+        env,
+        client,
+        governance,
+        signers,
+        submitter,
+        agent,
+        fee_recipient,
+        asset,
+        dispute_id,
+    }
+}
 
-        let contract_id = env.register(DisputeResolutionContract, ());
-        let client = DisputeResolutionContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let jurors: [Address; 5] = core::array::from_fn(|_| Address::generate(&env));
-
-        // Register the juror pool.
-        let juror_vec = soroban_sdk::Vec::from_array(
-            &env,
-            [
-                jurors[0].clone(),
-                jurors[1].clone(),
-                jurors[2].clone(),
-                jurors[3].clone(),
-                jurors[4].clone(),
-            ],
+#[test]
+fn either_participant_can_contest_a_provisional_outcome() {
+    let amount = 20 * 10_000_000;
+    for agent_escalates in [false, true] {
+        let f = fixture(amount);
+        let id = f.dispute_id;
+        let reason = EscalationReason::EvidenceConflict;
+        let participant = if agent_escalates {
+            &f.agent
+        } else {
+            &f.submitter
+        };
+        assert_eq!(
+            f.client.try_escalate_dispute(&id, participant, &reason),
+            Err(Ok(Error::EscalationUnavailable))
         );
-        client.set_jurors(&juror_vec);
 
-        Fixture {
-            filer: Address::generate(&env),
-            agent_addr: Address::generate(&env),
-            dispute_id: Symbol::new(&env, "dispute1"),
-            env,
-            client,
-            admin,
-            jurors,
-        }
+        f.env.ledger().set_timestamp(VOTING_PERIOD_SECS);
+        assert_eq!(
+            f.client.attempt_resolution(&id, participant),
+            Resolution::Approve
+        );
+        assert_eq!(
+            f.client.try_resolve_dispute(&id),
+            Err(Ok(Error::ContestWindowActive))
+        );
+        let stranger = Address::generate(&f.env);
+        assert_eq!(
+            f.client.try_escalate_dispute(&id, &stranger, &reason),
+            Err(Ok(Error::Unauthorized))
+        );
+
+        f.client.escalate_dispute(&id, participant, &reason);
+        let (_, topics, body) = f.env.events().all().last().unwrap();
+        let expected: Vec<Val> = (
+            symbol_short!("dispute"),
+            Symbol::new(&f.env, "DisputeEscalated"),
+        )
+            .into_val(&f.env);
+        assert_eq!(topics, expected);
+        let event = DisputeEscalatedEvent::try_from_val(&f.env, &body).unwrap();
+        assert_eq!(event.dispute_id, id);
+        assert_eq!(event.reason, reason);
+        assert_eq!(event.escalated_at, VOTING_PERIOD_SECS);
+
+        let token = token::Client::new(&f.env, &f.asset);
+        assert_eq!(token.balance(&f.fee_recipient), ESCALATION_FEE);
+        assert_eq!(token.balance(&f.client.address), amount - ESCALATION_FEE);
+        assert_eq!(
+            f.client.try_resolve_dispute(&id),
+            Err(Ok(Error::EscalationRequired))
+        );
+        assert_eq!(
+            f.client.get_escalation_sla_status(&id),
+            EscalationSlaStatus::Remaining(ESCALATION_SLA_SECS)
+        );
     }
+}
 
-    fn file(f: &Fixture) {
-        f.client.file_dispute(&f.filer, &f.agent_addr.clone().into(), &f.dispute_id);
-    }
+#[test]
+fn high_value_escalation_requires_a_governance_majority_and_can_resolve_overdue() {
+    let amount = ESCALATION_THRESHOLD + 1;
+    let f = fixture(amount);
+    let id = f.dispute_id;
+    f.client
+        .escalate_dispute(&id, &f.agent, &EscalationReason::SystemError);
+    assert_eq!(
+        f.client.get_escalation(&id).unwrap().reason,
+        EscalationReason::AmountExceedsThreshold
+    );
 
-    fn advance_past_voting(f: &Fixture) {
-        f.env.ledger().with_mut(|l| {
-            l.timestamp += EVIDENCE_PHASE + VOTING_PHASE + 1;
-        });
-    }
+    let decision = DisputeDecision::Approve;
+    assert_eq!(
+        f.client.try_resolve_escalated(&id, &f.agent, &decision),
+        Err(Ok(Error::Unauthorized))
+    );
 
-    // ─── Tests ───────────────────────────────────────────────────────────────
+    let proposer = &f.signers[0];
+    let proposal = f.governance.propose(
+        proposer,
+        &String::from_str(&f.env, "Resolve dispute"),
+        &String::from_str(&f.env, "Release the escrow remainder"),
+        &GovernanceAction::ResolveDispute(f.client.address.clone(), id, decision as u32),
+    );
+    f.env.ledger().set_timestamp(TIMELOCK_SECS);
+    assert_eq!(
+        f.governance.try_execute(proposer, &proposal),
+        Err(Ok(GovernanceError::InsufficientApprovals))
+    );
+    f.governance.approve(&f.signers[1], &proposal);
 
-    #[test]
-    fn test_file_dispute_succeeds() {
-        let f = fixture();
-        let result = f.client.try_file_dispute(&f.filer, &f.agent_addr.clone().into(), &f.dispute_id);
-        assert!(result.is_ok(), "file_dispute should succeed: {result:?}");
-
-        let dispute = f.client.get_dispute(&f.dispute_id);
-        assert!(dispute.is_some(), "dispute should exist after filing");
-        assert_eq!(dispute.unwrap().status, DisputeStatus::Filed);
-    }
-
-    #[test]
-    fn test_duplicate_dispute_rejected() {
-        let f = fixture();
-        file(&f);
-        let dup = f.client.try_file_dispute(&f.filer, &f.agent_addr.clone().into(), &f.dispute_id);
-        assert_eq!(dup, Err(Ok(Error::AlreadyExists)), "duplicate dispute must be rejected");
-    }
-
-    #[test]
-    fn test_submit_evidence_transitions_to_evidence_phase() {
-        let f = fixture();
-        file(&f);
-
-        let evidence_hash = BytesN::from_array(&f.env, &[0xABu8; 32]);
-        let result = f.client.try_submit_evidence(&f.dispute_id, &f.filer, &evidence_hash);
-        assert!(result.is_ok(), "submit_evidence should succeed: {result:?}");
-
-        let dispute = f.client.get_dispute(&f.dispute_id).unwrap();
-        assert_eq!(dispute.status, DisputeStatus::EvidenceSubmission);
-    }
-
-    #[test]
-    fn test_full_dispute_client_wins() {
-        let f = fixture();
-        file(&f);
-
-        // Three jurors vote for the client.
-        f.client.cast_vote(&f.dispute_id, &f.jurors[0], &VoteSide::Client);
-        f.client.cast_vote(&f.dispute_id, &f.jurors[1], &VoteSide::Client);
-        f.client.cast_vote(&f.dispute_id, &f.jurors[2], &VoteSide::Client);
-        // Two jurors vote for the agent.
-        f.client.cast_vote(&f.dispute_id, &f.jurors[3], &VoteSide::Agent);
-        f.client.cast_vote(&f.dispute_id, &f.jurors[4], &VoteSide::Agent);
-
-        advance_past_voting(&f);
-
-        let result = f.client.try_resolve_dispute(&f.dispute_id);
-        assert!(result.is_ok(), "resolve_dispute should succeed: {result:?}");
-
-        let dispute = f.client.get_dispute(&f.dispute_id).unwrap();
-        assert_eq!(dispute.status, DisputeStatus::Resolved);
-        // resolution = 0 means client wins.
-        assert_eq!(dispute.resolution, Some(0u32), "client should win with majority");
-    }
-
-    #[test]
-    fn test_full_dispute_agent_wins() {
-        let f = fixture();
-        file(&f);
-
-        // Three jurors vote for the agent.
-        f.client.cast_vote(&f.dispute_id, &f.jurors[0], &VoteSide::Agent);
-        f.client.cast_vote(&f.dispute_id, &f.jurors[1], &VoteSide::Agent);
-        f.client.cast_vote(&f.dispute_id, &f.jurors[2], &VoteSide::Agent);
-        // Two jurors vote for the client.
-        f.client.cast_vote(&f.dispute_id, &f.jurors[3], &VoteSide::Client);
-        f.client.cast_vote(&f.dispute_id, &f.jurors[4], &VoteSide::Client);
-
-        advance_past_voting(&f);
-
-        f.client.resolve_dispute(&f.dispute_id);
-
-        let dispute = f.client.get_dispute(&f.dispute_id).unwrap();
-        // resolution = 1 means agent wins.
-        assert_eq!(dispute.resolution, Some(1u32), "agent should win with majority");
-    }
-
-    #[test]
-    fn test_non_juror_cannot_vote() {
-        let f = fixture();
-        file(&f);
-
-        let non_juror = Address::generate(&f.env);
-        let result = f.client.try_cast_vote(&f.dispute_id, &non_juror, &VoteSide::Client);
-        assert_eq!(result, Err(Ok(Error::NotJuror)), "non-juror must not be able to vote");
-    }
-
-    #[test]
-    fn test_duplicate_vote_rejected() {
-        let f = fixture();
-        file(&f);
-
-        f.client.cast_vote(&f.dispute_id, &f.jurors[0], &VoteSide::Client);
-        let dup = f.client.try_cast_vote(&f.dispute_id, &f.jurors[0], &VoteSide::Agent);
-        assert_eq!(dup, Err(Ok(Error::JurorAlreadyVoted)), "duplicate vote must be rejected");
-    }
-
-    #[test]
-    fn test_resolve_before_voting_deadline_rejected() {
-        let f = fixture();
-        file(&f);
-
-        // Attempt to resolve immediately without advancing past voting deadline.
-        let result = f.client.try_resolve_dispute(&f.dispute_id);
-        assert!(result.is_err(), "resolve_dispute before deadline must be rejected");
-    }
-
-    #[test]
-    fn test_appeal_within_window_succeeds() {
-        let f = fixture();
-        file(&f);
-
-        // Vote unanimously and resolve.
-        for juror in &f.jurors {
-            f.client.cast_vote(&f.dispute_id, juror, &VoteSide::Client);
-        }
-        advance_past_voting(&f);
-        f.client.resolve_dispute(&f.dispute_id);
-
-        // Appeal within the appeal window.
-        let appellant = f.filer.clone();
-        let result = f.client.try_appeal_dispute(&f.dispute_id, &appellant);
-        assert!(result.is_ok(), "appeal within window should succeed: {result:?}");
-
-        let dispute = f.client.get_dispute(&f.dispute_id).unwrap();
-        assert_eq!(dispute.status, DisputeStatus::Appealed);
-        assert!(dispute.appealed, "dispute.appealed must be true after appeal");
-    }
-
-    #[test]
-    fn test_appeal_after_window_rejected() {
-        let f = fixture();
-        file(&f);
-
-        for juror in &f.jurors {
-            f.client.cast_vote(&f.dispute_id, juror, &VoteSide::Client);
-        }
-        advance_past_voting(&f);
-        f.client.resolve_dispute(&f.dispute_id);
-
-        // Advance past the appeal window too.
-        f.env.ledger().with_mut(|l| {
-            l.timestamp += APPEAL_WINDOW + 1;
-        });
-
-        let result = f.client.try_appeal_dispute(&f.dispute_id, &f.filer);
-        assert_eq!(result, Err(Ok(Error::AppealWindowClosed)), "appeal after window must be rejected");
-    }
-
-    #[test]
-    fn test_resolve_already_resolved_rejected() {
-        let f = fixture();
-        file(&f);
-
-        for juror in &f.jurors {
-            f.client.cast_vote(&f.dispute_id, juror, &VoteSide::Agent);
-        }
-        advance_past_voting(&f);
-        f.client.resolve_dispute(&f.dispute_id);
-
-        let result = f.client.try_resolve_dispute(&f.dispute_id);
-        assert_eq!(result, Err(Ok(Error::DisputeAlreadyResolved)));
-    }
+    let now = ESCALATION_SLA_SECS + 1;
+    f.env.ledger().set_timestamp(now);
+    assert_eq!(
+        f.client.get_escalation_sla_status(&id),
+        EscalationSlaStatus::Overdue(1)
+    );
+    f.governance.execute(proposer, &proposal);
+    assert_eq!(
+        f.client.get_dispute(&id).unwrap().resolution,
+        Some(decision as u32)
+    );
+    assert_eq!(
+        f.client.get_escalation_sla_status(&id),
+        EscalationSlaStatus::Resolved(now)
+    );
+    let token = token::Client::new(&f.env, &f.asset);
+    assert_eq!(token.balance(&f.agent), amount - ESCALATION_FEE);
+    assert_eq!(token.balance(&f.client.address), 0);
 }

@@ -24,7 +24,7 @@ pub enum Vote {
 
 /// Resolution outcome.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Resolution {
     /// Dispute approved — release payment to agent.
@@ -40,6 +40,7 @@ pub enum Resolution {
 pub enum DisputeStatus {
     Open = 0,
     Resolved = 1,
+    Escalated = 2,
 }
 
 /// A single dispute record stored on-chain.
@@ -57,8 +58,8 @@ pub struct DisputeRecord {
     /// 0 = Approve, 1 = Reject
     pub approve_votes: u32,
     pub reject_votes: u32,
-    /// Resolution: None until resolved.
-    pub resolution: Option<Resolution>,
+    /// Numeric Resolution value, or None until resolved.
+    pub resolution: Option<u32>,
     /// The timestamp when the disputed task was completed.
     pub task_completed_at: u64,
 }
@@ -90,4 +91,65 @@ pub struct DisputeResolvedEvent {
     pub resolution: Resolution,
     pub approve_votes: u32,
     pub reject_votes: u32,
+}
+
+/// Reason recorded when a dispute is sent to governance.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EscalationReason {
+    EvidenceConflict = 0,
+    SystemError = 1,
+    AmountExceedsThreshold = 2,
+}
+
+/// The settlement selected by a governance proposal.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DisputeDecision {
+    Approve = 0,
+    Reject = 1,
+}
+
+impl From<DisputeDecision> for Resolution {
+    fn from(decision: DisputeDecision) -> Self {
+        match decision {
+            DisputeDecision::Approve => Self::Approve,
+            DisputeDecision::Reject => Self::Reject,
+        }
+    }
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscalationRecord {
+    pub governance: Address,
+    pub escalated_at: u64,
+    pub reason: EscalationReason,
+    pub resolved_at: Option<u64>,
+    /// Numeric DisputeDecision value, or None until resolved.
+    pub decision: Option<u32>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EscalationSlaStatus {
+    Remaining(u64),
+    Overdue(u64),
+    Resolved(u64),
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct DisputeEscalatedEvent {
+    pub dispute_id: u64,
+    pub reason: EscalationReason,
+    pub escalated_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct EscalatedDisputeResolvedEvent {
+    pub dispute_id: u64,
+    pub decision: DisputeDecision,
+    pub resolved_at: u64,
 }

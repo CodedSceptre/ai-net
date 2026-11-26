@@ -50,9 +50,9 @@ mod errors;
 pub use errors::Error;
 
 use soroban_sdk::{
-    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation}, contract,
-    contractimpl, contracttype, symbol_short, Address, BytesN, Env, IntoVal, String, Symbol, Val,
-    Vec,
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, IntoVal, String,
+    Symbol, Val, Vec,
 };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -84,6 +84,8 @@ pub enum GovernanceAction {
     SlashAgent(Address, Symbol, i128),
     /// Replace the signer set with `new_signers` and set `new_threshold`.
     ChangeSigners(Vec<Address>, u32),
+    /// Resolve an escalated dispute (0 releases to the agent, 1 refunds the submitter).
+    ResolveDispute(Address, u64, u32),
 }
 
 // ─── Proposal ────────────────────────────────────────────────────────────────
@@ -254,15 +256,26 @@ fn action_symbol(env: &Env, action: &GovernanceAction) -> Symbol {
         GovernanceAction::UpdateConfig(_, _, _) => Symbol::new(env, "config"),
         GovernanceAction::SlashAgent(_, _, _) => Symbol::new(env, "slash"),
         GovernanceAction::ChangeSigners(_, _) => Symbol::new(env, "signers"),
+        GovernanceAction::ResolveDispute(_, _, _) => Symbol::new(env, "resolve_dispute"),
     }
 }
 
 fn action_threshold(env: &Env, action: &GovernanceAction) -> u32 {
     let sym = action_symbol(env, action);
-    if let Some(t) = env.storage().instance().get(&DataKey::ActionThreshold(sym)) {
-        return t;
+    let configured = env
+        .storage()
+        .instance()
+        .get(&DataKey::ActionThreshold(sym))
+        .unwrap_or_else(|| threshold(env));
+    if matches!(action, GovernanceAction::ResolveDispute(_, _, _)) {
+        let signers: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Signers)
+            .unwrap_or_else(|| Vec::new(env));
+        return configured.max(signers.len() / 2 + 1);
     }
-    threshold(env)
+    configured
 }
 
 fn next_seq(env: &Env) -> u64 {
@@ -287,9 +300,11 @@ fn save_proposal(env: &Env, proposal: &Proposal) {
     env.storage()
         .persistent()
         .set(&DataKey::Proposal(proposal.id), proposal);
-    env.storage()
-        .persistent()
-        .extend_ttl(&DataKey::Proposal(proposal.id), TTL_THRESHOLD, TTL_EXTEND_TO);
+    env.storage().persistent().extend_ttl(
+        &DataKey::Proposal(proposal.id),
+        TTL_THRESHOLD,
+        TTL_EXTEND_TO,
+    );
 }
 
 fn authorize_target_call(env: &Env, target: &Address, method: Symbol, args: Vec<Val>) {
@@ -317,11 +332,7 @@ impl MultisigGovernanceContract {
     /// `threshold` must be `>= 1` and `<= signers.len()`.
     ///
     /// Callable exactly once.
-    pub fn initialize(
-        env: Env,
-        signers: Vec<Address>,
-        threshold: u32,
-    ) -> Result<(), Error> {
+    pub fn initialize(env: Env, signers: Vec<Address>, threshold: u32) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Initialized) {
             return Err(Error::AlreadyInitialized);
         }
@@ -339,7 +350,9 @@ impl MultisigGovernanceContract {
 
         env.storage().instance().set(&DataKey::Initialized, &true);
         env.storage().instance().set(&DataKey::Signers, &signers);
-        env.storage().instance().set(&DataKey::Threshold, &threshold);
+        env.storage()
+            .instance()
+            .set(&DataKey::Threshold, &threshold);
         env.storage().instance().set(&DataKey::ProposalSeq, &0u64);
         env.storage()
             .instance()
@@ -375,14 +388,22 @@ impl MultisigGovernanceContract {
             return Err(Error::EmptyMetadata);
         }
 
+        if matches!(&action, GovernanceAction::ResolveDispute(_, _, decision) if *decision > 1) {
+            return Err(Error::InvalidDisputeDecision);
+        }
+
         let id = next_seq(&env);
         let now = env.ledger().timestamp();
         let eta = now.saturating_add(TIMELOCK_SECS);
-        let window_end_ledger = env.ledger().sequence().saturating_add(DEFAULT_WINDOW_LEDGERS);
+        let window_end_ledger = env
+            .ledger()
+            .sequence()
+            .saturating_add(DEFAULT_WINDOW_LEDGERS);
 
         let mut initial_approvals = Vec::new(&env);
         initial_approvals.push_back(proposer.clone());
 
+        let required = action_threshold(&env, &action);
         let proposal = Proposal {
             id,
             proposer: proposer.clone(),
@@ -391,7 +412,7 @@ impl MultisigGovernanceContract {
             action,
             created_at: now,
             eta,
-            expires_at: if initial_approvals.len() >= threshold(&env) {
+            expires_at: if initial_approvals.len() >= required {
                 now.saturating_add(PROPOSAL_EXPIRY_SECS)
             } else {
                 0
@@ -424,7 +445,6 @@ impl MultisigGovernanceContract {
             },
         );
 
-        let required = action_threshold(&env, &proposal.action);
         if 1 >= required {
             env.events().publish(
                 (Symbol::new(&env, "threshold_reached"),),
@@ -600,7 +620,17 @@ impl MultisigGovernanceContract {
             return Err(Error::TimelockNotElapsed);
         }
         let required = action_threshold(&env, &proposal.action);
-        if proposal.approvals.len() < required {
+        let approval_count =
+            if matches!(&proposal.action, GovernanceAction::ResolveDispute(_, _, _)) {
+                proposal
+                    .approvals
+                    .iter()
+                    .filter(|signer| is_signer(&env, signer))
+                    .count() as u32
+            } else {
+                proposal.approvals.len()
+            };
+        if approval_count < required {
             return Err(Error::InsufficientApprovals);
         }
         if proposal.expires_at == 0 || now >= proposal.expires_at {
@@ -629,6 +659,13 @@ impl MultisigGovernanceContract {
                 authorize_target_call(&env, &target, method.clone(), args.clone());
                 env.invoke_contract::<()>(&target, &method, args);
             }
+            GovernanceAction::ResolveDispute(target, dispute_id, decision) => {
+                let method = Symbol::new(&env, "resolve_escalated");
+                let args: Vec<Val> =
+                    (dispute_id, env.current_contract_address(), decision).into_val(&env);
+                authorize_target_call(&env, &target, method.clone(), args.clone());
+                env.invoke_contract::<()>(&target, &method, args);
+            }
             GovernanceAction::ChangeSigners(new_signers, new_threshold) => {
                 if new_signers.is_empty() {
                     return Err(Error::InvalidSignerList);
@@ -637,11 +674,17 @@ impl MultisigGovernanceContract {
                     return Err(Error::InvalidThreshold);
                 }
                 for (index, signer) in new_signers.iter().enumerate() {
-                    if new_signers.iter().skip(index + 1).any(|other| other == signer) {
+                    if new_signers
+                        .iter()
+                        .skip(index + 1)
+                        .any(|other| other == signer)
+                    {
                         return Err(Error::InvalidSignerList);
                     }
                 }
-                env.storage().instance().set(&DataKey::Signers, &new_signers);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::Signers, &new_signers);
                 env.storage()
                     .instance()
                     .set(&DataKey::Threshold, &new_threshold);
@@ -791,7 +834,11 @@ impl MultisigGovernanceContract {
     }
 
     /// Set platform_config contract address.
-    pub fn set_platform_config(env: Env, caller: Address, platform_config: Address) -> Result<(), Error> {
+    pub fn set_platform_config(
+        env: Env,
+        caller: Address,
+        platform_config: Address,
+    ) -> Result<(), Error> {
         if !env.storage().instance().has(&DataKey::Initialized) {
             return Err(Error::NotInitialized);
         }
@@ -799,7 +846,9 @@ impl MultisigGovernanceContract {
             return Err(Error::NotSigner);
         }
         caller.require_auth();
-        env.storage().instance().set(&DataKey::PlatformConfig, &platform_config);
+        env.storage()
+            .instance()
+            .set(&DataKey::PlatformConfig, &platform_config);
         Ok(())
     }
 
@@ -857,7 +906,11 @@ mod test {
         v
     }
 
-    fn deploy(env: &Env, n_signers: usize, threshold: u32) -> (MultisigGovernanceContractClient<'static>, Vec<Address>) {
+    fn deploy(
+        env: &Env,
+        n_signers: usize,
+        threshold: u32,
+    ) -> (MultisigGovernanceContractClient<'static>, Vec<Address>) {
         let contract_id = env.register(MultisigGovernanceContract, ());
         let client = MultisigGovernanceContractClient::new(env, &contract_id);
         let s = signers(env, n_signers);
@@ -877,7 +930,12 @@ mod test {
     fn propose_creates_proposal_with_self_approval() {
         let env = make_env();
         let (client, s) = deploy(&env, 3, 2);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
         let p = client.get_proposal(&id);
         assert_eq!(p.approvals.len(), 1); // proposer auto-approved
         assert!(!p.executed);
@@ -890,7 +948,12 @@ mod test {
         let (client, _) = deploy(&env, 3, 2);
         let outsider = Address::generate(&env);
         assert_eq!(
-            client.try_propose(&outsider, &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env)),
+            client.try_propose(
+                &outsider,
+                &String::from_str(&env, "T"),
+                &String::from_str(&env, "D"),
+                &action(&env)
+            ),
             Err(Ok(Error::NotSigner))
         );
     }
@@ -916,7 +979,12 @@ mod test {
     fn approve_accumulates_signatures() {
         let env = make_env();
         let (client, s) = deploy(&env, 3, 3);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
         client.approve(&s.get(1).unwrap(), &id);
         client.approve(&s.get(2).unwrap(), &id);
         let p = client.get_proposal(&id);
@@ -927,7 +995,12 @@ mod test {
     fn double_approval_rejected() {
         let env = make_env();
         let (client, s) = deploy(&env, 3, 2);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
         assert_eq!(
             client.try_approve(&s.get(0).unwrap(), &id),
             Err(Ok(Error::AlreadyApproved))
@@ -975,7 +1048,12 @@ mod test {
     fn timelock_prevents_early_execution() {
         let env = make_env();
         let (client, s) = deploy(&env, 2, 2);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
         client.approve(&s.get(1).unwrap(), &id);
         // Try to execute before timelock elapses.
         assert_eq!(
@@ -988,7 +1066,12 @@ mod test {
     fn execute_succeeds_after_timelock() {
         let env = make_env();
         let (client, s) = deploy(&env, 2, 2);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
         client.approve(&s.get(1).unwrap(), &id);
         // Advance past timelock.
         env.ledger().with_mut(|l| l.timestamp += TIMELOCK_SECS + 1);
@@ -1001,7 +1084,12 @@ mod test {
     fn execute_emits_event() {
         let env = make_env();
         let (client, s) = deploy(&env, 1, 1);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
         env.ledger().with_mut(|l| l.timestamp += TIMELOCK_SECS + 1);
         client.execute(&s.get(0).unwrap(), &id);
         let events = env.events().all();
@@ -1017,7 +1105,12 @@ mod test {
     fn insufficient_approvals_blocks_execution() {
         let env = make_env();
         let (client, s) = deploy(&env, 3, 2);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
         // Only 1 approval (proposer). Threshold is 2.
         env.ledger().with_mut(|l| l.timestamp += TIMELOCK_SECS + 1);
         assert_eq!(
@@ -1030,7 +1123,12 @@ mod test {
     fn cancel_by_proposer_works() {
         let env = make_env();
         let (client, s) = deploy(&env, 3, 2);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
         client.cancel(&s.get(0).unwrap(), &id);
         let p = client.get_proposal(&id);
         assert!(p.cancelled);
@@ -1040,7 +1138,12 @@ mod test {
     fn cancel_by_non_proposer_rejected() {
         let env = make_env();
         let (client, s) = deploy(&env, 3, 2);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
         assert_eq!(
             client.try_cancel(&s.get(1).unwrap(), &id),
             Err(Ok(Error::Unauthorized))
@@ -1051,9 +1154,15 @@ mod test {
     fn expired_proposal_cannot_be_executed() {
         let env = make_env();
         let (client, s) = deploy(&env, 1, 1);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
         // Advance past expiry.
-        env.ledger().with_mut(|l| l.timestamp += PROPOSAL_EXPIRY_SECS + 1);
+        env.ledger()
+            .with_mut(|l| l.timestamp += PROPOSAL_EXPIRY_SECS + 1);
         assert_eq!(
             client.try_execute(&s.get(0).unwrap(), &id),
             Err(Ok(Error::ProposalExpired))
@@ -1068,7 +1177,12 @@ mod test {
         let mut new_list = Vec::new(&env);
         new_list.push_back(new_signer.clone());
         let change_action = GovernanceAction::ChangeSigners(new_list, 1);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &change_action);
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &change_action,
+        );
         env.ledger().with_mut(|l| l.timestamp += TIMELOCK_SECS + 1);
         client.execute(&s.get(0).unwrap(), &id);
         let stored = client.get_signers();
@@ -1081,7 +1195,12 @@ mod test {
     fn threshold_boundary_enforcement() {
         let env = make_env();
         let (client, s) = deploy(&env, 4, 3); // 3 of 4 required
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
 
         // Advance past timelock
         env.ledger().with_mut(|l| l.timestamp += TIMELOCK_SECS + 1);
@@ -1101,15 +1220,20 @@ mod test {
 
         // Add 3rd approval (M = 3 sigs) -> strictly meets threshold, must execute!
         client.approve(&s.get(2).unwrap(), &id);
-        let exec_res = client.execute(&s.get(0).unwrap(), &id);
-        assert_eq!(exec_res, ());
+        client.execute(&s.get(0).unwrap(), &id);
+        assert!(client.get_proposal(&id).executed);
     }
 
     #[test]
     fn signature_revocation_and_readdition() {
         let env = make_env();
         let (client, s) = deploy(&env, 3, 2);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
 
         // Signer 1 approves (now 2 approvals)
         client.approve(&s.get(1).unwrap(), &id);
@@ -1152,7 +1276,12 @@ mod test {
             String::from_str(&env, "Upgrade"),
         );
 
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &upgrade_action);
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &upgrade_action,
+        );
         env.ledger().with_mut(|l| l.timestamp += TIMELOCK_SECS + 1);
 
         // 2 approvals is enough for normal action, but not for upgrade which requires 4
@@ -1175,10 +1304,16 @@ mod test {
     fn signature_collection_window_expiry() {
         let env = make_env();
         let (client, s) = deploy(&env, 3, 2);
-        let id = client.propose(&s.get(0).unwrap(), &String::from_str(&env, "T"), &String::from_str(&env, "D"), &action(&env));
+        let id = client.propose(
+            &s.get(0).unwrap(),
+            &String::from_str(&env, "T"),
+            &String::from_str(&env, "D"),
+            &action(&env),
+        );
 
         // Advance ledger past collection window
-        env.ledger().with_mut(|l| l.sequence_number += DEFAULT_WINDOW_LEDGERS + 10);
+        env.ledger()
+            .with_mut(|l| l.sequence_number += DEFAULT_WINDOW_LEDGERS + 10);
 
         // Approvals after window expiry must fail
         assert_eq!(
