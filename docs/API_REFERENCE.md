@@ -222,14 +222,18 @@ Keys expire after **24 hours**. After expiry the same key value may be reused an
 The API supports multiple simultaneous versions. The default version is `1.0`
 (deprecated). Clients should migrate to `2.0`.
 
-Specify the target version via the `Accept-Version` header:
+Specify the target version via the `API-Version` request header:
 
 ```http
-Accept-Version: 2.0
+API-Version: 2.0
 ```
 
+The server echoes the negotiated version in the `X-API-Version` response header.
 Deprecated versions include `Deprecation: true` and `Sunset: <date>` response
 headers. Check `GET /api/versions` for the full lifecycle manifest.
+
+For the full versioning policy, deprecation schedule, historical breaking changes,
+and migration guides, see the [API Changelog](./API_CHANGELOG.md).
 
 ---
 
