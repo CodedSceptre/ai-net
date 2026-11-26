@@ -16,6 +16,12 @@ import {
   vacuumDatabases,
 } from "../../services/adminControl";
 import {
+  getConfigService,
+  isAllowedConfigKey,
+  UnknownConfigKeyError,
+} from "../../config/configService";
+import { getHotReloadPublisher } from "../../config/hotReload";
+import {
   ReconciliationService,
   createDefaultReconciliationService,
 } from "../../services/reconciliation";
@@ -95,6 +101,68 @@ export function createAdminRouter(options: AdminRouterOptions = {}): Router {
 
   router.use(adminAuthMiddleware);
   router.use(auditAdminRequests);
+
+  // ── Config hot-reload endpoint ──────────────────────────────────────────
+
+  const configBodySchema = z
+    .object({
+      key: z.string().min(1),
+      value: z.string(),
+    })
+    .strict();
+
+  router.post(
+    "/config",
+    asyncHandler(async (req: Request, res: Response) => {
+      const parsed = configBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "INVALID_BODY", details: parsed.error.flatten() });
+        return;
+      }
+
+      const { key, value } = parsed.data;
+
+      if (!isAllowedConfigKey(key)) {
+        res.status(400).json({ error: "UNKNOWN_CONFIG_KEY" });
+        return;
+      }
+
+      const actor = actorFromRequest(req);
+      const configService = getConfigService();
+      const publisher = getHotReloadPublisher();
+
+      const oldValue = configService.get(key);
+
+      try {
+        await configService.set(key, value, actor, publisher ?? undefined);
+      } catch (err) {
+        if (err instanceof UnknownConfigKeyError) {
+          res.status(400).json({ error: "UNKNOWN_CONFIG_KEY" });
+          return;
+        }
+        throw err;
+      }
+
+      recordAdminAudit({
+        at: new Date().toISOString(),
+        actor,
+        action: "POST /admin/config",
+        target: key,
+        statusCode: 200,
+        requestId: (res.locals.requestId as string | undefined),
+        details: { key, oldValue, newValue: value },
+      });
+
+      res.json({ key, value, oldValue, updatedBy: actor });
+    }),
+  );
+
+  router.get("/config", (_req: Request, res: Response) => {
+    const configService = getConfigService();
+    res.json({ config: configService.snapshot() });
+  });
+
+  // ── End config hot-reload ──────────────────────────────────────────────
 
   router.get("/read-only", (_req: Request, res: Response) => {
     res.json(getReadOnlyState());
