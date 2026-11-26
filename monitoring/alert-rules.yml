@@ -17,6 +17,12 @@ groups:
 
       # ── High HTTP error rate ─────────────────────────────────────────────
       - alert: HighHttpErrorRate
+groups:
+  - name: ai-net.sla
+    rules:
+      # ── Alert 1: HighAPIErrorRate ────────────────────────────────────────────
+      # Fires when 5xx responses exceed 5% of total requests over a 5-minute window.
+      - alert: HighAPIErrorRate
         expr: |
           (
             sum(rate(http_requests_total{status=~"5.."}[5m]))
@@ -166,3 +172,80 @@ groups:
         labels:
           severity: warning
           description: "Stellar payment failures exceed 3 per minute"
+          ) * 100 > 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High API error rate ({{ $value | humanize }}%)"
+          description: >
+            The percentage of 5xx HTTP responses has exceeded 5% over the last
+            5 minutes. Current value: {{ $value | humanize }}%.
+          runbook_url: "https://github.com/CodedSceptre/ai-net/blob/main/docs/runbooks/high-api-error-rate.md"
+
+  - name: ai-net.payments
+    rules:
+      # ── Alert 2: PaymentStuck ────────────────────────────────────────────────
+      # Fires when any payment has been in a 'locked' state for more than 30 minutes.
+      - alert: PaymentStuck
+        expr: |
+          (time() - payment_locked_since_seconds) > 1800
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Payment stuck in locked state for > 30 minutes"
+          description: >
+            Payment {{ $labels.taskId }} (node {{ $labels.nodeId }}) has been
+            locked for {{ $value | humanizeDuration }} without transitioning to
+            released or refunded.
+          runbook_url: "https://github.com/CodedSceptre/ai-net/blob/main/docs/runbooks/payment-stuck.md"
+
+  - name: ai-net.agents
+    rules:
+      # ── Alert 3: AllAgentsOffline ────────────────────────────────────────────
+      # Fires when the count of active agents has been zero for 2 continuous minutes.
+      - alert: AllAgentsOffline
+        expr: sum(ai_net_active_agents_total) == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "All agents have been offline for more than 2 minutes"
+          description: >
+            No active agents have been detected for the last 2 minutes.
+            Task processing is fully stopped.
+          runbook_url: "https://github.com/CodedSceptre/ai-net/blob/main/docs/runbooks/all-agents-offline.md"
+
+  - name: ai-net.dependencies
+    rules:
+      # ── Alert 4: StellarHorizonUnreachable ───────────────────────────────────
+      # Fires when the Stellar Horizon health probe has failed 3 consecutive times.
+      - alert: StellarHorizonUnreachable
+        expr: stellar_horizon_up == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stellar Horizon is unreachable"
+          description: >
+            The backend health check probe to Stellar Horizon has reported
+            stellar_horizon_up=0 for 3 consecutive minutes. Payment and
+            contract operations are likely failing.
+          runbook_url: "https://github.com/CodedSceptre/ai-net/blob/main/docs/runbooks/stellar-horizon-unreachable.md"
+
+  - name: ai-net.queue
+    rules:
+      # ── Alert 5: TaskQueueDepthHigh ──────────────────────────────────────────
+      # Fires when the task queue depth exceeds 100 for 10 continuous minutes.
+      - alert: TaskQueueDepthHigh
+        expr: ai_net_task_queue_depth > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Task queue depth is high ({{ $value }} tasks)"
+          description: >
+            The task queue has contained more than 100 pending tasks for the
+            last 10 minutes. Current depth: {{ $value }}.
+          runbook_url: "https://github.com/CodedSceptre/ai-net/blob/main/docs/runbooks/task-queue-depth-high.md"

@@ -1,0 +1,128 @@
+# promtool test rules monitoring/tests/alert-rules.test.yml
+# Tests all 5 alert rules defined in monitoring/alert-rules.yml.
+
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── Test 1: HighAPIErrorRate ─────────────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      # 10 requests/s, 1 of which is a 5xx → 10% error rate (threshold: 5%)
+      - series: 'http_requests_total{status="200"}'
+        values: "0+540x10"
+      - series: 'http_requests_total{status="500"}'
+        values: "0+60x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighAPIErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              runbook_url: "https://github.com/CodedSceptre/ai-net/blob/main/docs/runbooks/high-api-error-rate.md"
+
+  # ── Test 1b: HighAPIErrorRate does NOT fire when error rate is below threshold
+  - interval: 1m
+    input_series:
+      # 10 requests/s, 0.1 of which is 5xx → 1% error rate (below 5%)
+      - series: 'http_requests_total{status="200"}'
+        values: "0+594x10"
+      - series: 'http_requests_total{status="500"}'
+        values: "0+6x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighAPIErrorRate
+        exp_alerts: []
+
+  # ── Test 2: PaymentStuck ─────────────────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      # payment_locked_since_seconds holds the Unix epoch when the lock was set.
+      # Set to (now - 1900s) so the lock age is ~31 minutes (> 1800s threshold).
+      - series: 'payment_locked_since_seconds{taskId="task-1",nodeId="node-1"}'
+        values: "1700000000+0x5"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PaymentStuck
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              taskId: "task-1"
+              nodeId: "node-1"
+            exp_annotations:
+              runbook_url: "https://github.com/CodedSceptre/ai-net/blob/main/docs/runbooks/payment-stuck.md"
+
+  # ── Test 3: AllAgentsOffline ─────────────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'ai_net_active_agents_total'
+        values: "0+0x5"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AllAgentsOffline
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              runbook_url: "https://github.com/CodedSceptre/ai-net/blob/main/docs/runbooks/all-agents-offline.md"
+
+  # ── Test 3b: AllAgentsOffline does NOT fire when agents are present
+  - interval: 1m
+    input_series:
+      - series: 'ai_net_active_agents_total'
+        values: "3+0x5"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AllAgentsOffline
+        exp_alerts: []
+
+  # ── Test 4: StellarHorizonUnreachable ────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'stellar_horizon_up'
+        values: "0+0x5"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: StellarHorizonUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              runbook_url: "https://github.com/CodedSceptre/ai-net/blob/main/docs/runbooks/stellar-horizon-unreachable.md"
+
+  # ── Test 4b: StellarHorizonUnreachable does NOT fire when Horizon is up
+  - interval: 1m
+    input_series:
+      - series: 'stellar_horizon_up'
+        values: "1+0x5"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: StellarHorizonUnreachable
+        exp_alerts: []
+
+  # ── Test 5: TaskQueueDepthHigh ───────────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'ai_net_task_queue_depth'
+        values: "150+0x15"
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: TaskQueueDepthHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              runbook_url: "https://github.com/CodedSceptre/ai-net/blob/main/docs/runbooks/task-queue-depth-high.md"
+
+  # ── Test 5b: TaskQueueDepthHigh does NOT fire when queue is below threshold
+  - interval: 1m
+    input_series:
+      - series: 'ai_net_task_queue_depth'
+        values: "50+0x15"
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: TaskQueueDepthHigh
+        exp_alerts: []
