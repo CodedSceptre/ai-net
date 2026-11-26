@@ -21,7 +21,7 @@
 //! automatically — the coordinator auth check is bypassed for expired escrows.
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -46,6 +46,9 @@ pub enum DataKey {
     PlatformFeeBps,
     /// Cumulative platform fees collected in stroops.
     TotalFeesCollected,
+    SlaCaller,
+    CustodyToken,
+    FundedEscrow(Symbol, Symbol),
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -70,6 +73,9 @@ pub enum Error {
     TreasuryNotConfigured = 7,
     /// Invalid fee basis points (must be <= 10_000).
     InvalidFeeBps = 8,
+    EscrowAlreadyResolved = 9,
+    EscrowMismatch = 10,
+    EscrowNotFunded = 11,
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -146,6 +152,7 @@ impl PaymentEscrowContract {
         if env.storage().instance().has(&DataKey::Coordinator) {
             return Err(Error::AlreadyLocked); // reuse AlreadyLocked as "already initialized"
         }
+        coordinator.require_auth();
         env.storage()
             .instance()
             .set(&DataKey::Coordinator, &coordinator);
@@ -172,25 +179,51 @@ impl PaymentEscrowContract {
         if fee_bps > 10_000 {
             return Err(Error::InvalidFeeBps);
         }
-        env.storage().instance().set(&DataKey::PlatformFeeBps, &fee_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::PlatformFeeBps, &fee_bps);
         Ok(())
     }
 
     /// Get configured platform fee in basis points.
     pub fn get_platform_fee_bps(env: Env) -> u32 {
-        env.storage().instance().get(&DataKey::PlatformFeeBps).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DataKey::PlatformFeeBps)
+            .unwrap_or(0)
     }
 
     /// Get total platform fees collected in stroops.
     pub fn get_total_fees_collected(env: Env) -> i128 {
-        env.storage().instance().get(&DataKey::TotalFeesCollected).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalFeesCollected)
+            .unwrap_or(0)
     }
 
     /// Set platform config contract address (coordinator only).
     pub fn set_platform_config(env: Env, platform_config: Address) -> Result<(), Error> {
         let coordinator = Self::read_coordinator(&env)?;
         coordinator.require_auth();
-        env.storage().instance().set(&DataKey::PlatformConfig, &platform_config);
+        env.storage()
+            .instance()
+            .set(&DataKey::PlatformConfig, &platform_config);
+        Ok(())
+    }
+
+    /// Enable token custody for new escrows and authorize the task store.
+    pub fn configure_sla_refunds(
+        env: Env,
+        task_store: Address,
+        token_contract: Address,
+    ) -> Result<(), Error> {
+        Self::read_coordinator(&env)?.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::SlaCaller, &task_store);
+        env.storage()
+            .instance()
+            .set(&DataKey::CustodyToken, &token_contract);
         Ok(())
     }
 
@@ -228,6 +261,22 @@ impl PaymentEscrowContract {
             status: EscrowStatus::Locked,
         };
 
+        if let Some(asset) = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::CustodyToken)
+        {
+            record.submitter.require_auth();
+            token::Client::new(&env, &asset).transfer(
+                &record.submitter,
+                &env.current_contract_address(),
+                &amount,
+            );
+            env.storage().persistent().set(
+                &DataKey::FundedEscrow(task_id.clone(), node_id.clone()),
+                &asset,
+            );
+        }
         env.storage().persistent().set(&key, &record);
         emit_locked(&env, &task_id, &node_id, amount);
         Ok(())
@@ -245,8 +294,19 @@ impl PaymentEscrowContract {
         coordinator.require_auth();
 
         let key = DataKey::Escrow(task_id.clone(), node_id.clone());
-        let mut record: EscrowRecord =
-            env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        let mut record: EscrowRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::NotFound)?;
+
+        if record.status != EscrowStatus::Locked {
+            return Err(Error::EscrowAlreadyResolved);
+        }
+        let asset: Option<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::FundedEscrow(task_id.clone(), node_id.clone()));
 
         // Releasing after timeout is not allowed — caller should call
         // refund_funds instead once the escrow has expired.
@@ -257,7 +317,8 @@ impl PaymentEscrowContract {
 
         let fee_bps = Self::get_platform_fee_bps(env.clone());
         let fee_amount = if fee_bps > 0 {
-            (record.amount * fee_bps as i128) / 10_000
+            record.amount / 10_000 * fee_bps as i128
+                + record.amount % 10_000 * fee_bps as i128 / 10_000
         } else {
             0
         };
@@ -268,6 +329,14 @@ impl PaymentEscrowContract {
                 .instance()
                 .get::<_, Address>(&DataKey::Treasury)
                 .ok_or(Error::TreasuryNotConfigured)?;
+
+            if let Some(asset) = &asset {
+                token::Client::new(&env, asset).transfer(
+                    &env.current_contract_address(),
+                    &treasury,
+                    &fee_amount,
+                );
+            }
 
             let total_fees: i128 = env
                 .storage()
@@ -290,6 +359,13 @@ impl PaymentEscrowContract {
             );
         }
 
+        if let Some(asset) = &asset {
+            token::Client::new(&env, asset).transfer(
+                &env.current_contract_address(),
+                &record.agent,
+                &(record.amount - fee_amount),
+            );
+        }
         record.status = EscrowStatus::Released;
         emit_released(&env, &task_id, &node_id, record.amount - fee_amount);
         env.storage().persistent().set(&key, &record);
@@ -300,37 +376,75 @@ impl PaymentEscrowContract {
     ///
     /// The coordinator may call this at any time. After the timeout,
     /// *anyone* may call this (auto-refund path).
-    pub fn refund_funds(
+    pub fn refund_funds(env: Env, task_id: Symbol, node_id: Symbol) -> Result<EscrowRecord, Error> {
+        let record = Self::get_escrow(env.clone(), task_id.clone(), node_id.clone())?;
+        if env.ledger().timestamp() < record.expires_at {
+            Self::read_coordinator(&env)?.require_auth();
+        }
+        Self::settle_refund(&env, task_id, node_id, record)
+    }
+
+    /// Refund a funded escrow when the authorized task store enforces an SLA.
+    pub fn refund(
         env: Env,
         task_id: Symbol,
         node_id: Symbol,
-    ) -> Result<EscrowRecord, Error> {
-        let key = DataKey::Escrow(task_id.clone(), node_id.clone());
-        let mut record: EscrowRecord =
-            env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
-
-        let now = env.ledger().timestamp();
-        let is_expired = now >= record.expires_at;
-
-        if !is_expired {
-            // Before timeout: only the coordinator may refund.
-            let coordinator = Self::read_coordinator(&env)?;
-            coordinator.require_auth();
+        submitter: Address,
+        agent: Address,
+    ) -> Result<(), Error> {
+        let task_store: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::SlaCaller)
+            .ok_or(Error::Unauthorized)?;
+        task_store.require_auth();
+        let record = Self::get_escrow(env.clone(), task_id.clone(), node_id.clone())?;
+        if record.submitter != submitter || record.agent != agent {
+            return Err(Error::EscrowMismatch);
         }
-        // After timeout: no auth required — anyone can trigger auto-refund.
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::FundedEscrow(task_id.clone(), node_id.clone()))
+        {
+            return Err(Error::EscrowNotFunded);
+        }
+        Self::settle_refund(&env, task_id, node_id, record)?;
+        Ok(())
+    }
 
+    fn settle_refund(
+        env: &Env,
+        task_id: Symbol,
+        node_id: Symbol,
+        mut record: EscrowRecord,
+    ) -> Result<EscrowRecord, Error> {
+        match record.status {
+            EscrowStatus::Released => return Err(Error::EscrowAlreadyResolved),
+            EscrowStatus::Refunded => return Ok(record),
+            EscrowStatus::Locked => {}
+        }
         record.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&key, &record);
-        emit_refunded(&env, &task_id, &node_id, record.amount);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(task_id.clone(), node_id.clone()), &record);
+        if let Some(asset) = env
+            .storage()
+            .persistent()
+            .get::<_, Address>(&DataKey::FundedEscrow(task_id.clone(), node_id.clone()))
+        {
+            token::Client::new(env, &asset).transfer(
+                &env.current_contract_address(),
+                &record.submitter,
+                &record.amount,
+            );
+        }
+        emit_refunded(env, &task_id, &node_id, record.amount);
         Ok(record)
     }
 
     /// Read the current escrow record without mutating it.
-    pub fn get_escrow(
-        env: Env,
-        task_id: Symbol,
-        node_id: Symbol,
-    ) -> Result<EscrowRecord, Error> {
+    pub fn get_escrow(env: Env, task_id: Symbol, node_id: Symbol) -> Result<EscrowRecord, Error> {
         let key = DataKey::Escrow(task_id, node_id);
         env.storage().persistent().get(&key).ok_or(Error::NotFound)
     }
