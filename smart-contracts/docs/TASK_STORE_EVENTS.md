@@ -1,5 +1,7 @@
 # Task Store Contract — Event Schema
 
+See the [unified event schema reference](../../docs/EVENT_SCHEMA_REFERENCE.md#task_store) for topics, decoded payloads, and Stellar RPC query examples.
+
 This document defines the Soroban event schema for **all** events emitted by the
 `task_store` contract, including task lifecycle transitions, coordinator/oracle
 configuration changes, and contract upgrades.
