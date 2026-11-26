@@ -1,32 +1,22 @@
-FROM node:20-alpine@sha256:2a63a5947ffbaee54a75f2bd47cd0fff0fdb9d0dff5d21f1861facd88fe0d4a6 AS builder
+FROM node:20-alpine AS builder
 
 WORKDIR /app
-
 COPY package*.json ./
-COPY frontend/package*.json ./frontend/
-COPY frontend/ ./frontend/
-
-RUN npm ci --workspace=frontend --include-workspace-root --ignore-scripts
-WORKDIR /app/frontend
+RUN npm ci --no-audit --no-fund
+COPY . .
+ARG VITE_API_BASE_URL
 RUN npm run build
 
-FROM node:20-alpine@sha256:2a63a5947ffbaee54a75f2bd47cd0fff0fdb9d0dff5d21f1861facd88fe0d4a6 AS runner
+FROM nginx:alpine AS production
 
-WORKDIR /app/frontend
+COPY nginx.conf /etc/nginx/nginx.conf
+COPY --from=builder /app/dist /usr/share/nginx/html
 
-ENV NODE_ENV=production
-ENV PORT=5173
+USER nginx
+EXPOSE 80
 
-COPY --from=builder /app/frontend/package*.json ./
-COPY --from=builder /app/frontend/dist ./dist
+HEALTHCHECK --interval=5s --timeout=3s --retries=5 \
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:80/ || exit 1
 
-RUN npm ci --omit=dev --ignore-scripts && \
-    addgroup -S app && adduser -S app -G app && \
-    chown -R app:app /app && \
-    rm -rf /root/.npm /tmp/*
-
-USER app
-
-EXPOSE 5173
-
-CMD ["sh", "-c", "npx vite preview --host 0.0.0.0 --port ${PORT:-5173}"]
+ENTRYPOINT []
+CMD ["nginx", "-g", "daemon off;"]

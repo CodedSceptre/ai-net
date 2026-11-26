@@ -36,7 +36,7 @@ jobs:
       - name: Build backend image
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: ./backend
           file: backend/Dockerfile
           tags: ai-net-backend:ci
           load: true
@@ -44,7 +44,7 @@ jobs:
       - name: Build frontend image
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: ./frontend
           file: frontend/Dockerfile
           tags: ai-net-frontend:ci
           load: true
