@@ -131,6 +131,8 @@ pub enum DataKey {
     CustodialBond(Symbol, Symbol),
     ClaimableRewards(Address),
     RewardRemainder,
+    /// Slash history keyed by agent Address. Value = Vec<SlashRecord>.
+    SlashHistory(Address),
 }
 
 // ─── Data Types ──────────────────────────────────────────────────────────────
@@ -242,6 +244,38 @@ pub struct AddressStakeRecord {
     pub staked_at: u32,
 }
 
+/// Reason codes for the reason-based slash function.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SlashReason {
+    /// Agent failed to complete an assigned task.
+    TaskFailure,
+    /// Agent breached a service-level agreement.
+    SLABreach,
+    /// Agent committed provable fraud.
+    FraudProven,
+}
+
+/// A single slash history entry stored per agent.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SlashRecord {
+    pub reason: SlashReason,
+    pub amount_slashed: i128,
+    pub remaining_stake: i128,
+    pub timestamp_ledger: u32,
+}
+
+/// Emitted by `slash_by_reason`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SlashAppliedEvent {
+    pub agent_id: Address,
+    pub reason: SlashReason,
+    pub amount_slashed: i128,
+    pub new_stake_balance: i128,
+}
+
 // ─── Error Codes ─────────────────────────────────────────────────────────────
 
 /// Contract error discriminants, returned via `panic_with_error!` / panic.
@@ -282,6 +316,10 @@ pub enum Error {
     RewardSourcesMissing = 12,
     InvalidUptimeFactor = 13,
     RewardOverflow = 14,
+    /// Slash percentage does not match the expected value for the given reason.
+    SlashPercentageMismatch = 11,
+    /// No stake record found for the given Address-keyed agent.
+    AddressStakeNotFound = 12,
 }
 
 // ─── Internal Helpers ────────────────────────────────────────────────────────
@@ -510,6 +548,23 @@ fn require_bond_owner(env: &Env, owner: &Address, agent: &Symbol, capability: &S
         soroban_sdk::panic_with_error!(env, Error::Unauthorized);
     }
     owner.require_auth();
+}
+
+// ─── Slash Reason Helpers ─────────────────────────────────────────────────────
+
+/// Returns the canonical slash percentage for a given reason.
+///
+/// | Reason         | Percentage |
+/// |----------------|-----------|
+/// | `TaskFailure`  | 5%        |
+/// | `SLABreach`    | 25%       |
+/// | `FraudProven`  | 100%      |
+fn expected_percentage_for_reason(reason: &SlashReason) -> u32 {
+    match reason {
+        SlashReason::TaskFailure => 5,
+        SlashReason::SLABreach => 25,
+        SlashReason::FraudProven => 100,
+    }
 }
 
 // ─── Contract ────────────────────────────────────────────────────────────────
@@ -1619,6 +1674,122 @@ impl CapabilityStakingContract {
 
         // Retain the dispute-resolution ABI. The dispute tracks the reason.
         let _ = reason;
+    }
+
+    /// Slash an agent's stake by reason. Only callable by the dispute_resolution
+    /// contract (same auth as `slash`).
+    ///
+    /// The `percentage` parameter must exactly match the canonical percentage for
+    /// the given reason:
+    /// - `TaskFailure`  → 5%
+    /// - `SLABreach`    → 25%
+    /// - `FraudProven`  → 100% (sets stake to zero and blacklists the agent)
+    ///
+    /// Slash history is appended to `DataKey::SlashHistory(agent_id)`.
+    /// Emits `SlashApplied`.
+    ///
+    /// # Authorization
+    /// Caller must be the dispute_resolution contract.
+    ///
+    /// # Errors
+    /// - Panics with `"slash percentage mismatch"` when `percentage` does not
+    ///   match the canonical value for the given reason.
+    /// - Panics with `"stake not found"` when no active stake exists for the
+    ///   (agent_id, capability) pair.
+    pub fn slash_by_reason(
+        env: Env,
+        agent_id: Address,
+        capability: Bytes,
+        reason: SlashReason,
+        percentage: u32,
+    ) {
+        // Auth: require dispute_resolution contract authorization.
+        let dr_contract = load_dispute_resolution(&env);
+        dr_contract.require_auth();
+
+        // Validate percentage matches the canonical value for the reason.
+        let expected = expected_percentage_for_reason(&reason);
+        if percentage != expected {
+            panic!("slash percentage mismatch");
+        }
+
+        let treasury = load_treasury(&env);
+        let token_id = load_token(&env);
+        let current_ledger = env.ledger().sequence();
+
+        let addr_key = DataKey::AddressStakeRecord(agent_id.clone(), capability.clone());
+        let record: AddressStakeRecord = env
+            .storage()
+            .persistent()
+            .get(&addr_key)
+            .unwrap_or_else(|| panic!("stake not found"));
+
+        let slash_amount = record.amount_stroops * (percentage as i128) / 100;
+        let remaining = record.amount_stroops - slash_amount;
+
+        if remaining == 0 {
+            // Full slash: remove stake record and blacklist agent.
+            env.storage().persistent().remove(&addr_key);
+
+            let blacklist_expires = current_ledger + BLACKLIST_PERIOD_LEDGERS;
+            let bl_key = DataKey::Blacklist(agent_id.clone());
+            env.storage().persistent().set(&bl_key, &blacklist_expires);
+            extend_persistent_ttl(&env, &bl_key);
+        } else {
+            // Partial slash: update the stake record with the reduced amount.
+            let updated = AddressStakeRecord {
+                amount_stroops: remaining,
+                ..record
+            };
+            env.storage().persistent().set(&addr_key, &updated);
+            extend_persistent_ttl(&env, &addr_key);
+        }
+
+        // Transfer slashed funds to treasury via the token contract.
+        token::Client::new(&env, &token_id).transfer(
+            &env.current_contract_address(),
+            &treasury,
+            &slash_amount,
+        );
+
+        // Append slash record to history.
+        let history_key = DataKey::SlashHistory(agent_id.clone());
+        let mut history: soroban_sdk::Vec<SlashRecord> = env
+            .storage()
+            .persistent()
+            .get(&history_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        history.push_back(SlashRecord {
+            reason: reason.clone(),
+            amount_slashed: slash_amount,
+            remaining_stake: remaining,
+            timestamp_ledger: current_ledger,
+        });
+        env.storage().persistent().set(&history_key, &history);
+        extend_persistent_ttl(&env, &history_key);
+        extend_instance_ttl(&env);
+
+        // Emit SlashApplied event.
+        env.events().publish(
+            (symbol_short!("staking"), symbol_short!("slshapply")),
+            SlashAppliedEvent {
+                agent_id,
+                reason,
+                amount_slashed: slash_amount,
+                new_stake_balance: remaining,
+            },
+        );
+    }
+
+    /// Returns the full slash history for an agent. Returns an empty vector if
+    /// no slashes have been recorded for the given agent.
+    pub fn get_slash_history(env: Env, agent_id: Address) -> soroban_sdk::Vec<SlashRecord> {
+        extend_instance_ttl(&env);
+        let history_key = DataKey::SlashHistory(agent_id);
+        env.storage()
+            .persistent()
+            .get(&history_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
     }
 
     // ── Queries ─────────────────────────────────────────────────────────────
