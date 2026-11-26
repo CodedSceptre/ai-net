@@ -42,6 +42,7 @@
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, Symbol, Vec,
 };
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -359,6 +360,7 @@ impl CapabilityStakingContract {
     // ── Initialisation ──────────────────────────────────────────────────────
 
     /// One-time initialisation. Sets the admin, treasury, and token addresses.
+    /// One-time initialisation. Sets the admin and treasury addresses.
     ///
     /// # Authorization
     /// Requires auth from `admin`.
@@ -366,6 +368,7 @@ impl CapabilityStakingContract {
     /// # Errors
     /// Panics with `Error::AlreadyInitialized` if called more than once.
     pub fn initialize(env: Env, admin: Address, treasury: Address, token: Address) {
+    pub fn initialize(env: Env, admin: Address, treasury: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
@@ -518,6 +521,7 @@ impl CapabilityStakingContract {
             unbonding_since: None,
         };
 
+        let key = DataKey::StakeRecord(agent_id.clone(), capability.clone());
         env.storage().persistent().set(&key, &record);
         extend_persistent_ttl(&env, &key);
         extend_instance_ttl(&env);
@@ -544,6 +548,12 @@ impl CapabilityStakingContract {
     /// # Errors
     /// Panics with `Error::StakeNotFound` if no active stake exists.
     pub fn unstake_bond(env: Env, owner: Address, agent_id: Symbol, capability: Symbol) {
+    pub fn unstake_bond(
+        env: Env,
+        owner: Address,
+        agent_id: Symbol,
+        capability: Symbol,
+    ) {
         owner.require_auth();
 
         let stake_key = DataKey::StakeRecord(agent_id.clone(), capability.clone());
@@ -588,6 +598,7 @@ impl CapabilityStakingContract {
             claimable_at,
         };
 
+        let unbonding_key = DataKey::UnbondingRecord(agent_id.clone(), capability.clone());
         env.storage().persistent().set(&unbonding_key, &unbonding);
         extend_persistent_ttl(&env, &unbonding_key);
         extend_instance_ttl(&env);
@@ -619,6 +630,12 @@ impl CapabilityStakingContract {
     /// - Panics with `Error::UnbondingPeriodNotElapsed` if the waiting period
     ///   has not yet passed.
     pub fn claim_unbonded(env: Env, owner: Address, agent_id: Symbol, capability: Symbol) {
+    pub fn claim_unbonded(
+        env: Env,
+        owner: Address,
+        agent_id: Symbol,
+        capability: Symbol,
+    ) {
         owner.require_auth();
 
         let unbonding_key = DataKey::UnbondingRecord(agent_id.clone(), capability.clone());
@@ -676,6 +693,12 @@ impl CapabilityStakingContract {
     /// Panics if neither an active stake nor an unbonding record is found for
     /// the given (agent_id, capability) pair.
     pub fn slash_bond(env: Env, agent_id: Symbol, capability: Symbol, reason: Symbol) {
+    pub fn slash_bond(
+        env: Env,
+        agent_id: Symbol,
+        capability: Symbol,
+        reason: Symbol,
+    ) {
         let admin = load_admin(&env);
         admin.require_auth();
 
@@ -704,6 +727,7 @@ impl CapabilityStakingContract {
                     &record.amount_stroops,
                 );
             }
+            env.storage().persistent().remove(&stake_key);
             record.amount_stroops
         } else if let Some(record) = env
             .storage()
@@ -719,6 +743,7 @@ impl CapabilityStakingContract {
                     &record.amount_stroops,
                 );
             }
+            env.storage().persistent().remove(&unbonding_key);
             record.amount_stroops
         } else {
             panic!("stake not found");
@@ -850,6 +875,11 @@ impl CapabilityStakingContract {
     /// Returns the active `StakeRecord` for an (agent_id, capability) pair, or
     /// `None` if no stake exists.
     pub fn get_stake(env: Env, agent_id: Symbol, capability: Symbol) -> Option<StakeRecord> {
+    pub fn get_stake(
+        env: Env,
+        agent_id: Symbol,
+        capability: Symbol,
+    ) -> Option<StakeRecord> {
         extend_instance_ttl(&env);
         env.storage()
             .persistent()
@@ -873,6 +903,11 @@ impl CapabilityStakingContract {
     /// minimum stake, `false` otherwise (no stake, insufficient stake, or
     /// stake is in the unbonding period).
     pub fn is_sufficiently_staked(env: Env, agent_id: Symbol, capability: Symbol) -> bool {
+    pub fn is_sufficiently_staked(
+        env: Env,
+        agent_id: Symbol,
+        capability: Symbol,
+    ) -> bool {
         extend_instance_ttl(&env);
         let min_stake: i128 = env
             .storage()

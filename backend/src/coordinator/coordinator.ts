@@ -385,6 +385,7 @@ export class Coordinator {
     agent?: AgentRegistration,
     parentSpanId?: string,
   ): Promise<unknown> {
+  async dispatchNode(node: DAGNode, context: string, agent?: AgentRegistration): Promise<unknown> {
     const target = agent ?? await this.cheapestAgentFor(node.type);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
