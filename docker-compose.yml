@@ -68,7 +68,7 @@ services:
       HOST: 0.0.0.0
       DATABASE_URL: sqlite:///workspace/backend/data/ai-net.db
       REDIS_URL: redis://redis:6379
-      STELLAR_NETWORK: standalone
+      STELLAR_NETWORK: local
       STELLAR_HORIZON_URL: http://stellar-standalone:8000
       SOROBAN_RPC_URL: http://stellar-standalone:8000/soroban/rpc
       VENICE_API_KEY: ${VENICE_API_KEY:-mock_local_key}
@@ -172,7 +172,7 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./monitoring/grafana-dashboard.json:/etc/grafana/dashboards/ai-net-observability.json:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
     depends_on:
       prometheus:
         condition: service_healthy
