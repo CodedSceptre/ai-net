@@ -417,8 +417,7 @@ export function createApp(opts: AppOptions = {}): {
 }
 
 /**
- * Build a DispatchFn that looks up the cheapest agent for a node's type in the
- * provided registry and forwards the call to that agent via HTTP.
+ * Dispatch to an eligible agent and report which agent handled the node.
  */
 function makeHttpDispatch(registry: AgentRegistry): DispatchFn {
   const estimator = new CostEstimator();
@@ -427,6 +426,34 @@ function makeHttpDispatch(registry: AgentRegistry): DispatchFn {
     if (!agent) {
       throw new AppError(`No online agent for type: ${node.type}`, 503, "NO_ELIGIBLE_AGENT");
     }
+function makeHttpDispatch(registry?: AgentRegistry): DispatchFn {
+  return async (_taskId: string, node: DAGNode, context: string, onAgentSelected): Promise<unknown> => {
+    const agents = registry
+      ? await registry.getAgents(node.type)
+      : createAgentDb(getAgentDb()).list({ capability: node.type, status: "online" }).map((agent) => ({
+        id: agent.id,
+        type: node.type,
+        endpoint: agent.endpoint,
+        cost: agent.pricingXLM,
+        status: agent.status,
+        reputation: agent.reputationScore,
+      }));
+    if (!agents || agents.length === 0) {
+      throw new AppError(`No agent registered for type: ${node.type}`, 500, "AGENT_NOT_FOUND");
+    }
+
+    // Admin-banned agents are excluded from all new task assignments (#33).
+    const eligible = excludeBannedAgents(agents);
+    if (eligible.length === 0) {
+      throw new AppError(
+        `All agents for type ${node.type} are banned`,
+        503,
+        "NO_ELIGIBLE_AGENT",
+      );
+    }
+
+    const agent = [...eligible].sort((a, b) => a.cost - b.cost || (b.reputation ?? 0) - (a.reputation ?? 0))[0];
+    onAgentSelected?.(agent.id);
     return httpDispatch(agent, node.nodeId, node, context);
   };
 }
