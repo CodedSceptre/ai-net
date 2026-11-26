@@ -357,6 +357,11 @@ impl PlatformConfigContract {
         Ok(())
     }
 
+    /// Return the current platform administrator.
+    pub fn get_admin(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::Admin)
+    }
+
     // ── Query functions ───────────────────────────────────────────────────────
 
     /// Return the current platform configuration (all parameters).

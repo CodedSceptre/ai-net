@@ -2,6 +2,7 @@ extern crate std;
 
 #[cfg(test)]
 mod legacy {
+mod lifecycle {
     use crate::{
         CapabilityStakingContract, CapabilityStakingContractClient, DEFAULT_MIN_STAKE_STROOPS,
         UNBONDING_PERIOD_LEDGERS,
@@ -30,6 +31,7 @@ mod legacy {
         let treasury = Address::generate(&env);
 
         client.initialize(&admin, &treasury, &admin);
+        client.initialize(&admin, &treasury, &Address::generate(&env));
 
         (env, client, admin, treasury)
     }
@@ -52,6 +54,7 @@ mod legacy {
         let (env, client, admin, treasury) = setup();
         // Second initialisation must panic.
         client.initialize(&admin, &treasury, &admin);
+        client.initialize(&admin, &treasury, &Address::generate(&env));
         let _ = env;
     }
 
@@ -262,6 +265,7 @@ mod legacy {
         // Move forward by only half the unbonding period.
         env.ledger().with_mut(|li| {
             li.sequence_number = 1000 + (UNBONDING_PERIOD_LEDGERS / 2);
+            li.sequence_number = 1000 + UNBONDING_PERIOD_LEDGERS / 2;
         });
 
         // This must panic.
@@ -634,5 +638,99 @@ mod delegation {
         assert_eq!(client.claim_undelegated(&first, &agent), 1);
         client.delegate_stake(&extra, &agent, &1);
         assert_eq!(client.get_delegations(&agent).len(), MAX_DELEGATORS);
+mod rewards {
+    use crate::{CapabilityStakingContract, CapabilityStakingContractClient};
+    use soroban_sdk::{
+        contract, contractimpl, symbol_short,
+        testutils::{Address as _, Events as _},
+        token, Address, Env, IntoVal, Map, Symbol,
+    };
+
+    #[contract]
+    struct RewardSource;
+
+    #[contractimpl]
+    impl RewardSource {
+        pub fn get_admin(env: Env) -> Option<Address> {
+            env.storage().instance().get(&symbol_short!("admin"))
+        }
+
+        pub fn get_agent_owner(env: Env, agent_id: Symbol) -> Option<Address> {
+            let entry: Option<(Address, u32)> = env.storage().instance().get(&agent_id);
+            entry.map(|(wallet, _)| wallet)
+        }
+
+        pub fn get_uptime_factor(env: Env, agent_id: Symbol) -> u32 {
+            let entry: (Address, u32) = env.storage().instance().get(&agent_id).unwrap();
+            entry.1
+        }
+    }
+
+    #[test]
+    fn distributes_to_five_agents_and_claims_once() {
+        let env = Env::default();
+        env.cost_estimate().budget().reset_unlimited();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let mint = token::StellarAssetClient::new(&env, &token_id);
+        let token = token::Client::new(&env, &token_id);
+        let staking_id = env.register(CapabilityStakingContract, ());
+        let staking = CapabilityStakingContractClient::new(&env, &staking_id);
+        let source = env.register(RewardSource, ());
+        env.as_contract(&source, || {
+            env.storage()
+                .instance()
+                .set(&symbol_short!("admin"), &admin)
+        });
+        staking.initialize(&admin, &treasury, &token_id);
+        staking.configure_rewards(&source, &source);
+
+        let capability = symbol_short!("compute");
+        staking.set_min_stake(&capability, &1);
+        let mut expected = Map::<Address, i128>::new(&env);
+        for (name, amount, factor, share) in [
+            ("a", 500_i128, 10_000_u32, 500_i128),
+            ("b", 200, 5_000, 100),
+            ("c", 150, 9_500, 142),
+            ("d", 100, 10_000, 100),
+            ("e", 50, 0, 0),
+        ] {
+            let agent = Symbol::new(&env, name);
+            let owner = Address::generate(&env);
+            mint.mint(&owner, &amount);
+            env.as_contract(&source, || {
+                env.storage()
+                    .instance()
+                    .set(&agent, &(owner.clone(), factor))
+            });
+            staking.stake_bond(&owner, &agent, &capability, &amount);
+            expected.set(owner, share);
+        }
+        mint.mint(&admin, &1_000);
+        env.set_auths(&[]);
+        assert!(staking.try_distribute_rewards(&1_000).is_err());
+        env.mock_all_auths();
+        staking.distribute_rewards(&1_000);
+        assert!(env.events().all().iter().any(|(contract, topics, data)| {
+            contract == staking_id
+                && topics
+                    == soroban_sdk::vec![
+                        &env,
+                        Symbol::new(&env, "RewardsDistributed").into_val(&env)
+                    ]
+                && <_ as soroban_sdk::TryFromVal<Env, _>>::try_from_val(&env, &data)
+                    == Ok((842_i128, 4_u32))
+        }));
+        for (owner, share) in expected.iter() {
+            assert_eq!(staking.get_claimable_rewards(&owner), share);
+            assert_eq!(staking.claim_rewards(&owner), share);
+            assert_eq!(token.balance(&owner), share);
+            assert_eq!(staking.claim_rewards(&owner), 0);
+        }
+        assert_eq!(token.balance(&staking_id), 1_158);
     }
 }
