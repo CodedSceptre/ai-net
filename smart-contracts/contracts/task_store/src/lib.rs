@@ -38,7 +38,14 @@ pub use types::{
     SlaStatus, SlaViolatedEvent, TaskAssignedEvent, TaskAssignmentRecord, TaskCreatedEvent,
     TaskFinalizedEvent, TaskMetadata, TaskStatus, TaskUpdatedEvent, DEFAULT_TTL_DAYS,
     LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES, MAX_TTL_DAYS, TASK_LIFECYCLE_EVENT_VERSION,
+    ContractUpgradedEvent, CoordinatorSetEvent, DataKey, Error, OracleManagerSetEvent,
+    ResultVerifiedEvent, TaskAssignedEvent, TaskAssignmentRecord, TaskCreatedEvent,
+    TaskFinalizedEvent, TaskMetadata, TaskStatus, TaskUpdatedEvent, DEFAULT_TTL_DAYS,
+    LEDGERS_PER_DAY, MAX_COMPRESSED_DAG_BYTES, MAX_TTL_DAYS, TASK_CONFIG_EVENT_VERSION,
+    TASK_LIFECYCLE_EVENT_VERSION,
 };
+
+use types::TaskResult;
 
 use soroban_sdk::{
     contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, IntoVal, Map, String,
@@ -77,6 +84,7 @@ fn read_metadata(env: &Env, task_id: &BytesN<32>) -> Result<TaskMetadata, Error>
     }
     let value: Val = fields.into_val(env);
     let metadata = value.try_into_val(env).map_err(|_| Error::NotFound)?;
+    let metadata = load_metadata(env, task_id)?;
 
     if is_expired(env, &metadata) {
         return Err(Error::Expired);
@@ -101,6 +109,29 @@ fn sla_status(env: &Env, task: &TaskMetadata) -> SlaStatus {
     } else {
         SlaStatus::Ok
     }
+fn load_metadata(env: &Env, task_id: &BytesN<32>) -> Result<TaskMetadata, Error> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Task(task_id.clone()))
+        .ok_or(Error::NotFound)
+}
+
+fn store_result(env: &Env, task_id: &BytesN<32>, metadata: &TaskMetadata, result: &TaskResult) {
+    let key = DataKey::TaskResult(task_id.clone());
+    let ledgers =
+        ttl_ledgers(((metadata.expires_at - metadata.created_at) / SECONDS_PER_DAY) as u32)
+            .min(env.storage().max_ttl());
+    let storage = env.storage().persistent();
+    storage.set(&key, result);
+    storage.extend_ttl(&key, ledgers.saturating_sub(1), ledgers);
+}
+
+fn matches_result(env: &Env, task_id: &BytesN<32>, plaintext: &Bytes) -> bool {
+    env.storage()
+        .persistent()
+        .get::<_, TaskResult>(&DataKey::TaskResult(task_id.clone()))
+        .and_then(|result| result.result_hash)
+        .is_some_and(|hash| env.crypto().sha256(plaintext).to_bytes() == hash)
 }
 
 fn has_duplicate_agents(agents: &Vec<Address>) -> bool {
@@ -118,7 +149,10 @@ fn can_transition(from: TaskStatus, to: TaskStatus) -> bool {
     matches!(
         (from, to),
         (TaskStatus::Pending, TaskStatus::Running)
+            | (TaskStatus::Pending, TaskStatus::Assigned)
             | (TaskStatus::Pending, TaskStatus::Failed)
+            | (TaskStatus::Assigned, TaskStatus::Failed)
+            | (TaskStatus::Verified, TaskStatus::Completed)
             | (TaskStatus::Running, TaskStatus::Completed)
             | (TaskStatus::Running, TaskStatus::Failed)
     )
@@ -284,7 +318,7 @@ impl TaskStoreContract {
     }
 
     /// Assign `agent` to task `task_id`, transitioning it from `Pending` to
-    /// `Running`.  Only the coordinator may call this function.  The coordinator
+    /// `Assigned`.  Only the coordinator may call this function.  The coordinator
     /// cannot assign the task to itself (`SelfAssignmentNotAllowed`).
     pub fn assign_task(env: Env, task_id: BytesN<32>, agent: Address) -> Result<(), Error> {
         let coordinator = read_coordinator(&env)?;
@@ -298,12 +332,21 @@ impl TaskStoreContract {
         let key = DataKey::Task(task_id.clone());
         let mut metadata = read_metadata(&env, &task_id)?;
 
-        if !can_transition(metadata.status, TaskStatus::Running) {
+        if !can_transition(metadata.status, TaskStatus::Assigned) {
             return Err(Error::InvalidStatusTransition);
         }
 
         let old_status = metadata.status;
-        metadata.status = TaskStatus::Running;
+        metadata.status = TaskStatus::Assigned;
+        store_result(
+            &env,
+            &task_id,
+            &metadata,
+            &TaskResult {
+                assignee: agent.clone(),
+                result_hash: None,
+            },
+        );
         env.storage().persistent().set(&key, &metadata);
 
         env.events().publish(
@@ -313,7 +356,7 @@ impl TaskStoreContract {
                 task_id,
                 agent,
                 old_status,
-                new_status: TaskStatus::Running,
+                new_status: TaskStatus::Assigned,
                 updated_at: env.ledger().timestamp(),
             },
         );
@@ -378,7 +421,7 @@ impl TaskStoreContract {
         let key = DataKey::Task(task_id.clone());
         let mut metadata = read_metadata(&env, &task_id)?;
 
-        if !can_transition(metadata.status, TaskStatus::Running) {
+        if !can_transition(metadata.status, TaskStatus::Assigned) {
             return Err(Error::InvalidStatusTransition);
         }
 
@@ -423,7 +466,16 @@ impl TaskStoreContract {
             .set(&DataKey::TaskAssignment(task_id.clone()), &record);
 
         let old_status = metadata.status;
-        metadata.status = TaskStatus::Running;
+        metadata.status = TaskStatus::Assigned;
+        store_result(
+            &env,
+            &task_id,
+            &metadata,
+            &TaskResult {
+                assignee: winning_agent.clone(),
+                result_hash: None,
+            },
+        );
         env.storage().persistent().set(&key, &metadata);
 
         env.events().publish(
@@ -448,7 +500,7 @@ impl TaskStoreContract {
                 task_id,
                 agent: winning_agent.clone(),
                 old_status,
-                new_status: TaskStatus::Running,
+                new_status: TaskStatus::Assigned,
                 updated_at: env.ledger().timestamp(),
             },
         );
@@ -772,6 +824,87 @@ impl TaskStoreContract {
                 task_id,
                 agent_id: settlement.agent_id,
                 deadline: task.sla_deadline,
+    /// Commit once, using the task's existing expiry timestamp as its submission deadline.
+    pub fn commit_result(
+        env: Env,
+        task_id: BytesN<32>,
+        agent: Address,
+        result_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        let metadata = load_metadata(&env, &task_id)?;
+        if env.ledger().timestamp() > metadata.expires_at {
+            return Err(Error::DeadlineExpired);
+        }
+        if metadata.status != TaskStatus::Assigned {
+            return Err(Error::InvalidStatusTransition);
+        }
+        let mut result: TaskResult = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TaskResult(task_id.clone()))
+            .ok_or(Error::Unauthorized)?;
+        if agent != result.assignee {
+            return Err(Error::Unauthorized);
+        }
+        agent.require_auth();
+        if let Some(previous) = result.result_hash {
+            return if previous == result_hash {
+                Ok(())
+            } else {
+                Err(Error::ResultAlreadyCommitted)
+            };
+        }
+        result.result_hash = Some(result_hash);
+        store_result(&env, &task_id, &metadata, &result);
+        Ok(())
+    }
+
+    /// Compare a SHA-256 digest against the committed result without changing state.
+    pub fn verify_result(env: Env, task_id: BytesN<32>, result_plaintext: Bytes) -> bool {
+        matches_result(&env, &task_id, &result_plaintext)
+    }
+
+    /// Reveal the committed result and transition the assignment to Verified.
+    pub fn open_result(
+        env: Env,
+        task_id: BytesN<32>,
+        agent: Address,
+        result_plaintext: Bytes,
+    ) -> Result<(), Error> {
+        let mut metadata = load_metadata(&env, &task_id)?;
+        if env.ledger().timestamp() > metadata.expires_at {
+            return Err(Error::DeadlineExpired);
+        }
+        let result: TaskResult = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TaskResult(task_id.clone()))
+            .ok_or(Error::Unauthorized)?;
+        if agent != result.assignee {
+            return Err(Error::Unauthorized);
+        }
+        agent.require_auth();
+        if metadata.status != TaskStatus::Assigned {
+            return Err(Error::InvalidStatusTransition);
+        }
+        if !Self::verify_result(env.clone(), task_id.clone(), result_plaintext) {
+            return Err(Error::ResultHashMismatch);
+        }
+
+        metadata.status = TaskStatus::Verified;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Task(task_id.clone()), &metadata);
+        env.events().publish(
+            (
+                symbol_short!("task_meta"),
+                Symbol::new(&env, "ResultVerified"),
+            ),
+            ResultVerifiedEvent {
+                version: TASK_LIFECYCLE_EVENT_VERSION,
+                task_id,
+                assignee: agent,
+                verified_at: env.ledger().timestamp(),
             },
         );
         Ok(())
@@ -795,7 +928,15 @@ impl TaskStoreContract {
 
         let key = DataKey::Task(task_id.clone());
         let mut metadata = read_metadata(&env, &task_id)?;
-        if !metadata.assigned_agents.contains(&agent) {
+        let assignment: Option<TaskResult> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TaskResult(task_id.clone()));
+        let authorized = assignment.map_or_else(
+            || metadata.assigned_agents.contains(&agent),
+            |result| result.assignee == agent,
+        );
+        if !authorized {
             return Err(Error::NotAssignedAgent);
         }
         if !can_transition(metadata.status, new_status) {
@@ -847,7 +988,7 @@ mod test {
     use super::*;
     use soroban_sdk::{
         testutils::{Address as _, Events, Ledger},
-        Address, Bytes, Env, IntoVal,
+        Address, Bytes, Env, IntoVal, TryFromVal, Val,
     };
 
     struct Fixture {
@@ -1002,6 +1143,59 @@ mod test {
         assert_eq!(
             f.client.try_enforce_sla(&f.task_id),
             Err(Ok(Error::TaskAlreadyResolved))
+    fn assigned_agent_can_only_open_the_committed_result() {
+        let f = fixture();
+        f.client.initialize(&f.submitter);
+        f.client.set_coordinator(&f.submitter);
+        store(&f, 1);
+        f.client.assign_task(&f.task_id, &f.agent);
+        let plaintext = Bytes::from_slice(&f.env, b"answer");
+        let wrong = Bytes::from_slice(&f.env, b"different answer");
+        let hash = f.env.crypto().sha256(&plaintext).to_bytes();
+
+        f.client.commit_result(&f.task_id, &f.agent, &hash);
+        assert!(f.client.verify_result(&f.task_id, &plaintext));
+        assert!(!f.client.verify_result(&f.task_id, &wrong));
+        assert_eq!(
+            f.client
+                .try_open_result(&f.task_id, &f.submitter, &plaintext),
+            Err(Ok(Error::Unauthorized))
+        );
+        assert_eq!(
+            f.client.try_open_result(&f.task_id, &f.agent, &wrong),
+            Err(Ok(Error::ResultHashMismatch))
+        );
+        assert_eq!(f.client.get_task_status(&f.task_id), TaskStatus::Assigned);
+        f.client.open_result(&f.task_id, &f.agent, &plaintext);
+        assert_eq!(f.client.get_task_status(&f.task_id), TaskStatus::Verified);
+        let (_, topics, payload) = f.env.events().all().last().unwrap();
+        let expected_topics: Vec<Val> = (
+            symbol_short!("task_meta"),
+            Symbol::new(&f.env, "ResultVerified"),
+        )
+            .into_val(&f.env);
+        assert_eq!(topics, expected_topics);
+        let event = ResultVerifiedEvent::try_from_val(&f.env, &payload).unwrap();
+        assert_eq!(event.task_id, f.task_id);
+        assert_eq!(event.assignee, f.agent);
+        assert_eq!(event.verified_at, f.env.ledger().timestamp());
+    }
+
+    #[test]
+    fn an_assigned_agent_cannot_commit_after_the_deadline() {
+        let f = fixture();
+        f.client.initialize(&f.submitter);
+        f.client.set_coordinator(&f.submitter);
+        store(&f, 1);
+        f.client.assign_task(&f.task_id, &f.agent);
+        let deadline = f.client.get_task_metadata(&f.task_id).expires_at;
+        f.env
+            .ledger()
+            .with_mut(|ledger| ledger.timestamp = deadline + 1);
+        assert_eq!(
+            f.client
+                .try_commit_result(&f.task_id, &f.agent, &f.prompt_hash),
+            Err(Ok(Error::DeadlineExpired))
         );
     }
 

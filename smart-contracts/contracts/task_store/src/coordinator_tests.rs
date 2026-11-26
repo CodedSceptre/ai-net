@@ -143,11 +143,11 @@ fn test_coordinator_can_assign_task() {
         "coordinator should be able to assign task: {result:?}"
     );
 
-    // Task must now be Running.
+    // Task must now be Assigned.
     assert_eq!(
         f.client.get_task_status(&f.task_id),
-        TaskStatus::Running,
-        "task status must be Running after assignment"
+        TaskStatus::Assigned,
+        "task status must be Assigned after assignment"
     );
 }
 
@@ -203,14 +203,14 @@ fn test_coordinator_can_fail_task_from_pending() {
 }
 
 #[test]
-fn test_coordinator_can_fail_task_from_running() {
+fn test_coordinator_can_fail_task_from_assigned() {
     let f = fixture();
     f.client.set_coordinator(&f.coordinator);
     store_task(&f);
 
     // Assign first, then fail.
     f.client.assign_task(&f.task_id, &f.agent);
-    assert_eq!(f.client.get_task_status(&f.task_id), TaskStatus::Running);
+    assert_eq!(f.client.get_task_status(&f.task_id), TaskStatus::Assigned);
 
     let reason = soroban_sdk::String::from_str(&f.env, "timeout");
     let result = f.client.try_fail_task(&f.task_id, &reason);

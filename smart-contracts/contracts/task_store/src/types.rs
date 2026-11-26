@@ -56,6 +56,8 @@ pub struct SlaViolatedEvent {
     pub task_id: BytesN<32>,
     pub agent_id: Symbol,
     pub deadline: u64,
+    Assigned = 4,
+    Verified = 5,
 }
 
 /// Stored state for a single task.
@@ -119,6 +121,7 @@ pub enum DataKey {
     TaskCreator(BytesN<32>),
     SlaSettlement(BytesN<32>),
     PaymentEscrow,
+    TaskResult(BytesN<32>),
 }
 
 /// Emitted exactly once per successful `store_task_metadata` call, under
@@ -167,6 +170,18 @@ pub struct TaskFinalizedEvent {
     pub finalized_at: u64,
 }
 
+/// Emitted when the admin upgrades the task store Wasm.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractUpgradedEvent {
+    pub version: u32,
+    pub old_version: String,
+    pub new_version: String,
+    pub new_wasm_hash: BytesN<32>,
+    pub admin: Address,
+    pub ledger_sequence: u32,
+}
+
 /// Emitted when the admin sets a new OracleManager address.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -211,6 +226,23 @@ pub struct TaskAssignedEvent {
     pub ledger: u32,
 }
 
+/// Per-task result metadata stored independently so existing TaskMetadata remains decodable.
+#[contracttype]
+#[derive(Clone)]
+pub(crate) struct TaskResult {
+    pub assignee: Address,
+    pub result_hash: Option<BytesN<32>>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResultVerifiedEvent {
+    pub version: u32,
+    pub task_id: BytesN<32>,
+    pub assignee: Address,
+    pub verified_at: u64,
+}
+
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -244,4 +276,7 @@ pub enum Error {
     SlaNotViolated = 23,
     SlaSettlementMissing = 24,
     SlaContractsNotConfigured = 25,
+    DeadlineExpired = 20,
+    ResultHashMismatch = 21,
+    ResultAlreadyCommitted = 22,
 }
