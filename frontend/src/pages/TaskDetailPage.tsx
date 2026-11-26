@@ -3,6 +3,37 @@ import PipelineStepIndicator from '../components/tasks/PipelineStepIndicator';
 import React, { useMemo } from "react";
 import { useTranslation, Trans } from "react-i18next";
 import { Link, useParams } from "react-router-dom";
+import React, { useState, useMemo, useEffect } from 'react';
+import { useTranslation, Trans } from 'react-i18next';
+import { useParams } from 'react-router-dom';
+
+import { useTaskMonitor } from '../hooks/useTaskMonitor';
+import { TaskDetailTimeline } from '../components/dashboard/TaskDetailTimeline';
+import { PaymentTimeline } from '../components/dashboard/PaymentTimeline';
+import { Skeleton, SkeletonText } from '../components/common/Skeleton';
+import { AlertCircle, CheckCircle2, Play, RefreshCw, XCircle } from 'lucide-react';
+import { CancelTaskModal } from '../components/tasks/CancelTaskModal';
+import { useCancelTask } from '../hooks/useCancelTask';
+
+const CustomNode: React.FC<{ id: string; data: { label: string; status: string } }> = ({ id, data }) => {
+  const { t } = useTranslation();
+
+  return (
+    <div id={id} className={`dag-node ${data.status} h-full flex flex-col justify-between`}>
+      <Handle type="target" position={Position.Left} style={{ background: 'var(--text-muted)', width: 8, height: 8 }} />
+      <div>
+        <div className="text-[10px] uppercase font-extrabold tracking-wider opacity-60 mb-0.5">
+          {t('page.task.agentNode')}
+        </div>
+        <div className="text-sm font-bold truncate capitalize">{data.label}</div>
+      </div>
+      <div className="node-status text-[9px] font-mono font-bold uppercase tracking-widest mt-2 px-1.5 py-0.5 rounded bg-black/25 inline-block mx-auto">
+        {data.status}
+      </div>
+      <Handle type="source" position={Position.Right} style={{ background: 'var(--text-muted)', width: 8, height: 8 }} />
+    </div>
+  );
+};
 
 import { useTaskMonitor } from "../hooks/useTaskMonitor";
 import { useTaskStream } from "../hooks/useTaskStream";
@@ -97,6 +128,22 @@ const TaskDetailPage: React.FC = () => {
       // live status updates alongside useTaskMonitor
     },
   });
+
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+  const [taskStatus, setTaskStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (task?.status) setTaskStatus(task.status);
+  }, [task?.status]);
+
+  const { cancelTask, isCancelling } = useCancelTask({
+    taskId: id || '',
+    currentStatus: taskStatus || task?.status || 'queued',
+    onStatusChange: setTaskStatus,
+  });
+
+  const effectiveStatus = taskStatus ?? task?.status;
+  const canCancel = effectiveStatus === 'pending' || effectiveStatus === 'queued';
 
   // Check if any node is failed
   const failedNode = useMemo(() => {
@@ -269,6 +316,17 @@ const TaskDetailPage: React.FC = () => {
             onClick={refetch}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[var(--surface-elevated)] hover:bg-[var(--surface-muted)] border border-[var(--border-strong)] transition"
           >
+          <button
+            onClick={() => setIsCancelModalOpen(true)}
+            disabled={!canCancel}
+            title={!canCancel ? `Cannot cancel a task with status: ${effectiveStatus}` : 'Cancel this task'}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-rose-950/60 hover:bg-rose-900/60 border border-rose-500/40 text-rose-300 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            data-testid="cancel-task-btn"
+          >
+            <XCircle size={12} />
+            <span>Cancel</span>
+          </button>
+          <button onClick={refetch} className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[var(--surface-elevated)] hover:bg-[var(--surface-muted)] border border-[var(--border-strong)] transition">
             <RefreshCw size={12} />
             <span>{t("page.task.sync")}</span>
           </button>
@@ -319,6 +377,17 @@ const TaskDetailPage: React.FC = () => {
           <PaymentTimeline payments={payments} />
         </div>
       </div>
+
+      <CancelTaskModal
+        isOpen={isCancelModalOpen}
+        taskPrompt={task?.prompt || ''}
+        onConfirm={async (reason) => {
+          await cancelTask(reason);
+          setIsCancelModalOpen(false);
+        }}
+        onClose={() => setIsCancelModalOpen(false)}
+        isCancelling={isCancelling}
+      />
     </div>
   );
 };
