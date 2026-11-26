@@ -1,0 +1,3 @@
+# Exact, reviewed paths only. The workflow translates this list to TruffleHog
+# path regexes. Keep ordinary test fixtures in scope.
+exclude_paths: []
