@@ -28,4 +28,9 @@ pub enum Error {
     ContractHasActiveAuthorizations = 12,
     RegistryFull = 13,
     InvalidRegistryName = 14,
+    FeeTooHigh = 11,
+    FeeCollectionNotConfigured = 12,
+    InvalidAmount = 13,
+    InsufficientTreasuryBalance = 14,
+    TreasuryHasFunds = 15,
 }

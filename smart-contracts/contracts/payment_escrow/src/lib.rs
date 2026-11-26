@@ -20,12 +20,16 @@
 //! expiry anyone may call `refund_funds` and the submitter is refunded
 //! automatically — the coordinator auth check is bypassed for expired escrows.
 
+use soroban_sdk::auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation};
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, IntoVal,
     Symbol,
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, Map,
     Symbol, TryFromVal, Val,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
+    IntoVal, Symbol, Vec,
 };
 
 fn registry_allows(env: &Env, registry: &Address, caller: &Address, function: &str) -> bool {
@@ -67,6 +71,8 @@ pub enum DataKey {
     SlaCaller,
     CustodyToken,
     FundedEscrow(Symbol, Symbol),
+    FundedEscrow(Symbol, Symbol),
+    FeeCollectionPlatform,
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -95,6 +101,8 @@ pub enum Error {
     EscrowMismatch = 10,
     EscrowNotFunded = 11,
     MinimumLockPeriodNotMet = 9,
+    AlreadySettled = 9,
+    InvalidFeeCollection = 10,
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -262,6 +270,20 @@ impl PaymentEscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::CustodyToken, &token_contract);
+    /// Enable XLM custody for new escrows after configuring PlatformConfig.
+    pub fn enable_fee_collection(env: Env, platform: Address) -> Result<(), Error> {
+        Self::read_coordinator(&env)?.require_auth();
+        let fee_token: Option<Address> = env.invoke_contract(
+            &platform,
+            &Symbol::new(&env, "get_escrow_fee_token"),
+            (env.current_contract_address(),).into_val(&env),
+        );
+        if fee_token.is_none() {
+            return Err(Error::InvalidFeeCollection);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeCollectionPlatform, &platform);
         Ok(())
     }
 
@@ -317,6 +339,22 @@ impl PaymentEscrowContract {
             );
         }
         env.storage().persistent().set(&key, &record);
+        if let Some((platform, token)) = Self::funding_config(&env) {
+            let funding_key = DataKey::FundedEscrow(task_id.clone(), node_id.clone());
+            env.storage()
+                .persistent()
+                .set(&funding_key, &(platform, token.clone()));
+            let ttl = env.storage().max_ttl().min(241_920);
+            env.storage()
+                .persistent()
+                .extend_ttl(&funding_key, ttl, ttl);
+            env.storage().persistent().extend_ttl(&key, ttl, ttl);
+            token::Client::new(&env, &token).transfer(
+                &record.submitter,
+                &env.current_contract_address(),
+                &amount,
+            );
+        }
         emit_locked(&env, &task_id, &node_id, amount);
         Ok(())
     }
@@ -349,12 +387,23 @@ impl PaymentEscrowContract {
         let mut record = Self::read_escrow(&env, &key)?;
 
         Self::require_lock_period(&env, &task_id, &node_id, record.lock_ledger)?;
+            return Err(Error::AlreadySettled);
+        }
 
         // Releasing after timeout is not allowed — caller should call
         // refund_funds instead once the escrow has expired.
         let now = env.ledger().timestamp();
         if now >= record.expires_at {
             return Err(Error::EscrowExpired);
+        }
+
+        let funding_key = DataKey::FundedEscrow(task_id.clone(), node_id.clone());
+        if let Some((platform, token)) = env.storage().persistent().get(&funding_key) {
+            record.status = EscrowStatus::Released;
+            env.storage().persistent().set(&key, &record);
+            let fee = Self::settle_funded(&env, &task_id, &node_id, &record, &platform, &token)?;
+            emit_released(&env, &task_id, &node_id, record.amount - fee);
+            return Ok(record);
         }
 
         let fee_bps = Self::get_platform_fee_bps(env.clone());
@@ -452,6 +501,10 @@ impl PaymentEscrowContract {
         let key = DataKey::Escrow(task_id.clone(), node_id.clone());
         let mut record = Self::read_escrow(&env, &key)?;
 
+        if record.status != EscrowStatus::Locked {
+            return Err(Error::AlreadySettled);
+        }
+
         let now = env.ledger().timestamp();
         let is_expired = now >= record.expires_at;
 
@@ -494,12 +547,21 @@ impl PaymentEscrowContract {
             .get::<_, Address>(&DataKey::FundedEscrow(task_id.clone(), node_id.clone()))
         {
             token::Client::new(env, &asset).transfer(
+        env.storage().persistent().set(&key, &record);
+        let funding_key = DataKey::FundedEscrow(task_id.clone(), node_id.clone());
+        if let Some((_, token)) = env
+            .storage()
+            .persistent()
+            .get::<_, (Address, Address)>(&funding_key)
+        {
+            token::Client::new(&env, &token).transfer(
                 &env.current_contract_address(),
                 &record.submitter,
                 &record.amount,
             );
         }
         emit_refunded(env, &task_id, &node_id, record.amount);
+        emit_refunded(&env, &task_id, &node_id, record.amount);
         Ok(record)
     }
 
@@ -558,6 +620,72 @@ impl PaymentEscrowContract {
             return Err(Error::MinimumLockPeriodNotMet);
         }
         Ok(())
+    fn funding_config(env: &Env) -> Option<(Address, Address)> {
+        let platform: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeCollectionPlatform)?;
+        let token: Address = env.invoke_contract::<Option<Address>>(
+            &platform,
+            &Symbol::new(env, "get_escrow_fee_token"),
+            (env.current_contract_address(),).into_val(env),
+        )?;
+        Some((platform, token))
+    }
+
+    fn settle_funded(
+        env: &Env,
+        task_id: &Symbol,
+        node_id: &Symbol,
+        record: &EscrowRecord,
+        platform: &Address,
+        token: &Address,
+    ) -> Result<i128, Error> {
+        let escrow = env.current_contract_address();
+        let bps: u32 =
+            env.invoke_contract(platform, &Symbol::new(env, "get_fee_bps"), Vec::new(env));
+        if bps > 500 {
+            return Err(Error::InvalidFeeCollection);
+        }
+        let bps = i128::from(bps);
+        let expected = record.amount / 10_000 * bps + record.amount % 10_000 * bps / 10_000;
+        if expected > 0 {
+            let treasury = env
+                .invoke_contract::<Option<Address>>(
+                    platform,
+                    &Symbol::new(env, "get_treasury"),
+                    Vec::new(env),
+                )
+                .ok_or(Error::TreasuryNotConfigured)?;
+            env.authorize_as_current_contract(soroban_sdk::vec![
+                env,
+                InvokerContractAuthEntry::Contract(SubContractInvocation {
+                    context: ContractContext {
+                        contract: token.clone(),
+                        fn_name: symbol_short!("transfer"),
+                        args: (&escrow, treasury, expected).into_val(env),
+                    },
+                    sub_invocations: Vec::new(env),
+                }),
+            ]);
+        }
+        let settlement_id = (task_id.clone(), node_id.clone()).to_xdr(env);
+        let fee: i128 = env.invoke_contract(
+            platform,
+            &Symbol::new(env, "collect_fee"),
+            (settlement_id, record.amount).into_val(env),
+        );
+        if fee != expected {
+            return Err(Error::InvalidFeeCollection);
+        }
+        token::Client::new(env, token).transfer(&escrow, &record.agent, &(record.amount - fee));
+        let total = Self::get_total_fees_collected(env.clone())
+            .checked_add(fee)
+            .ok_or(Error::InvalidAmount)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalFeesCollected, &total);
+        Ok(fee)
     }
 
     fn read_coordinator(env: &Env) -> Result<Address, Error> {
